@@ -55,7 +55,8 @@ function oggi() {
   async function nuovaPagina(nome) {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true, locale: 'it-IT' });
     const p = await ctx.newPage();
-    p.on('console', (m) => { if (m.type() === 'error') errori.push(nome + ': ' + m.text()); });
+    // "Failed to load resource" è il registro di Chrome per le risposte 4xx che la prova provoca apposta (403, 409, 401)
+    p.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errori.push(nome + ': ' + m.text()); });
     p.on('pageerror', (e) => errori.push(nome + ' (eccezione): ' + e.message));
     return p;
   }
@@ -147,6 +148,8 @@ function oggi() {
     /* --- il reparto registra i consumi del giorno --- */
     await R.goto(base + '#consumi');
     await R.waitForSelector('#c-rep');
+    await R.selectOption('#c-cat', 'FARMACI');
+    await R.waitForTimeout(300);
     const repartiR = await R.$$eval('#c-rep option', (o) => o.map((x) => x.value));
     ok(repartiR.length === 1 && repartiR[0] === 'r-degenza', 'reparto: può scegliere solo il proprio reparto (' + repartiR.join(',') + ')');
     const campi = R.locator('input.q[data-art]');
@@ -165,6 +168,7 @@ function oggi() {
     /* --- registro mensile: correzione di una cella dal reparto, export Excel --- */
     await R.goto(base + '#registro');
     await R.waitForSelector('#r-rep');
+    await R.selectOption('#r-cat', 'FARMACI');
     await R.waitForTimeout(500);
     const giorno = new Date().getDate();
     const cella = R.locator('tr[data-art="' + artId + '"] input[data-giorno="' + giorno + '"]');

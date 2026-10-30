@@ -12,9 +12,10 @@
 
   /* ======================= componenti comuni ======================= */
 
-  function opzioniReparti(scelto, conTutti) {
+  // lista: reparti da mostrare (predefiniti: tutti gli attivi)
+  function opzioniReparti(scelto, conTutti, lista) {
     var s = conTutti ? '<option value="">Tutti i reparti</option>' : '';
-    return s + App.repartiAttivi().map(function (r) {
+    return s + (lista || App.repartiAttivi()).map(function (r) {
       return '<option value="' + h(r.id) + '"' + (r.id === scelto ? ' selected' : '') + '>' + h(r.nome) + (r.centrale ? ' (centrale)' : '') + '</option>';
     }).join('');
   }
@@ -41,6 +42,20 @@
       return '<option value="' + h(a.nome) + '">' + h(a.categoria === 'PRESIDI' ? 'Presidio' : 'Farmaco') + (a.confezione ? ' · ' + h(a.confezione) : '') + '</option>';
     }).join('');
   }
+  App.datalistArticoli = function () { if (document.getElementById('dl-articoli')) datalistArticoli(); };
+
+  /* Reparto predefinito tra quelli di una lista: quello ricordato se c'è ancora, altrimenti il primo non centrale. */
+  function repartoTra(lista, ricordato, preferisciCentrale) {
+    if (ricordato && lista.some(function (r) { return r.id === ricordato; })) return ricordato;
+    var c = lista.filter(function (r) { return r.centrale; })[0];
+    var altro = lista.filter(function (r) { return !r.centrale; })[0];
+    var scelto = preferisciCentrale ? (c || altro) : (altro || c);
+    return scelto ? scelto.id : '';
+  }
+
+  function messaggioErrore(e) {
+    return e && e.message ? e.message : String(e);
+  }
 
   function datalistFornitori() {
     var visti = {};
@@ -57,6 +72,10 @@
     return '<div class="vuoto"><b>' + h(titolo) + '</b>' + (testo || '') + '</div>';
   }
 
+  function senzaReparti() {
+    return scheda('Nessun reparto', vuoto('Il tuo utente non ha reparti in cui registrare', 'Chiedi all’amministratore di assegnarti i reparti.'), '', true);
+  }
+
   function valore(cont, sel) { var el = cont.querySelector(sel); return el ? el.value : ''; }
 
   function riferimento(m) {
@@ -70,8 +89,10 @@
     return parti.join(' · ');
   }
 
+  // conAnnulla: colonna con il pulsante "Annulla" (solo sui movimenti che l'utente può annullare)
   function tabellaMovimenti(lista, conAnnulla) {
     if (!lista.length) return vuoto('Nessun movimento', '');
+    if (conAnnulla && !lista.some(App.puoAnnullare)) conAnnulla = false;
     return '<div class="tabella-contenitore"><table class="tabella"><thead><tr>' +
       '<th>Data</th><th>Tipo</th><th>Articolo</th><th class="n">Quantità</th><th>Lotto</th><th>Scad.</th><th>Reparto</th><th>Riferimento</th><th>Operatore</th>' +
       (conAnnulla ? '<th></th>' : '') + '</tr></thead><tbody>' +
@@ -87,7 +108,7 @@
           '<td>' + h(App.nomeReparto(m.repartoId)) + '</td>' +
           '<td class="piccolo">' + h(riferimento(m)) + '</td>' +
           '<td class="piccolo tenue">' + h(m.operatore || '') + '</td>' +
-          (conAnnulla ? '<td class="azioni">' + (m.annullato ? '' : '<button class="btn piccolo pericolo" type="button" data-annulla="' + h(m.id) + '">Annulla</button>') + '</td>' : '') +
+          (conAnnulla ? '<td class="azioni">' + (App.puoAnnullare(m) ? '<button class="btn piccolo pericolo" type="button" data-annulla="' + h(m.id) + '">Annulla</button>' : '') + '</td>' : '') +
           '</tr>';
       }).join('') + '</tbody></table></div>';
   }
@@ -101,12 +122,17 @@
       if (!b) return;
       var id = b.getAttribute('data-annulla');
       var m = App.S.movimenti.filter(function (x) { return x.id === id; })[0];
+      if (!m) return;
       App.chiedi('Annulla movimento', 'Perché annulli “' + (App.TIPI[m.tipo] || m.tipo) + ' di ' + App.fmtNum(m.quantita) + ' · ' + App.nomeArticolo(m.articoloId) + '”? Il movimento resta nell’elenco, barrato.', '', 'Annulla movimento')
         .then(function (motivo) {
           if (motivo === null) return;
           App.annullaMovimento(id, motivo || 'Annullato').then(function () {
             App.avviso('Movimento annullato');
             if (dopo) dopo(); else App.ridisegna();
+          }, function (e) {
+            App.avviso('Movimento non annullato: ' + messaggioErrore(e), 'errore');
+            // già annullato o non più presente: ricarico i dati
+            if (e.stato === 409 || e.stato === 404) root.Api.sincronizza().then(function () { if (dopo) dopo(); else App.ridisegna(); }, function () {});
           });
         });
     });
@@ -153,13 +179,14 @@
         (righe ? '<div class="tabella-contenitore"><table class="tabella"><thead><tr><th>Reparto</th><th class="n">Giacenza</th><th>Lotti</th></tr></thead><tbody>' + righe + '</tbody></table></div>'
           : '<p class="tenue">Nessuna giacenza in nessun reparto.</p>') +
         '<h3>Ultimi movimenti</h3>' + tabellaMovimenti(movs, false),
-      piede: '<button class="btn" type="button" id="sa-modifica">Modifica articolo</button><span class="spazio"></span>' +
-        '<button class="btn" type="button" data-va="carico">📥 Carico</button>' +
-        '<button class="btn" type="button" data-va="trasferimenti">🔁 Trasferisci</button>' +
-        '<button class="btn" type="button" data-va="perdite">🗑️ Perdita</button>' +
+      piede: (App.puo('articoli') ? '<button class="btn" type="button" id="sa-modifica">Modifica articolo</button>' : '') + '<span class="spazio"></span>' +
+        (App.puo('carico') ? '<button class="btn" type="button" data-va="carico">📥 Carico</button>' : '') +
+        (App.puo('trasferimento') ? '<button class="btn" type="button" data-va="trasferimenti">🔁 Trasferisci</button>' : '') +
+        (App.puo('perdita') && App.repartiScrivibili().length ? '<button class="btn" type="button" data-va="perdite">🗑️ Perdita</button>' : '') +
         '<button class="btn primario" type="button" data-chiudi>Chiudi</button>',
       dopo: function (m) {
-        m.querySelector('#sa-modifica').addEventListener('click', function () { App.chiudiModale(); App.formArticolo(a.id); });
+        var mod = m.querySelector('#sa-modifica');
+        if (mod) mod.addEventListener('click', function () { App.chiudiModale(); App.formArticolo(a.id); });
         m.querySelectorAll('[data-va]').forEach(function (b) {
           b.addEventListener('click', function () { App.chiudiModale(); App.vai(b.getAttribute('data-va'), { articoloId: a.id }); });
         });
@@ -173,7 +200,9 @@
   /* ======================= anagrafica articolo ======================= */
 
   App.formArticolo = function (id, dopo) {
+    if (!App.puo('articoli')) return;
     var a = id ? App.articolo(id) : { categoria: 'FARMACI', attivo: true };
+    if (!a) { App.avviso('L’articolo non c’è più: forse l’ha eliminato un altro utente.', 'errore'); return; }
     var unita = ['cpr', 'cps', 'fl', 'f', 'bustine', 'ml', 'flacone', 'tubo', 'conf', 'pz', 'paia', 'rotolo', 'sacca'];
     App.apriModale({
       titolo: id ? 'Modifica articolo' : 'Nuovo articolo',
@@ -210,14 +239,38 @@
             note: valore(m, '#fa-note').trim(),
             attivo: m.querySelector('#fa-attivo').checked
           };
-          var nuovoId = id;
-          if (id) Object.assign(App.articolo(id), dati);
-          else { nuovoId = App.id('a'); App.S.articoli.push(Object.assign({ id: nuovoId }, dati)); }
-          App.salva().then(function () {
+          var bottone = this;
+          bottone.disabled = true;
+          // in modifica mando la versione letta all'apertura: se un altro l'ha cambiata nel frattempo il server risponde 409
+          var richiesta = id
+            ? root.Api.scrivi('PUT', '/api/articoli/' + encodeURIComponent(id), Object.assign({ versione: a.versione }, dati))
+            : root.Api.scrivi('POST', '/api/articoli', dati);
+          richiesta.then(function (r) {
             App.chiudiModale();
             App.avviso(id ? 'Articolo aggiornato' : 'Articolo creato', 'ok');
             datalistArticoli();
-            if (dopo) dopo(nuovoId); else App.ridisegna();
+            var nuovoId = id || (r && r.articolo && r.articolo.id);
+            if (dopo && nuovoId && App.articolo(nuovoId)) dopo(nuovoId); else App.aggiornaVista();
+          }, function (e) {
+            bottone.disabled = false;
+            if (id && e.stato === 409) {
+              // 409: o un altro utente ha cambiato l'articolo (versione diversa), o il nome è già di un altro articolo
+              root.Api.sincronizza().then(function () {
+                var ora = App.articolo(id);
+                if (ora && ora.versione === a.versione) {
+                  // l'articolo non è cambiato: è il nome doppio. Il modulo resta aperto con quello che ha scritto l'utente
+                  App.avviso(messaggioErrore(e), 'errore');
+                  return;
+                }
+                App.chiudiModale();
+                App.avviso('Un altro utente ha modificato l’articolo: ricarico i dati', 'errore');
+                App.aggiornaVista();
+                if (ora) App.formArticolo(id, dopo); // riapro con i dati aggiornati
+                else App.avviso('L’articolo non c’è più: l’ha eliminato un altro utente.', 'errore');
+              }, function () { App.avviso(messaggioErrore(e), 'errore'); });
+              return;
+            }
+            App.avviso(messaggioErrore(e), 'errore');
           });
         });
         var el = m.querySelector('#fa-elimina');
@@ -229,8 +282,11 @@
           }
           App.conferma('Elimina articolo', 'Elimino “' + h(a.nome) + '” dall’anagrafica?', 'Elimina', true).then(function (ok) {
             if (!ok) return;
-            App.S.articoli = App.S.articoli.filter(function (x) { return x.id !== id; });
-            App.salva().then(function () { App.avviso('Articolo eliminato'); App.ridisegna(); });
+            root.Api.scrivi('DELETE', '/api/articoli/' + encodeURIComponent(id)).then(function () {
+              App.avviso('Articolo eliminato');
+              datalistArticoli();
+              App.aggiornaVista();
+            }, function (e) { App.avviso(messaggioErrore(e), 'errore'); });
           });
         });
       }
@@ -252,23 +308,26 @@
 
     var html = '';
     if (!S.articoli.length) {
-      html += '<div class="banda info"><p><b>Benvenuto nel Gestionale Farmacia.</b> Per cominciare inserisci gli articoli (o importali da Excel), ' +
-        'controlla i reparti in Configura e registra le giacenze iniziali con un carico. Per provare il programma puoi caricare i dati di prova.</p>' +
-        '<a class="btn primario" href="#articoli">Vai agli articoli</a><button class="btn" type="button" id="oggi-demo">Carica dati di prova</button></div>';
-    }
-    var giorniCopia = S.ultimaEsportazione ? Math.round((Date.now() - new Date(S.ultimaEsportazione).getTime()) / 86400000) : null;
-    if (S.articoli.length && (giorniCopia === null || giorniCopia >= 7)) {
-      html += '<div class="banda attenzione"><p>' + (giorniCopia === null ? 'Non hai ancora salvato una copia dell’archivio fuori dal programma.' : 'L’ultima copia dell’archivio su file è di ' + giorniCopia + ' giorni fa.') +
-        ' Salvane una su una chiavetta o in una cartella di rete: se il browser venisse ripulito, i dati si recuperano da lì.</p>' +
-        '<button class="btn primario" type="button" id="oggi-copia">Salva una copia adesso</button></div>';
+      var admin = App.eAmministratore() && App.archivioVuoto();
+      html += App.puo('articoli')
+        ? '<div class="banda info"><p><b>Benvenuto nel Gestionale Farmacia.</b> Per cominciare importa gli articoli da Excel (anche dai vecchi moduli “Nota consumi” compilati) ' +
+          'o inseriscili uno per uno, controlla i reparti e registra le giacenze iniziali con un carico.' +
+          (admin ? ' Per provare il programma puoi caricare i dati di prova; se usavate la versione per un solo PC, da Configura puoi importarne l’archivio.' : '') + '</p>' +
+          '<a class="btn primario" href="#articoli">Vai agli articoli</a>' +
+          (admin ? '<button class="btn" type="button" id="oggi-demo">Carica dati di prova</button>' : '') + '</div>'
+        : '<div class="banda info"><p><b>Benvenuto nel Gestionale Farmacia.</b> L’archivio è ancora vuoto: gli articoli e le giacenze iniziali li inserisce la farmacia. Appena ci sono, li trovi qui.</p></div>';
     }
 
-    html += '<div class="azioni-rapide">' +
-      '<a class="btn primario" href="#consumi">💊 Registra i consumi<kbd>S</kbd></a>' +
-      '<a class="btn" href="#carico">📥 Nuovo carico<kbd>C</kbd></a>' +
-      '<a class="btn" href="#trasferimenti">🔁 Trasferisci a un reparto<kbd>T</kbd></a>' +
-      '<a class="btn" href="#registro">📅 Nota consumi del mese<kbd>R</kbd></a>' +
-      '</div>';
+    // azioni rapide: solo quelle permesse all'utente
+    var rapide = [
+      { id: 'consumi', testo: '💊 Registra i consumi', tasto: 'S' },
+      { id: 'carico', testo: '📥 Nuovo carico', tasto: 'C' },
+      { id: 'trasferimenti', testo: '🔁 Trasferisci a un reparto', tasto: 'T' },
+      { id: 'registro', testo: '📅 Nota consumi del mese', tasto: 'R' }
+    ].filter(function (v) { return App.paginaPermessa(v.id); });
+    html += '<div class="azioni-rapide">' + rapide.map(function (v, i) {
+      return '<a class="btn' + (i === 0 ? ' primario' : '') + '" href="#' + v.id + '">' + v.testo + '<kbd>' + v.tasto + '</kbd></a>';
+    }).join('') + '</div>';
 
     html += '<div class="indicatori">' +
       '<a class="indicatore" href="#articoli"><span class="titolo">Articoli attivi</span><span class="valore">' + attivi.length + '</span><span class="piccolo tenue">' +
@@ -316,8 +375,6 @@
     });
     var demo = cont.querySelector('#oggi-demo');
     if (demo) demo.addEventListener('click', function () { App.caricaDemo(); });
-    var copia = cont.querySelector('#oggi-copia');
-    if (copia) copia.addEventListener('click', function () { App.esportaArchivio(); });
   };
 
   /* ======================= moduli a righe: carico, trasferimenti, perdite ======================= */
@@ -341,7 +398,7 @@
       '<div class="modulo">' + cfg.testata + '</div>' +
       '<div class="tabella-contenitore" style="margin-top:16px"><table class="righe"><thead><tr>' + intest + '</tr></thead><tbody id="righe"></tbody></table></div>' +
       '<div class="strumenti" style="margin-top:12px"><button class="btn" type="button" id="riga-piu">+ Aggiungi riga</button>' +
-      '<button class="btn" type="button" id="nuovo-art">Nuovo articolo</button><span class="spazio"></span>' +
+      (App.puo('articoli') ? '<button class="btn" type="button" id="nuovo-art">Nuovo articolo</button>' : '') + '<span class="spazio"></span>' +
       '<button class="btn primario" type="button" id="registra">' + h(cfg.pulsante) + '</button></div>',
       '<span class="nota">' + h(cfg.nota || '') + '</span>') +
       '<div id="recenti"></div>' + (cfg.extra || '');
@@ -405,7 +462,8 @@
       if (!tbody.children.length) nuovaRiga();
     });
     cont.querySelector('#riga-piu').addEventListener('click', function () { nuovaRiga().querySelector('.r-art').focus(); });
-    cont.querySelector('#nuovo-art').addEventListener('click', function () {
+    var nuovoArt = cont.querySelector('#nuovo-art');
+    if (nuovoArt) nuovoArt.addEventListener('click', function () {
       App.formArticolo(null, function (id) {
         var vuota = Array.prototype.filter.call(tbody.querySelectorAll('.r-art'), function (i) { return !i.value.trim(); })[0];
         var tr = vuota ? vuota.closest('tr') : nuovaRiga();
@@ -452,6 +510,7 @@
     }
 
     cont.querySelector('#registra').addEventListener('click', function () {
+      var bottone = this;
       var testata = cfg.leggiTestata(cont);
       if (testata.errore) { App.avviso(testata.errore, 'errore'); return; }
       var lette = leggiRighe();
@@ -467,9 +526,15 @@
         : Promise.resolve(true);
       procedi.then(function (ok) {
         if (!ok) return;
+        bottone.disabled = true;
         App.aggiungiMovimenti(movimenti).then(function () {
           App.avviso(cfg.fatto(lette.righe.length), 'ok');
-          App.mostra(App.paginaCorrente);
+          // modulo pulito per la registrazione dopo (se nel frattempo l'utente non è passato a un'altra pagina)
+          if (document.body.contains(cont)) App.mostra(App.paginaCorrente);
+        }, function (e) {
+          // il modulo resta com'è: si può correggere e riprovare
+          bottone.disabled = false;
+          App.avviso('Non registrato: ' + messaggioErrore(e), 'errore');
         });
       });
     });
@@ -503,8 +568,8 @@
         return t;
       },
       prepara: function (t, righe) {
+        // un carico con prezzo aggiorna il prezzo dell'articolo: lo fa il server
         return righe.map(function (r) {
-          if (r.prezzo !== null && r.prezzo !== undefined && r.prezzo !== r.articolo.prezzo) r.articolo.prezzo = r.prezzo;
           return { tipo: 'carico', data: t.data, articoloId: r.articolo.id, repartoId: t.repartoId, quantita: r.quantita, lotto: r.lotto || '', scadenza: r.scadenza || '', fornitore: t.fornitore, documento: t.documento, prezzo: r.prezzo || undefined };
         });
       },
@@ -537,12 +602,11 @@
         else if (t.repartoId === t.repartoDestId) t.errore = 'Il reparto di partenza e quello di arrivo sono uguali.';
         return t;
       },
+      // una riga per riga del modulo: la ripartizione sui lotti (prima quello scelto, poi chi scade prima) la fa il server
       prepara: function (t, righe) {
-        var out = [];
-        righe.forEach(function (r) {
-          out = out.concat(App.preparaUscita('trasferimento', { data: t.data, articoloId: r.articolo.id, repartoId: t.repartoId, repartoDestId: t.repartoDestId, quantita: r.quantita, lotto: r.lottoScelto, note: t.note }));
+        return righe.map(function (r) {
+          return { tipo: 'trasferimento', data: t.data, articoloId: r.articolo.id, repartoId: t.repartoId, repartoDestId: t.repartoDestId, quantita: r.quantita, lotto: r.lottoScelto || undefined, note: t.note };
         });
-        return out;
       },
       fatto: function (n) { return 'Trasferimento registrato (' + n + (n === 1 ? ' articolo)' : ' articoli)'); },
       titoloRecenti: 'Ultimi trasferimenti',
@@ -553,14 +617,17 @@
   /* ======================= PERDITE ======================= */
 
   P.perdite = function (cont, par) {
-    var rep = par.repartoId || (App.repartoCentrale() && App.repartoCentrale().id);
+    // solo i reparti in cui l'utente può registrare
+    var lista = App.repartiScrivibili();
+    if (!lista.length) { cont.innerHTML = senzaReparti(); return; }
+    var rep = repartoTra(lista, par.repartoId, true);
     moduloRighe(cont, {
       titolo: 'Perdite, scaduti e resi',
       nota: 'Nel registro mensile finiscono nella colonna “Perdite”.',
       pulsante: 'Registra perdita',
       testata:
         '<label class="campo"><span>Data</span><input type="date" id="t-data" value="' + App.oggi() + '"></label>' +
-        '<label class="campo"><span>Reparto</span><select id="t-rep" class="cambia-origine">' + opzioniReparti(rep) + '</select></label>',
+        '<label class="campo"><span>Reparto</span><select id="t-rep" class="cambia-origine">' + opzioniReparti(rep, false, lista) + '</select></label>',
       colonne: ['lotto-scelta', 'causale', 'note'],
       controllaGiacenza: true,
       repartoOrigine: function (c) { return valore(c, '#t-rep'); },
@@ -570,18 +637,16 @@
         return t;
       },
       prepara: function (t, righe) {
-        var out = [];
-        righe.forEach(function (r) {
-          out = out.concat(App.preparaUscita('perdita', { data: t.data, articoloId: r.articolo.id, repartoId: t.repartoId, quantita: r.quantita, lotto: r.lottoScelto, causale: r.causale, note: r.note }));
+        return righe.map(function (r) {
+          return { tipo: 'perdita', data: t.data, articoloId: r.articolo.id, repartoId: t.repartoId, quantita: r.quantita, lotto: r.lottoScelto || undefined, causale: r.causale, note: r.note };
         });
-        return out;
       },
       fatto: function () { return 'Perdita registrata'; },
       titoloRecenti: 'Ultime perdite',
       recenti: function (m) { return m.tipo === 'perdita'; }
     }, par);
     // arrivo dalla pagina Scadenze: lotto scaduto già scelto
-    if (par.lotto && par.articoloId) {
+    if (par.lotto && par.articoloId && rep === par.repartoId) {
       var tr = cont.querySelector('#righe tr');
       var sel = tr.querySelector('.r-lotto-scelta');
       sel.value = par.lotto;
@@ -595,7 +660,10 @@
   var memoriaConsumi = {};
 
   P.consumi = function (cont, par) {
-    var rep = memoriaConsumi.rep || (App.repartiAttivi().filter(function (r) { return !r.centrale; })[0] || App.repartoCentrale()).id;
+    // solo i reparti in cui l'utente può registrare
+    var reparti = App.repartiScrivibili();
+    if (!reparti.length) { cont.innerHTML = senzaReparti(); return; }
+    var rep = repartoTra(reparti, memoriaConsumi.rep, false);
     var data = memoriaConsumi.data || App.oggi();
     var cat = memoriaConsumi.cat || '';
     var tutti = !!memoriaConsumi.tutti;
@@ -603,7 +671,7 @@
     cont.innerHTML =
       '<div class="strumenti">' +
       '<label class="campo"><span>Data</span><input type="date" id="c-data" value="' + data + '"></label>' +
-      '<label class="campo"><span>Reparto</span><select id="c-rep">' + opzioniReparti(rep) + '</select></label>' +
+      '<label class="campo"><span>Reparto</span><select id="c-rep">' + opzioniReparti(rep, false, reparti) + '</select></label>' +
       '<label class="campo"><span>Categoria</span><select id="c-cat">' + opzioniCategoria(cat, true) + '</select></label>' +
       '<label class="campo"><span>Cerca</span><input id="c-cerca" type="search" placeholder="Filtra per nome…"></label>' +
       '<label class="spunta"><input type="checkbox" id="c-tutti"' + (tutti ? ' checked' : '') + '> Mostra anche gli articoli senza giacenza</label>' +
@@ -672,6 +740,7 @@
     collegaMovimenti(cont.querySelector('#c-fatti'), disegna);
 
     cont.querySelector('#c-registra').addEventListener('click', function () {
+      var bottone = this;
       var st = stato();
       var righe = [];
       cont.querySelectorAll('input.q[data-art]').forEach(function (inp) {
@@ -686,13 +755,19 @@
         : Promise.resolve(true);
       procedi.then(function (ok) {
         if (!ok) return;
-        var movimenti = [];
-        righe.forEach(function (r) {
-          movimenti = movimenti.concat(App.preparaUscita('consumo', { data: st.data, articoloId: r.articoloId, repartoId: st.rep, quantita: r.quantita }));
+        // una riga per articolo: la ripartizione sui lotti la fa il server
+        var movimenti = righe.map(function (r) {
+          return { tipo: 'consumo', data: st.data, articoloId: r.articoloId, repartoId: st.rep, quantita: r.quantita };
         });
+        bottone.disabled = true;
         App.aggiungiMovimenti(movimenti).then(function () {
+          bottone.disabled = false;
           App.avviso('Consumi registrati: ' + righe.length + (righe.length === 1 ? ' articolo' : ' articoli'), 'ok');
           disegna();
+        }, function (e) {
+          // le quantità scritte restano: si può riprovare
+          bottone.disabled = false;
+          App.avviso('Consumi non registrati: ' + messaggioErrore(e), 'errore');
         });
       });
     });
@@ -720,6 +795,7 @@
 
     function disegna() {
       var rep = valore(cont, '#g-rep');
+      if (rep && !App.reparto(rep)) rep = ''; // reparto eliminato nel frattempo da un altro utente
       var cat = valore(cont, '#g-cat');
       var testo = valore(cont, '#g-cerca').trim().toLowerCase();
       var sotto = cont.querySelector('#g-sotto').checked;
@@ -782,6 +858,7 @@
     cont.querySelector('#g-excel').addEventListener('click', function () {
       root.ExcelFarmacia.esportaElenco('Giacenze', dati.colonne, dati.righe).then(function (b) { App.scarica(b, 'Giacenze_' + App.oggi() + '.xlsx'); });
     });
+    App.rinfresca = disegna; // dati cambiati da altri utenti: ridisegno la tabella con gli stessi filtri
     disegna();
   };
 
@@ -826,7 +903,7 @@
               '<td><a href="#" data-scheda="' + h(l.articolo.id) + '">' + h(l.articolo.nome) + '</a></td>' +
               '<td class="mono">' + h(l.lotto || '—') + '</td><td>' + h(l.reparto.nome) + '</td>' +
               '<td class="n">' + App.fmtNum(l.quantita) + '</td>' +
-              '<td class="azioni">' + (l.giorni !== null && l.giorni < 0 ? '<button class="btn piccolo pericolo" type="button" data-perdita="' + h(l.articolo.id) + '|' + h(l.reparto.id) + '|' + h(l.lotto) + '|' + l.quantita + '">Togli dal magazzino</button>' : '') + '</td></tr>';
+              '<td class="azioni">' + (l.giorni !== null && l.giorni < 0 && App.puo('perdita') && App.repartoPermesso(l.reparto.id) ? '<button class="btn piccolo pericolo" type="button" data-perdita="' + h(l.articolo.id) + '|' + h(l.reparto.id) + '|' + h(l.lotto) + '|' + l.quantita + '">Togli dal magazzino</button>' : '') + '</td></tr>';
           }).join('') + '</tbody></table></div>'
           : vuoto('Nessun lotto in questo intervallo', 'I lotti compaiono qui quando nel carico indichi lotto e scadenza.'),
         '<span class="nota">' + lista.length + ' lotti</span>', true);
@@ -848,6 +925,7 @@
         { titolo: 'Reparto', larghezza: 18 }, { titolo: 'Quantità', larghezza: 10 }, { titolo: 'Stato', larghezza: 18 }], righeExcel)
         .then(function (b) { App.scarica(b, 'Scadenze_' + App.oggi() + '.xlsx'); });
     });
+    App.rinfresca = disegna;
     disegna();
   };
 
@@ -902,6 +980,7 @@
       });
       root.ExcelFarmacia.esportaElenco('Movimenti', col, righe).then(function (b) { App.scarica(b, 'Movimenti_' + valore(cont, '#v-dal') + '_' + valore(cont, '#v-al') + '.xlsx'); });
     });
+    App.rinfresca = disegna;
     disegna();
   };
 
@@ -951,6 +1030,7 @@
     });
     cont.querySelector('#i-stampa').addEventListener('click', function () { window.print(); });
     cont.querySelector('#i-registra').addEventListener('click', function () {
+      var bottone = this;
       var rep = valore(cont, '#i-rep'), data = valore(cont, '#i-data');
       var mov = [];
       cont.querySelectorAll('input.q[data-art]').forEach(function (inp) {
@@ -961,7 +1041,15 @@
       if (!mov.length) { App.avviso('Nessuna differenza da registrare.'); return; }
       App.conferma('Registra inventario', 'Registro ' + mov.length + (mov.length === 1 ? ' rettifica' : ' rettifiche') + ' in ' + h(App.nomeReparto(rep)) + ' alla data ' + App.fmtData(data) + '?', 'Registra').then(function (ok) {
         if (!ok) return;
-        App.aggiungiMovimenti(mov).then(function () { App.avviso('Inventario registrato', 'ok'); disegna(); });
+        bottone.disabled = true;
+        App.aggiungiMovimenti(mov).then(function () {
+          bottone.disabled = false;
+          App.avviso('Inventario registrato', 'ok');
+          disegna();
+        }, function (e) {
+          bottone.disabled = false;
+          App.avviso('Inventario non registrato: ' + messaggioErrore(e), 'errore');
+        });
       });
     });
     disegna();
@@ -973,14 +1061,17 @@
 
   P.registro = function (cont) {
     var oggi = App.oggi();
-    var rep = memoriaRegistro.rep || (App.repartiAttivi().filter(function (r) { return !r.centrale; })[0] || App.repartoCentrale()).id;
+    // chi corregge solo i propri reparti vede solo quelli; gli altri vedono tutti i reparti (in sola lettura se non possono correggere)
+    var scrivibili = App.repartiScrivibili();
+    var reparti = App.puo('registro') && App.permessi.reparti && scrivibili.length ? scrivibili : App.repartiAttivi();
+    var rep = repartoTra(reparti, memoriaRegistro.rep, false);
     var mese = memoriaRegistro.mese || oggi.slice(0, 7);
     var cat = memoriaRegistro.cat || 'FARMACI';
     var imp = App.S.impostazioni;
 
     cont.innerHTML =
       '<div class="strumenti">' +
-      '<label class="campo"><span>Reparto</span><select id="r-rep">' + opzioniReparti(rep) + '</select></label>' +
+      '<label class="campo"><span>Reparto</span><select id="r-rep">' + opzioniReparti(rep, false, reparti) + '</select></label>' +
       '<label class="campo"><span>Mese</span><input type="month" id="r-mese" value="' + mese + '"></label>' +
       '<label class="campo"><span>Modulo</span><select id="r-cat">' + opzioniCategoria(cat) + '</select></label>' +
       '<label class="spunta"><input type="checkbox" id="r-tutti"' + (memoriaRegistro.tutti ? ' checked' : '') + '> Includi gli articoli senza movimenti</label>' +
@@ -991,6 +1082,7 @@
 
     var registro = null;
     var trasferimentiUscita = {};
+    var inRidisegno = false; // Chrome manda un focusout quando toglie la casella col fuoco: non è un salvataggio
 
     function opz() {
       var m = valore(cont, '#r-mese').split('-').map(Number);
@@ -1001,6 +1093,8 @@
     function disegna(fuoco) {
       if (!valore(cont, '#r-mese')) return;
       var o = opz();
+      // le caselle dei giorni si correggono solo con il permesso e nei reparti dell'utente
+      var modificabile = App.puo('registro') && App.repartoPermesso(o.repartoId);
       registro = C.registroMensile(App.S, o);
       trasferimentiUscita = {};
       App.S.movimenti.forEach(function (m) {
@@ -1029,7 +1123,7 @@
           r.consumi.map(function (q, i) {
             var tr = trasferimentiUscita[r.articoloId + '|' + (i + 1)];
             return '<td class="g' + (festivo(i + 1) ? ' festivo' : '') + '"' + (tr ? ' title="Comprende ' + App.fmtNum(tr) + ' trasferiti ad altri reparti"' : '') + '>' +
-              '<input data-giorno="' + (i + 1) + '" value="' + fmt(q) + '" inputmode="decimal" aria-label="Giorno ' + (i + 1) + '"></td>';
+              (modificabile ? '<input data-giorno="' + (i + 1) + '" value="' + fmt(q) + '" inputmode="decimal" aria-label="Giorno ' + (i + 1) + '">' : '<span class="sola">' + fmt(q) + '</span>') + '</td>';
           }).join('') +
           '<td class="tot">' + fmt(r.totaleConsumo) + '</td><td>' + fmt(r.perdite) + '</td><td class="tot">' + fmt(r.totaleScarico) + '</td>' +
           '<td>' + (r.scadenza ? C.scadenzaBreve(r.scadenza) : '') + '</td><td class="tot' + (r.residui < 0 ? ' neg' : '') + '">' + App.fmtNum(r.residui) + '</td>' +
@@ -1046,18 +1140,34 @@
 
       var scroll = cont.querySelector('.registro-contenitore');
       var pos = scroll ? [scroll.scrollLeft, scroll.scrollTop] : null;
-      cont.querySelector('#r-tab').innerHTML = scheda(
-        'Nota consumi · ' + h(o.categoria === 'FARMACI' ? 'Farmaci' : 'Presidi') + ' · ' + h(App.nomeReparto(o.repartoId)) + ' · ' + h(nomeMese),
-        stampaTesta + (registro.righe.length
-          ? '<div class="registro-contenitore"><table class="registro"><thead>' + testa + '</thead><tbody>' + corpo + '</tbody><tfoot>' + piede + '</tfoot></table></div>'
-          : vuoto('Nessun movimento in questo mese', 'Spunta “Includi gli articoli senza movimenti” per avere il modulo con tutti gli articoli.')) + stampaPiede,
-        '<span class="nota no-stampa">I consumi si possono scrivere anche qui, giorno per giorno: il valore della casella sostituisce i consumi di quel giorno.</span>', true);
+      inRidisegno = true;
+      try {
+        cont.querySelector('#r-tab').innerHTML = scheda(
+          'Nota consumi · ' + h(o.categoria === 'FARMACI' ? 'Farmaci' : 'Presidi') + ' · ' + h(App.nomeReparto(o.repartoId)) + ' · ' + h(nomeMese),
+          stampaTesta + (registro.righe.length
+            ? '<div class="registro-contenitore"><table class="registro"><thead>' + testa + '</thead><tbody>' + corpo + '</tbody><tfoot>' + piede + '</tfoot></table></div>'
+            : vuoto('Nessun movimento in questo mese', 'Spunta “Includi gli articoli senza movimenti” per avere il modulo con tutti gli articoli.')) + stampaPiede,
+          '<span class="nota no-stampa">' + (modificabile
+            ? 'I consumi si possono scrivere anche qui, giorno per giorno: il valore della casella sostituisce i consumi di quel giorno.'
+            : 'Sola lettura: puoi stampare il modulo o esportarlo in Excel.') + '</span>', true);
+      } finally { inRidisegno = false; }
       var nuovo = cont.querySelector('.registro-contenitore');
       if (nuovo && pos) { nuovo.scrollLeft = pos[0]; nuovo.scrollTop = pos[1]; }
       if (fuoco) {
         var inp = cont.querySelector('tr[data-art="' + fuoco.art + '"] input[data-giorno="' + fuoco.giorno + '"]');
-        if (inp) { inp.focus(); inp.select(); }
+        if (inp) {
+          inp.focus();
+          // se nel frattempo l'utente aveva già scritto in quella casella, il valore resta
+          if (fuoco.cambiato) { inp.value = fuoco.valore; inp.setSelectionRange(inp.value.length, inp.value.length); } else inp.select();
+        }
       }
+    }
+
+    // casella del registro su cui sta lavorando l'utente (per ridare il fuoco dopo il ridisegno)
+    function cellaAttiva() {
+      var a = document.activeElement;
+      if (!a || !cont.contains(a) || !a.matches('td.g input')) return null;
+      return { art: a.closest('tr').getAttribute('data-art'), giorno: Number(a.getAttribute('data-giorno')), valore: a.value, cambiato: a.value !== a.defaultValue };
     }
 
     function salvaCella(inp, prossimo) {
@@ -1065,6 +1175,7 @@
       var art = tr.getAttribute('data-art');
       var giorno = Number(inp.getAttribute('data-giorno'));
       var riga = registro.righe.filter(function (r) { return r.articoloId === art; })[0];
+      if (!riga) return; // casella di una tabella già ridisegnata
       var vecchio = riga.consumi[giorno - 1];
       var nuovo = App.numero(inp.value);
       if (nuovo === vecchio) { if (prossimo) spostaFuoco(art, prossimo); return; }
@@ -1072,13 +1183,26 @@
       if (nuovo < trasf) {
         App.avviso('In questo giorno ci sono ' + App.fmtNum(trasf) + ' trasferiti ad altri reparti: il valore non può essere più basso. Correggi il trasferimento da Movimenti.', 'errore');
         inp.value = vecchio ? App.fmtNum(vecchio) : '';
+        inp.removeAttribute('data-gestito');
         return;
       }
       var o = opz();
       var data = o.anno + '-' + String(o.mese).padStart(2, '0') + '-' + String(giorno).padStart(2, '0');
-      App.impostaConsumoGiorno(art, o.repartoId, data, nuovo - trasf).then(function () {
-        disegna(prossimo ? { art: prossimo.art, giorno: prossimo.giorno } : null);
+      // il fuoco passa subito alla casella dopo; il ridisegno arriva quando il server ha registrato
+      if (prossimo) spostaFuoco(art, prossimo);
+      // nella casella ci sono consumi + trasferimenti in uscita: al server mando solo i consumi
+      App.impostaConsumoGiorno(art, o.repartoId, data, Math.round((nuovo - trasf) * 1000) / 1000).then(function () {
+        dopoSalvataggio();
+      }, function (e) {
+        App.avviso('Correzione non registrata: ' + messaggioErrore(e), 'errore');
+        dopoSalvataggio();
       });
+    }
+
+    // ridisegno con i dati del server; se intanto il registro è stato riaperto (pulsante "Aggiorna"), ridisegno quello nuovo
+    function dopoSalvataggio() {
+      if (document.body.contains(cont)) disegna(cellaAttiva());
+      else if (App.paginaCorrente === 'registro' && App.rinfresca) App.rinfresca();
     }
 
     function spostaFuoco(art, p) {
@@ -1109,12 +1233,15 @@
       else if (e.key === 'Escape') { disegna(); return; }
       else return;
       e.preventDefault();
-      inp.setAttribute('data-gestito', '1');
-      salvaCella(inp, p || { art: inp.closest('tr').getAttribute('data-art'), giorno: Number(inp.getAttribute('data-giorno')) });
+      var qui = { art: inp.closest('tr').getAttribute('data-art'), giorno: Number(inp.getAttribute('data-giorno')) };
+      var dove = p || qui;
+      // il fuoco si sposta: il focusout che segue non deve salvare una seconda volta
+      if (dove.art !== qui.art || dove.giorno !== qui.giorno) inp.setAttribute('data-gestito', '1');
+      salvaCella(inp, dove);
     });
     tab.addEventListener('focusout', function (e) {
       var inp = e.target;
-      if (!inp.matches || !inp.matches('td.g input')) return;
+      if (inRidisegno || !inp.matches || !inp.matches('td.g input')) return;
       if (inp.getAttribute('data-gestito')) { inp.removeAttribute('data-gestito'); return; }
       salvaCella(inp, null);
     });
@@ -1142,21 +1269,24 @@
         App.avviso('Esportazione non riuscita: ' + e.message, 'errore');
       }).then(function () { b.disabled = false; });
     });
+    // aggiornamenti da altri utenti: si ridisegna solo se nessuna casella è in modifica (lo controlla App)
+    App.rinfresca = function () { disegna(cellaAttiva()); };
     disegna();
   };
 
   /* ======================= ARTICOLI ======================= */
 
   P.articoli = function (cont) {
+    var puoModificare = App.puo('articoli');
     cont.innerHTML =
       '<div class="strumenti">' +
       '<label class="campo"><span>Cerca</span><input id="a-cerca" type="search" placeholder="Nome, principio attivo, codice…"></label>' +
       '<label class="campo"><span>Categoria</span><select id="a-cat">' + opzioniCategoria('', true) + '</select></label>' +
       '<label class="spunta"><input type="checkbox" id="a-non"> Mostra non attivi</label>' +
       '<span class="spazio"></span>' +
-      '<button class="btn" type="button" id="a-importa">Importa da Excel</button>' +
+      (puoModificare ? '<button class="btn" type="button" id="a-importa">Importa da Excel</button>' : '') +
       '<button class="btn" type="button" id="a-excel">Esporta Excel</button>' +
-      '<button class="btn primario" type="button" id="a-nuovo">+ Nuovo articolo</button>' +
+      (puoModificare ? '<button class="btn primario" type="button" id="a-nuovo">+ Nuovo articolo</button>' : '') +
       '</div><div id="a-tab"></div>';
 
     function disegna() {
@@ -1175,9 +1305,11 @@
               '<td>' + etichettaCategoria(a.categoria) + '</td><td>' + h(a.principio || '') + '</td><td>' + h(a.confezione || '') + '</td><td>' + h(a.unita || '') + '</td>' +
               '<td class="n">' + (a.prezzo ? App.fmtEuro(a.prezzo) : '') + '</td><td class="n">' + (a.scortaMinima ? App.fmtNum(a.scortaMinima) : '') + '</td>' +
               '<td class="n">' + App.fmtNum(App.giacenzaTotale(a.id)) + '</td>' +
-              '<td class="azioni"><button class="btn piccolo" type="button" data-modifica="' + h(a.id) + '">Modifica</button></td></tr>';
+              '<td class="azioni">' + (puoModificare ? '<button class="btn piccolo" type="button" data-modifica="' + h(a.id) + '">Modifica</button>' : '') + '</td></tr>';
           }).join('') + '</tbody></table></div>'
-          : vuoto(App.S.articoli.length ? 'Nessun articolo con questi filtri' : 'L’anagrafica è vuota', App.S.articoli.length ? '' : 'Aggiungi gli articoli uno per uno o importali da un file Excel (anche dai vecchi moduli “Nota consumi” compilati).'),
+          : vuoto(App.S.articoli.length ? 'Nessun articolo con questi filtri' : 'L’anagrafica è vuota', App.S.articoli.length ? '' : (puoModificare
+            ? 'Aggiungi gli articoli uno per uno o importali da un file Excel (anche dai vecchi moduli “Nota consumi” compilati).'
+            : 'Gli articoli li inserisce la farmacia.')),
         '<span class="nota">' + lista.length + ' articoli</span>', true);
     }
 
@@ -1189,8 +1321,10 @@
       var r = e.target.closest('[data-scheda]');
       if (r) App.schedaArticolo(r.getAttribute('data-scheda'));
     });
-    cont.querySelector('#a-nuovo').addEventListener('click', function () { App.formArticolo(null); });
-    cont.querySelector('#a-importa').addEventListener('click', importaDaExcel);
+    if (puoModificare) {
+      cont.querySelector('#a-nuovo').addEventListener('click', function () { App.formArticolo(null); });
+      cont.querySelector('#a-importa').addEventListener('click', importaDaExcel);
+    }
     cont.querySelector('#a-excel').addEventListener('click', function () {
       var col = ['Denominazione', 'Categoria', 'Principio attivo', 'Confezione', 'Codice', 'Unità', 'Prezzo', 'Scorta minima', 'Giacenza totale', 'Attivo', 'Note']
         .map(function (t, i) { return { titolo: t, larghezza: [42, 11, 22, 20, 14, 8, 10, 13, 15, 8, 30][i] }; });
@@ -1199,6 +1333,7 @@
       });
       root.ExcelFarmacia.esportaElenco('Articoli', col, righe).then(function (b) { App.scarica(b, 'Articoli_' + App.oggi() + '.xlsx'); });
     });
+    App.rinfresca = disegna;
     disegna();
   };
 
@@ -1239,25 +1374,28 @@
               m.querySelectorAll('input[data-i]').forEach(function (c) { c.checked = v; });
             });
             m.querySelector('#imp-ok').addEventListener('click', function () {
+              var bottone = this;
               var rep = valore(m, '#imp-rep'), data = valore(m, '#imp-data'), conGiac = m.querySelector('#imp-giac').checked;
-              var nuovi = 0, movimenti = [];
+              var articoli = [];
               m.querySelectorAll('input[data-i]').forEach(function (c) {
                 if (!c.checked) return;
                 var i = Number(c.getAttribute('data-i'));
                 var t = lista[i];
-                var cat = valore(m, 'select[data-cat="' + i + '"]');
-                var a = App.articoloPerNome(t.nome);
-                if (!a) {
-                  a = { id: App.id('a'), nome: t.nome, categoria: cat, prezzo: t.prezzo || 0, scortaMinima: t.scortaMinima || 0, unita: t.unita || '', attivo: true };
-                  App.S.articoli.push(a);
-                  nuovi++;
-                }
-                if (conGiac && t.giacenza > 0) movimenti.push({ tipo: 'carico', data: data, articoloId: a.id, repartoId: rep, quantita: t.giacenza, lotto: '', scadenza: '', note: 'Giacenza iniziale importata da ' + file.name });
+                articoli.push({ nome: t.nome, categoria: valore(m, 'select[data-cat="' + i + '"]'), prezzo: t.prezzo || 0, scortaMinima: t.scortaMinima || 0, unita: t.unita || '', giacenza: t.giacenza || 0 });
               });
-              App.aggiungiMovimenti(movimenti).then(function () {
+              if (!articoli.length) { App.avviso('Spunta almeno un articolo da importare.', 'errore'); return; }
+              if (conGiac && !data) { App.avviso('Indica la data della giacenza iniziale.', 'errore'); return; }
+              bottone.disabled = true;
+              // il server crea gli articoli nuovi (per nome) e, se richiesto, un carico per le giacenze
+              root.Api.scrivi('POST', '/api/articoli/importa', { articoli: articoli, repartoId: rep, data: data, conGiacenza: conGiac, origine: file.name }).then(function (r) {
+                var conta = function (x) { return Array.isArray(x) ? x.length : Number(x) || 0; };
+                var nuovi = conta(r.nuovi), carichi = conta(r.carichi);
                 App.chiudiModale();
-                App.avviso('Importati ' + nuovi + ' articoli nuovi' + (movimenti.length ? ' e ' + movimenti.length + ' giacenze iniziali' : ''), 'ok');
+                App.avviso('Importati ' + nuovi + (nuovi === 1 ? ' articolo nuovo' : ' articoli nuovi') + (carichi ? ' e ' + carichi + ' giacenze iniziali' : ''), 'ok');
                 App.ridisegna();
+              }, function (e) {
+                bottone.disabled = false;
+                App.avviso('Importazione non riuscita: ' + messaggioErrore(e), 'errore');
               });
             });
           }
@@ -1271,193 +1409,253 @@
 
   /* ======================= CONFIGURA ======================= */
 
-  App.esportaArchivio = function () {
-    App.S.ultimaEsportazione = new Date().toISOString();
-    var blob = new Blob([JSON.stringify(App.S, null, 1)], { type: 'application/json' });
-    App.scarica(blob, 'archivio-farmacia-posillipo_' + App.oggi() + '.json');
-    App.salva().then(function () { if (App.paginaCorrente === 'oggi' || App.paginaCorrente === 'configura') App.ridisegna(); });
-  };
-
-  function ripristina(dati, descrizione) {
-    return App.conferma('Ripristina archivio', 'Sostituisco tutti i dati attuali con ' + h(descrizione) + '? ' +
-      'Prima salvo automaticamente una copia dei dati attuali sul tuo PC.', 'Ripristina', true).then(function (ok) {
-      if (!ok) return;
-      var copia = new Blob([JSON.stringify(App.S, null, 1)], { type: 'application/json' });
-      App.scarica(copia, 'archivio-farmacia-prima-del-ripristino_' + App.oggi() + '.json');
-      App.S = Archivio.valida(JSON.parse(JSON.stringify(dati)));
-      return App.salva().then(function () {
-        App.disegnaMarchio();
-        App.avviso('Archivio ripristinato', 'ok');
-        App.ridisegna();
-      });
+  // Scrittura che cambia tutto l'archivio (dati di prova, importazione, ripristino): poi ricarico tutto dal server.
+  function scriviERicarica(metodo, percorso, corpo) {
+    return root.Api.richiesta(metodo, percorso, corpo).then(function (r) {
+      return root.Api.sincronizza({ completa: true }).then(function () { return r; });
     });
   }
 
+  /* Dati di prova: solo con l'archivio vuoto e solo per l'amministratore (lo controlla anche il server). */
+  App.caricaDemo = function () {
+    if (!App.archivioVuoto()) { App.avviso('I dati di prova si caricano solo con l’archivio vuoto.', 'errore'); return; }
+    App.conferma('Dati di prova', 'Carico i dati di prova? Sono inventati e servono per imparare a usare il programma: li vedranno <b>tutti gli utenti</b>.', 'Carica dati di prova').then(function (ok) {
+      if (!ok) return;
+      scriviERicarica('POST', '/api/demo', {}).then(function () {
+        App.avviso('Dati di prova caricati: ' + App.S.articoli.length + ' articoli e ' + App.S.movimenti.length + ' movimenti', 'ok');
+        App.vai('oggi');
+      }, function (e) { App.avviso('Dati di prova non caricati: ' + messaggioErrore(e), 'errore'); });
+    });
+  };
+
+  /* Importa l'archivio .json salvato dalla versione per un solo PC (solo con l'archivio vuoto). */
+  function importaArchivio() {
+    App.scegliFileDaLeggere('.json,application/json').then(function (f) {
+      if (!f) return;
+      return f.text().then(function (testo) {
+        var dati;
+        try { dati = JSON.parse(testo); } catch (e) { throw new Error('il file non è un archivio .json valido.'); }
+        if (!dati || !Array.isArray(dati.articoli) || !Array.isArray(dati.movimenti) || !Array.isArray(dati.reparti)) {
+          throw new Error('il file non è un archivio del Gestionale Farmacia (versione per un solo PC).');
+        }
+        return App.conferma('Importa archivio', 'Importo l’archivio “' + h(f.name) + '” (' + dati.articoli.length + ' articoli, ' + dati.movimenti.length + ' movimenti, ' +
+          dati.reparti.length + ' reparti)? Dopo l’importazione <b>tutti gli utenti</b> vedranno questi dati.', 'Importa').then(function (ok) {
+          if (!ok) return;
+          return scriviERicarica('POST', '/api/importa-archivio', dati).then(function () {
+            App.avviso('Archivio importato: ' + App.S.articoli.length + ' articoli e ' + App.S.movimenti.length + ' movimenti', 'ok');
+            App.ridisegna();
+          });
+        });
+      });
+    }).catch(function (e) { App.avviso('Archivio non importato: ' + messaggioErrore(e), 'errore'); });
+  }
+
+  var TIPI_COPIA = { auto: 'automatica', manuale: 'fatta a mano', 'prima-del-ripristino': 'prima di un ripristino' };
+
   P.configura = function (cont) {
     var imp = App.S.impostazioni;
-    var supportaFile = root.Archivio.fileSupportato();
-    cont.innerHTML =
-      '<div class="griglia-2">' +
-      scheda('Struttura e operatore',
-        '<div class="modulo">' +
-        '<label class="campo"><span>Nome della struttura</span><input id="k-struttura" value="' + h(imp.struttura) + '"></label>' +
-        '<label class="campo"><span>Sottotitolo</span><input id="k-sotto" value="' + h(imp.sottotitolo) + '"></label>' +
-        '<label class="campo"><span>Società (sul modulo)</span><input id="k-societa" value="' + h(imp.societa) + '"></label>' +
-        '<label class="campo"><span>Città (sul modulo)</span><input id="k-citta" value="' + h(imp.citta) + '"></label>' +
-        '<label class="campo"><span>Codice del modulo</span><input id="k-codice" value="' + h(imp.codiceModulo) + '"></label>' +
-        '<label class="campo"><span>Avviso scadenze (giorni prima)</span><input id="k-giorni" inputmode="numeric" value="' + h(imp.giorniAvvisoScadenza) + '"></label>' +
-        '<label class="campo largo"><span>Operatore di questa postazione (compare nei movimenti)</span><input id="k-operatore" value="' + h(imp.operatore) + '" placeholder="Nome e cognome"></label>' +
-        '<div class="campo largo"><span>Logo</span><div class="strumenti">' + (imp.logo ? '<img src="' + h(imp.logo) + '" alt="" style="height:42px;border:1px solid var(--linea);border-radius:6px">' : '<span class="tenue piccolo">Nessun logo: uso il simbolo predefinito.</span>') +
-        '<button class="btn piccolo" type="button" id="k-logo">Scegli immagine…</button>' + (imp.logo ? '<button class="btn piccolo" type="button" id="k-logo-via">Togli</button>' : '') + '</div></div>' +
-        '</div><div class="strumenti" style="margin-top:14px"><span class="spazio"></span><button class="btn primario" type="button" id="k-salva">Salva</button></div>') +
-      scheda('Reparti',
-        '<p class="piccolo tenue" style="margin-bottom:10px">Il reparto <b>centrale</b> è la Farmacia: riceve i carichi dai fornitori e su di lui si controlla la scorta minima.</p>' +
-        '<div class="tabella-contenitore"><table class="tabella"><thead><tr><th>Reparto</th><th>Centrale</th><th>Attivo</th><th></th></tr></thead><tbody>' +
-        App.S.reparti.map(function (r) {
-          return '<tr><td><input class="cella-input" data-rep-nome="' + h(r.id) + '" value="' + h(r.nome) + '"></td>' +
-            '<td><input type="radio" name="centrale" data-rep-centrale="' + h(r.id) + '"' + (r.centrale ? ' checked' : '') + '></td>' +
-            '<td><input type="checkbox" data-rep-attivo="' + h(r.id) + '"' + (r.attivo !== false ? ' checked' : '') + '></td>' +
-            '<td class="azioni"><button class="btn piccolo pericolo" type="button" data-rep-elimina="' + h(r.id) + '">Elimina</button></td></tr>';
-        }).join('') + '</tbody></table></div>' +
-        '<div class="strumenti" style="margin-top:12px"><input class="cella-input" id="k-nuovo-rep" placeholder="Nuovo reparto"><button class="btn" type="button" id="k-agg-rep">Aggiungi</button><span class="spazio"></span><button class="btn primario" type="button" id="k-salva-rep">Salva reparti</button></div>') +
-      '</div>' +
-      scheda('Archivio e copie di sicurezza',
+    var html = '';
+    if (App.puo('impostazioni')) {
+      html += '<div class="griglia-2">' +
+        scheda('Struttura',
+          '<div class="modulo">' +
+          '<label class="campo"><span>Nome della struttura</span><input id="k-struttura" value="' + h(imp.struttura) + '"></label>' +
+          '<label class="campo"><span>Sottotitolo</span><input id="k-sotto" value="' + h(imp.sottotitolo) + '"></label>' +
+          '<label class="campo"><span>Società (sul modulo)</span><input id="k-societa" value="' + h(imp.societa) + '"></label>' +
+          '<label class="campo"><span>Città (sul modulo)</span><input id="k-citta" value="' + h(imp.citta) + '"></label>' +
+          '<label class="campo"><span>Codice del modulo</span><input id="k-codice" value="' + h(imp.codiceModulo) + '"></label>' +
+          '<label class="campo"><span>Avviso scadenze (giorni prima)</span><input id="k-giorni" inputmode="numeric" value="' + h(imp.giorniAvvisoScadenza) + '"></label>' +
+          '<div class="campo largo"><span>Logo</span><div class="strumenti">' + (imp.logo ? '<img src="' + h(imp.logo) + '" alt="" style="height:42px;border:1px solid var(--linea);border-radius:6px">' : '<span class="tenue piccolo">Nessun logo: uso il simbolo predefinito.</span>') +
+          '<button class="btn piccolo" type="button" id="k-logo">Scegli immagine…</button>' + (imp.logo ? '<button class="btn piccolo" type="button" id="k-logo-via">Togli</button>' : '') + '</div></div>' +
+          '</div><p class="piccolo tenue" style="margin-top:10px">Nome e logo compaiono anche nella schermata di accesso. Chi registra i movimenti è l’utente collegato.</p>' +
+          '<div class="strumenti" style="margin-top:14px"><span class="spazio"></span><button class="btn primario" type="button" id="k-salva">Salva</button></div>') +
+        scheda('Reparti',
+          '<p class="piccolo tenue" style="margin-bottom:10px">Il reparto <b>centrale</b> è la Farmacia: riceve i carichi dai fornitori e su di lui si controlla la scorta minima.</p>' +
+          '<div class="tabella-contenitore"><table class="tabella"><thead><tr><th>Reparto</th><th>Centrale</th><th>Attivo</th><th></th></tr></thead><tbody id="k-reparti">' +
+          App.S.reparti.map(function (r) {
+            return '<tr data-rep="' + h(r.id) + '"><td><input class="cella-input k-rep-nome" value="' + h(r.nome) + '" aria-label="Nome del reparto"></td>' +
+              '<td><input type="radio" name="centrale" class="k-rep-centrale"' + (r.centrale ? ' checked' : '') + ' aria-label="Centrale"></td>' +
+              '<td><input type="checkbox" class="k-rep-attivo"' + (r.attivo !== false ? ' checked' : '') + ' aria-label="Attivo"></td>' +
+              '<td class="azioni"><button class="btn piccolo pericolo" type="button" data-rep-elimina="' + h(r.id) + '">Elimina</button></td></tr>';
+          }).join('') + '</tbody></table></div>' +
+          '<div class="strumenti" style="margin-top:12px"><input class="cella-input" id="k-nuovo-rep" placeholder="Nuovo reparto"><button class="btn" type="button" id="k-agg-rep">Aggiungi</button><span class="spazio"></span><button class="btn primario" type="button" id="k-salva-rep">Salva reparti</button></div>') +
+        '</div>';
+    }
+    if (App.puo('backup')) {
+      html += scheda('Copie di sicurezza del server',
         '<div class="guida">' +
-        '<p>I dati stanno <b>su questo PC</b>, dentro il browser (Edge o Chrome). Il programma salva da solo a ogni modifica e tiene una copia automatica al giorno degli ultimi 30 giorni.</p>' +
-        (supportaFile
-          ? '<div class="banda info"><p><b>Copia su file sempre aggiornata.</b> Scegli un file (per esempio su una cartella di rete o una chiavetta): il programma lo riscrive a ogni modifica. Dopo ogni riavvio del browser va riattivata con un clic.</p>' +
-            '<span id="k-file-stato" class="piccolo"></span><button class="btn" type="button" id="k-file-scegli">Scegli il file…</button><button class="btn" type="button" id="k-file-riattiva" hidden>Riattiva</button><button class="btn" type="button" id="k-file-togli" hidden>Disattiva</button></div>'
-          : '<div class="banda attenzione"><p>Questo browser non permette la copia automatica su file: usa Microsoft Edge o Google Chrome, oppure salva le copie a mano.</p></div>') +
-        '<div class="strumenti"><button class="btn primario" type="button" id="k-esporta">Salva una copia (.json)</button>' +
-        '<button class="btn" type="button" id="k-ripristina">Ripristina da una copia…</button>' +
-        '<span class="spazio"></span><span class="piccolo tenue">' + (App.S.ultimaEsportazione ? 'Ultima copia salvata: ' + new Date(App.S.ultimaEsportazione).toLocaleString('it-IT') : 'Nessuna copia salvata finora') + '</span></div>' +
-        '<h3>Copie automatiche</h3><div id="k-copie" class="piccolo tenue">Carico…</div>' +
-        '<h3>Prove e azzeramento</h3>' +
-        '<div class="strumenti"><button class="btn" type="button" id="k-demo">Carica dati di prova</button>' +
-        '<button class="btn pericolo" type="button" id="k-azzera">Cancella tutti i dati</button></div>' +
-        '<p class="piccolo tenue">I dati di prova sono inventati e servono per imparare a usare il programma: sostituiscono l’archivio attuale.</p>' +
+        '<p>I dati stanno <b>sul server</b>. Il server fa da solo <b>una copia al giorno</b> e tiene le ultime 30; prima di ogni ripristino salva anche lo stato del momento, così si può sempre tornare indietro.</p>' +
+        '<p class="piccolo tenue">Per sicurezza in più, ogni tanto scarica una copia e conservala fuori dal server (per esempio su un disco di rete). Il ripristino cambia i dati per <b>tutti</b> gli utenti.</p>' +
+        '<div class="strumenti"><button class="btn primario" type="button" id="k-backup-crea">Crea una copia adesso</button><span class="spazio"></span>' +
+        '<button class="btn" type="button" id="k-backup-aggiorna">Aggiorna l’elenco</button></div>' +
+        '<div id="k-backup" class="piccolo tenue">Carico l’elenco…</div>' +
         '</div>');
-
-    // struttura
-    cont.querySelector('#k-salva').addEventListener('click', function () {
-      imp.struttura = valore(cont, '#k-struttura').trim() || 'Clinica Posillipo';
-      imp.sottotitolo = valore(cont, '#k-sotto').trim();
-      imp.societa = valore(cont, '#k-societa').trim();
-      imp.citta = valore(cont, '#k-citta').trim();
-      imp.codiceModulo = valore(cont, '#k-codice').trim();
-      imp.giorniAvvisoScadenza = Math.max(1, Math.round(App.numero(valore(cont, '#k-giorni'))) || 90);
-      imp.operatore = valore(cont, '#k-operatore').trim();
-      App.salva().then(function () { App.disegnaMarchio(); App.avviso('Impostazioni salvate', 'ok'); });
-    });
-    cont.querySelector('#k-logo').addEventListener('click', function () {
-      App.scegliFileDaLeggere('image/*').then(function (f) {
-        if (!f) return;
-        if (f.size > 400000) { App.avviso('Immagine troppo grande: usa un file sotto i 400 KB.', 'errore'); return; }
-        var r = new FileReader();
-        r.onload = function () { imp.logo = r.result; App.salva().then(function () { App.disegnaMarchio(); App.ridisegna(); }); };
-        r.readAsDataURL(f);
-      });
-    });
-    var via = cont.querySelector('#k-logo-via');
-    if (via) via.addEventListener('click', function () { imp.logo = ''; App.salva().then(function () { App.disegnaMarchio(); App.ridisegna(); }); });
-
-    // reparti
-    cont.querySelector('#k-agg-rep').addEventListener('click', function () {
-      var nome = valore(cont, '#k-nuovo-rep').trim();
-      if (!nome) return;
-      App.S.reparti.push({ id: App.id('r'), nome: nome, attivo: true });
-      App.salva().then(App.ridisegna);
-    });
-    cont.querySelector('#k-salva-rep').addEventListener('click', function () {
-      App.S.reparti.forEach(function (r) {
-        var n = cont.querySelector('[data-rep-nome="' + r.id + '"]');
-        if (n && n.value.trim()) r.nome = n.value.trim();
-        r.centrale = cont.querySelector('[data-rep-centrale="' + r.id + '"]').checked;
-        r.attivo = cont.querySelector('[data-rep-attivo="' + r.id + '"]').checked;
-      });
-      App.salva().then(function () { App.avviso('Reparti salvati', 'ok'); App.ridisegna(); });
-    });
-    cont.querySelectorAll('[data-rep-elimina]').forEach(function (b) {
-      b.addEventListener('click', function () {
-        var id = b.getAttribute('data-rep-elimina');
-        if (App.S.movimenti.some(function (m) { return m.repartoId === id || m.repartoDestId === id; })) {
-          App.avviso('Il reparto ha dei movimenti: non si può eliminare. Togli la spunta “Attivo” per nasconderlo.', 'errore');
-          return;
-        }
-        App.S.reparti = App.S.reparti.filter(function (r) { return r.id !== id; });
-        App.salva().then(App.ridisegna);
-      });
-    });
-
-    // copia su file
-    function statoFile() {
-      var el = cont.querySelector('#k-file-stato');
-      if (!el) return;
-      root.Archivio.statoFile().then(function (f) {
-        el.innerHTML = f.attivo ? (f.permesso ? '✓ Attiva su <b>' + h(f.nome) + '</b>' : '⏸ In pausa su <b>' + h(f.nome) + '</b>') : 'Non attiva';
-        cont.querySelector('#k-file-riattiva').hidden = !f.attivo || f.permesso;
-        cont.querySelector('#k-file-togli').hidden = !f.attivo;
-      });
     }
-    if (supportaFile) {
-      cont.querySelector('#k-file-scegli').addEventListener('click', function () {
-        root.Archivio.scegliFile().then(function () { return App.salva(); }).then(function () { App.avviso('Copia su file attiva', 'ok'); statoFile(); })
-          .catch(function (e) { if (e && e.name !== 'AbortError') App.avviso('Non riesco a usare quel file: ' + e.message, 'errore'); });
+    if (App.eAmministratore() && App.archivioVuoto()) {
+      html += scheda('Archivio vuoto: come cominciare',
+        '<div class="guida">' +
+        '<p>L’archivio non ha ancora articoli né movimenti. Se usavate la <b>versione per un solo PC</b>, importa l’archivio <span class="mono">.json</span> che salvavate da Configura (“Salva una copia”): articoli, reparti, impostazioni e movimenti passano sul server.</p>' +
+        '<div class="strumenti"><button class="btn primario" type="button" id="k-importa-archivio">Importa l’archivio della versione per un solo PC (.json)</button>' +
+        '<button class="btn" type="button" id="k-demo">Carica dati di prova</button></div>' +
+        '<p class="piccolo tenue">Oppure importa gli articoli da Excel dalla pagina <a href="#articoli">Articoli</a>. I dati di prova sono inventati e servono per imparare: si possono caricare solo con l’archivio vuoto.</p>' +
+        '</div>');
+    }
+    cont.innerHTML = html;
+
+    // ---- struttura ----
+    function impostazioni(modifiche) {
+      var i = App.S.impostazioni;
+      return Object.assign({
+        struttura: i.struttura, sottotitolo: i.sottotitolo, societa: i.societa, citta: i.citta,
+        logo: i.logo || '', giorniAvvisoScadenza: i.giorniAvvisoScadenza, codiceModulo: i.codiceModulo
+      }, modifiche);
+    }
+    function salvaImpostazioni(modifiche, messaggio, ridisegna) {
+      return root.Api.scrivi('PUT', '/api/impostazioni', impostazioni(modifiche)).then(function () {
+        App.disegnaMarchio();
+        App.avviso(messaggio, 'ok');
+        if (ridisegna) App.ridisegna();
+      }, function (e) { App.avviso('Impostazioni non salvate: ' + messaggioErrore(e), 'errore'); });
+    }
+    if (App.puo('impostazioni')) {
+      cont.querySelector('#k-salva').addEventListener('click', function () {
+        salvaImpostazioni({
+          struttura: valore(cont, '#k-struttura').trim() || 'Clinica Posillipo',
+          sottotitolo: valore(cont, '#k-sotto').trim(),
+          societa: valore(cont, '#k-societa').trim(),
+          citta: valore(cont, '#k-citta').trim(),
+          codiceModulo: valore(cont, '#k-codice').trim(),
+          giorniAvvisoScadenza: Math.max(1, Math.round(App.numero(valore(cont, '#k-giorni'))) || 90)
+        }, 'Impostazioni salvate', false);
       });
-      cont.querySelector('#k-file-riattiva').addEventListener('click', function () {
-        root.Archivio.riattivaFile().then(function (ok) {
-          if (ok) return App.salva().then(function () { App.avviso('Copia su file riattivata', 'ok'); statoFile(); });
-          App.avviso('Permesso non concesso.', 'errore');
+      cont.querySelector('#k-logo').addEventListener('click', function () {
+        App.scegliFileDaLeggere('image/*').then(function (f) {
+          if (!f) return;
+          if (f.size > 400000) { App.avviso('Immagine troppo grande: usa un file sotto i 400 KB.', 'errore'); return; }
+          var r = new FileReader();
+          r.addEventListener('load', function () { salvaImpostazioni({ logo: r.result }, 'Logo salvato', true); });
+          r.readAsDataURL(f);
         });
       });
-      cont.querySelector('#k-file-togli').addEventListener('click', function () {
-        root.Archivio.togliFile().then(function () { App.aggiornaLaterale(); statoFile(); });
-      });
-      statoFile();
-    }
+      var via = cont.querySelector('#k-logo-via');
+      if (via) via.addEventListener('click', function () { salvaImpostazioni({ logo: '' }, 'Logo tolto', true); });
 
-    cont.querySelector('#k-esporta').addEventListener('click', App.esportaArchivio);
-    cont.querySelector('#k-ripristina').addEventListener('click', function () {
-      App.scegliFileDaLeggere('.json,application/json').then(function (f) {
-        if (!f) return;
-        return f.text().then(function (t) {
-          var dati = root.Archivio.valida(JSON.parse(t));
-          return ripristina(dati, 'il file “' + f.name + '” (' + dati.articoli.length + ' articoli, ' + dati.movimenti.length + ' movimenti)');
+      // ---- reparti ----
+      function leggiReparti() {
+        return Array.prototype.map.call(cont.querySelectorAll('#k-reparti tr[data-rep]'), function (tr) {
+          var id = tr.getAttribute('data-rep');
+          var r = App.reparto(id) || {};
+          return {
+            id: id,
+            nome: tr.querySelector('.k-rep-nome').value.trim() || r.nome,
+            centrale: tr.querySelector('.k-rep-centrale').checked,
+            attivo: tr.querySelector('.k-rep-attivo').checked
+          };
         });
-      }).catch(function (e) { App.avviso('File non valido: ' + e.message, 'errore'); });
-    });
-
-    root.Archivio.elencoCopie().then(function (copie) {
-      var el = cont.querySelector('#k-copie');
-      if (!copie.length) { el.textContent = 'Ancora nessuna copia: la prima si crea con la prima modifica di oggi.'; return; }
-      el.innerHTML = '<div class="tabella-contenitore"><table class="tabella"><thead><tr><th>Giorno</th><th>Ora</th><th class="n">Articoli</th><th class="n">Movimenti</th><th></th></tr></thead><tbody>' +
-        copie.map(function (c, i) {
-          return '<tr><td>' + App.fmtData(c.giorno) + '</td><td>' + new Date(c.ora).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) + '</td>' +
-            '<td class="n">' + c.dati.articoli.length + '</td><td class="n">' + c.dati.movimenti.length + '</td>' +
-            '<td class="azioni"><button class="btn piccolo" type="button" data-copia="' + i + '">Ripristina</button></td></tr>';
-        }).join('') + '</tbody></table></div><p style="margin-top:6px">Ogni copia è lo stato dell’archivio all’inizio di quel giorno, prima della prima modifica.</p>';
-      el.querySelectorAll('[data-copia]').forEach(function (b) {
+      }
+      function salvaReparti(lista, messaggio) {
+        return root.Api.scrivi('PUT', '/api/reparti', { reparti: lista }).then(function () {
+          App.avviso(messaggio, 'ok');
+          App.ridisegna();
+        }, function (e) { App.avviso('Reparti non salvati: ' + messaggioErrore(e), 'errore'); });
+      }
+      cont.querySelector('#k-agg-rep').addEventListener('click', function () {
+        var nome = valore(cont, '#k-nuovo-rep').trim();
+        if (!nome) { App.avviso('Scrivi il nome del nuovo reparto.', 'errore'); return; }
+        if (App.S.reparti.some(function (r) { return r.nome.toLowerCase() === nome.toLowerCase(); })) { App.avviso('Esiste già un reparto con questo nome.', 'errore'); return; }
+        // mando anche le righe già presenti (con le modifiche scritte nel modulo) e il reparto nuovo senza id
+        salvaReparti(leggiReparti().concat([{ nome: nome, centrale: false, attivo: true }]), 'Reparto aggiunto');
+      });
+      cont.querySelector('#k-nuovo-rep').addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); cont.querySelector('#k-agg-rep').click(); }
+      });
+      cont.querySelector('#k-salva-rep').addEventListener('click', function () {
+        var lista = leggiReparti();
+        if (!lista.some(function (r) { return r.centrale; })) { App.avviso('Scegli il reparto centrale (la Farmacia).', 'errore'); return; }
+        salvaReparti(lista, 'Reparti salvati');
+      });
+      cont.querySelectorAll('[data-rep-elimina]').forEach(function (b) {
         b.addEventListener('click', function () {
-          var c = copie[Number(b.getAttribute('data-copia'))];
-          ripristina(c.dati, 'la copia automatica del ' + App.fmtData(c.giorno));
+          var id = b.getAttribute('data-rep-elimina');
+          if (App.S.movimenti.some(function (m) { return m.repartoId === id || m.repartoDestId === id; })) {
+            App.avviso('Il reparto ha dei movimenti: non si può eliminare. Togli la spunta “Attivo” per nasconderlo.', 'errore');
+            return;
+          }
+          App.conferma('Elimina reparto', 'Elimino il reparto “' + h(App.nomeReparto(id)) + '”?', 'Elimina', true).then(function (ok) {
+            if (!ok) return;
+            root.Api.scrivi('DELETE', '/api/reparti/' + encodeURIComponent(id)).then(function () {
+              App.avviso('Reparto eliminato');
+              App.ridisegna();
+            }, function (e) { App.avviso('Reparto non eliminato: ' + messaggioErrore(e), 'errore'); });
+          });
         });
       });
-    });
+    }
 
-    cont.querySelector('#k-demo').addEventListener('click', function () { App.caricaDemo(); });
-    cont.querySelector('#k-azzera').addEventListener('click', function () {
-      App.conferma('Cancella tutti i dati', 'Cancello articoli, movimenti e impostazioni di questo PC? Prima scarico una copia dei dati attuali. L’operazione non si può annullare dal programma.', 'Cancella tutto', true).then(function (ok) {
-        if (!ok) return;
-        App.scarica(new Blob([JSON.stringify(App.S, null, 1)], { type: 'application/json' }), 'archivio-farmacia-prima-della-cancellazione_' + App.oggi() + '.json');
-        App.S = root.Archivio.statoVuoto();
-        App.salva().then(function () { App.disegnaMarchio(); App.vai('oggi'); App.avviso('Archivio azzerato'); });
+    // ---- copie di sicurezza del server ----
+    function elencoCopie() {
+      var el = cont.querySelector('#k-backup');
+      if (!el) return;
+      root.Api.richiesta('GET', '/api/backup').then(function (r) {
+        var copie = (r && r.backup) || [];
+        if (!document.body.contains(el)) return;
+        if (!copie.length) { el.textContent = 'Ancora nessuna copia: la prima automatica si crea entro oggi, oppure creala adesso.'; return; }
+        el.className = '';
+        el.innerHTML = '<div class="tabella-contenitore" style="max-height:420px"><table class="tabella"><thead><tr><th>Data</th><th>Tipo</th><th>File</th><th class="n">Dimensione</th><th></th></tr></thead><tbody>' +
+          copie.map(function (c, i) {
+            return '<tr><td>' + h(App.fmtDataOra(c.data)) + '</td><td>' + h(TIPI_COPIA[c.tipo] || c.tipo || '') + '</td>' +
+              '<td class="mono">' + h(c.nome) + '</td><td class="n">' + h(App.fmtDimensione(c.dimensione)) + '</td>' +
+              '<td class="azioni"><a class="btn piccolo" href="' + h(root.Api.url('/api/backup/' + encodeURIComponent(c.nome))) + '" download="' + h(c.nome) + '">Scarica</a> ' +
+              '<button class="btn piccolo pericolo" type="button" data-ripristina="' + i + '">Ripristina</button></td></tr>';
+          }).join('') + '</tbody></table></div>';
+        el.querySelectorAll('[data-ripristina]').forEach(function (b) {
+          b.addEventListener('click', function () { ripristinaCopia(copie[Number(b.getAttribute('data-ripristina'))]); });
+        });
+      }, function (e) {
+        el.className = 'piccolo';
+        el.innerHTML = '<span style="color:var(--pericolo)">Non riesco a leggere l’elenco delle copie: ' + h(messaggioErrore(e)) + '</span>';
       });
-    });
+    }
+    function ripristinaCopia(c) {
+      App.confermaForte('Ripristina una copia di sicurezza',
+        'Sostituisco <b>tutti i dati del magazzino</b> con la copia del <b>' + h(App.fmtDataOra(c.data)) + '</b> (' + h(c.nome) + ').<br>' +
+        '<b>Tutti gli utenti collegati</b> vedranno subito i dati della copia: quello che è stato registrato dopo quel momento sparisce. ' +
+        'Utenti e password non cambiano. Prima del ripristino il server salva una copia dello stato attuale, che resta in questo elenco.',
+        'RIPRISTINA', 'Ripristina la copia').then(function (ok) {
+        if (!ok) return;
+        scriviERicarica('POST', '/api/backup/' + encodeURIComponent(c.nome) + '/ripristina', {}).then(function () {
+          App.disegnaMarchio();
+          App.avviso('Copia ripristinata: ' + App.S.articoli.length + ' articoli e ' + App.S.movimenti.length + ' movimenti', 'ok');
+          App.ridisegna();
+        }, function (e) { App.avviso('Ripristino non riuscito: ' + messaggioErrore(e), 'errore'); });
+      });
+    }
+    if (App.puo('backup')) {
+      cont.querySelector('#k-backup-crea').addEventListener('click', function () {
+        var b = this;
+        b.disabled = true;
+        root.Api.richiesta('POST', '/api/backup', {}).then(function (r) {
+          App.avviso('Copia creata' + (r && r.nome ? ': ' + r.nome : ''), 'ok');
+          elencoCopie();
+        }, function (e) { App.avviso('Copia non creata: ' + messaggioErrore(e), 'errore'); }).then(function () { b.disabled = false; });
+      });
+      cont.querySelector('#k-backup-aggiorna').addEventListener('click', elencoCopie);
+      elencoCopie();
+    }
+
+    // ---- archivio vuoto ----
+    var ia = cont.querySelector('#k-importa-archivio');
+    if (ia) ia.addEventListener('click', importaArchivio);
+    var demo = cont.querySelector('#k-demo');
+    if (demo) demo.addEventListener('click', function () { App.caricaDemo(); });
   };
 
   /* ======================= GUIDA ======================= */
 
   P.guida = function (cont) {
+    var indirizzo = location.origin + '/';
+    var locale = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+    var ruoli = App.utente ? App.nomeRuolo(App.utente.ruolo) : '';
     cont.innerHTML = scheda('Come si usa il Gestionale Farmacia', '<div class="guida">' +
       '<p>Il programma sostituisce i fogli Excel <i>Carico_Scarico_FARMACIA</i> e <i>Carico_Scarico_PRESIDI</i>: ogni movimento si registra una volta sola e a fine mese la <b>Nota consumi</b> di ogni reparto è già pronta, nello stesso modulo di sempre.</p>' +
       '<h3>Il giro di ogni giorno</h3><ol>' +
@@ -1467,7 +1665,7 @@
       '<li><b>Perdite e scaduti</b> (P): confezioni scadute, rotte, smarrite o rese.</li></ol>' +
       '<h3>A fine mese</h3><ol>' +
       '<li>Apri <b>Nota consumi mensile</b> (R), scegli reparto, mese e modulo (Farmaci o Presidi).</li>' +
-      '<li>Controlla i numeri: le caselle dei giorni si possono correggere direttamente, come sul foglio.</li>' +
+      '<li>Controlla i numeri: le caselle dei giorni si possono correggere direttamente, come sul foglio (se il tuo utente può farlo).</li>' +
       '<li><b>Esporta nel modulo Excel</b>: crea il file con il modulo originale compilato (oltre 48 articoli aggiunge altri fogli identici). Oppure <b>Stampa</b>.</li></ol>' +
       '<h3>Come si calcolano le colonne</h3><ul>' +
       '<li><b>Residui mesi prec.</b> (2): giacenza del reparto all’ultimo giorno del mese prima.</li>' +
@@ -1479,11 +1677,25 @@
       '<h3>Lotti e scadenze</h3>' +
       '<p>Consumi, perdite e trasferimenti scalano per primo il lotto che scade prima. Se serve un lotto preciso, sceglilo nella riga. La pagina <b>Scadenze</b> (Z) mostra i lotti in scadenza e quelli scaduti, con il pulsante per toglierli dal magazzino.</p>' +
       '<h3>Inventario</h3><p>Da <b>Inventario</b> (I) stampi il foglio di conta, scrivi le quantità contate e il programma registra le differenze come rettifiche.</p>' +
-      '<h3>Correggere un errore</h3><p>Un movimento non si cancella: si <b>annulla</b> (da Movimenti, o dagli elenchi sotto ogni modulo) scrivendo il motivo. Resta visibile, barrato, e non conta più nei calcoli.</p>' +
+      '<h3>Correggere un errore</h3><p>Un movimento non si cancella: si <b>annulla</b> (da Movimenti, o dagli elenchi sotto ogni modulo) scrivendo il motivo. Resta visibile, barrato, e non conta più nei calcoli. Chi lavora in un reparto può annullare solo i consumi e le perdite registrati da lui.</p>' +
+      '<h3>Utenti e ruoli</h3>' +
+      '<p>Ognuno entra con il <b>suo nome utente e la sua password</b>: ogni movimento porta il nome di chi l’ha registrato e il <b>registro attività</b> conserva accessi e modifiche. ' +
+      (ruoli ? 'Il tuo ruolo è <b>' + h(ruoli) + '</b>: nel menu vedi solo le pagine che puoi usare.' : '') + '</p><ul>' +
+      '<li><b>Amministratore</b>: tutto, compresi utenti, struttura, reparti e copie di sicurezza.</li>' +
+      '<li><b>Farmacista</b>: carichi, trasferimenti, consumi, perdite, inventario, articoli, correzioni del registro mensile; può annullare qualsiasi movimento e vedere il registro attività.</li>' +
+      '<li><b>Reparto</b>: consumi e perdite dei propri reparti, correzioni dei loro consumi nel registro mensile, annullo dei propri consumi e perdite; il resto lo consulta.</li>' +
+      '<li><b>Consultazione</b>: vede tutto, stampa ed esporta in Excel, non modifica niente (per esempio la direzione sanitaria).</li></ul>' +
+      '<p>La password si cambia dal proprio nome in alto a destra → <i>Cambia password</i>. Chi la dimentica, o sbaglia 5 volte e resta bloccato per 15 minuti, chiede all’amministratore una nuova password provvisoria, da cambiare al primo accesso. Esci sempre con <i>Esci</i> se il PC è condiviso; dopo 8 ore senza usarlo il programma chiede di nuovo la password.</p>' +
+      '<h3>Come collegarsi</h3>' +
+      '<p>Il programma gira sul <b>server della clinica</b>: dagli altri PC si apre con Edge o Chrome all’indirizzo del server, non serve installare niente.</p>' +
+      '<p>Indirizzo di questa pagina: <b class="mono">' + h(indirizzo) + '</b>' +
+      (locale ? ' — è l’indirizzo del server visto da sé stesso: dagli altri PC usa il nome o l’indirizzo IP del server con la stessa porta, per esempio <span class="mono">http://nome-del-server' + (location.port ? ':' + h(location.port) : '') + '/</span>.' : ' — salvalo tra i preferiti del browser.') + '</p>' +
+      '<p>Più persone possono lavorare insieme: quello che registra uno lo vedono subito gli altri. In alto a destra “● In linea” vuol dire che il collegamento c’è; se compare “⚠ Server non raggiungibile” non registrare niente finché il collegamento non torna (il programma riprova da solo).</p>' +
       '<h3>Tasti rapidi</h3><ul>' +
-      App.MENU.filter(function (v) { return v.tasto; }).map(function (v) { return '<li><kbd>' + v.tasto + '</kbd> ' + h(v.voce) + '</li>'; }).join('') +
+      App.vociPermesse().filter(function (v) { return v.tasto; }).map(function (v) { return '<li><kbd>' + v.tasto + '</kbd> ' + h(v.voce) + '</li>'; }).join('') +
       '<li><kbd>Ctrl K</kbd> o <kbd>/</kbd> ricerca rapida di un articolo · <kbd>Esc</kbd> chiude le finestre</li></ul>' +
-      '<h3>Dove stanno i dati</h3><p>Su questo PC, nel browser. Il programma tiene da solo una copia al giorno degli ultimi 30 giorni; in <b>Configura</b> puoi attivare la copia su file sempre aggiornata e salvare copie su chiavetta. Usa sempre lo stesso browser (Edge o Chrome) e non una finestra anonima.</p>' +
+      '<h3>Dove stanno i dati</h3><p>Tutti i dati stanno <b>sul server</b>, in un unico archivio condiviso: nei PC non resta niente, e non importa quale browser o PC si usa. ' +
+      'Il server fa da solo <b>una copia di sicurezza al giorno</b> e tiene le ultime 30; l’amministratore, da <b>Configura</b>, può crearne una in qualsiasi momento, scaricarla o ripristinarla.</p>' +
       '</div>');
   };
 })(this);

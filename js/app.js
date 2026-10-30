@@ -1,42 +1,59 @@
 /*
  * Gestionale Farmacia · Clinica Posillipo — nucleo dell'applicazione:
- * stato, salvataggio, menu, tasti rapidi, ricerca, finestre e avvisi.
- * Le pagine stanno in pagine.js e si registrano in App.pagine.
+ * stato, utente e permessi, menu, tasti rapidi, ricerca, finestre e avvisi.
+ * I dati arrivano dal server (api.js), l'accesso è in accesso.js,
+ * le pagine stanno in pagine.js e amministrazione.js e si registrano in App.pagine.
  */
 (function (root) {
   'use strict';
 
   var C = root.Calcoli;
-  var Archivio = root.Archivio;
 
   var App = {
-    S: null,
+    S: null,               // { impostazioni, reparti, articoli, movimenti } come li manda il server
+    utente: null,          // utente collegato
+    permessi: null,        // permessi calcolati dal server
     pagine: {},
     paginaCorrente: 'oggi',
     parametri: {},
+    rinfresca: null,       // ridisegno "leggero" della pagina corrente (conserva i filtri)
+    pronta: false,         // interfaccia già mostrata almeno una volta
     _giacenze: null
   };
 
   /* ---------- menu: stessa impostazione del Gestionale Agende, un tasto per pagina ---------- */
+  // perm: permesso (o elenco di permessi, ne basta uno) che serve per vedere la pagina
   App.MENU = [
     { gruppo: 'Lavoro di ogni giorno' },
     { id: 'oggi', voce: 'Oggi', ico: '🏠', tasto: 'O' },
-    { id: 'carico', voce: 'Carico', ico: '📥', tasto: 'C' },
-    { id: 'consumi', voce: 'Consumi del giorno', ico: '💊', tasto: 'S' },
-    { id: 'trasferimenti', voce: 'Trasferimenti', ico: '🔁', tasto: 'T' },
-    { id: 'perdite', voce: 'Perdite e scaduti', ico: '🗑️', tasto: 'P' },
+    { id: 'carico', voce: 'Carico', ico: '📥', tasto: 'C', perm: 'carico' },
+    { id: 'consumi', voce: 'Consumi del giorno', ico: '💊', tasto: 'S', perm: 'consumo' },
+    { id: 'trasferimenti', voce: 'Trasferimenti', ico: '🔁', tasto: 'T', perm: 'trasferimento' },
+    { id: 'perdite', voce: 'Perdite e scaduti', ico: '🗑️', tasto: 'P', perm: 'perdita' },
     { gruppo: 'Magazzino' },
     { id: 'giacenze', voce: 'Giacenze', ico: '📦', tasto: 'G' },
     { id: 'scadenze', voce: 'Scadenze', ico: '⏳', tasto: 'Z', conta: 'scadenze' },
     { id: 'movimenti', voce: 'Movimenti', ico: '🧾', tasto: 'M' },
-    { id: 'inventario', voce: 'Inventario', ico: '✅', tasto: 'I' },
+    { id: 'inventario', voce: 'Inventario', ico: '✅', tasto: 'I', perm: 'rettifica' },
     { gruppo: 'Registri' },
     { id: 'registro', voce: 'Nota consumi mensile', ico: '📅', tasto: 'R' },
     { gruppo: 'Archivio' },
     { id: 'articoli', voce: 'Articoli', ico: '🏷️', tasto: 'A' },
-    { id: 'configura', voce: 'Configura', ico: '⚙️', tasto: 'F' },
+    { id: 'utenti', voce: 'Utenti', ico: '👥', tasto: 'U', perm: 'utenti' },
+    { id: 'attivita', voce: 'Attività', ico: '📜', tasto: 'V', perm: 'attivita' },
+    { id: 'configura', voce: 'Configura', ico: '⚙️', tasto: 'F', perm: ['impostazioni', 'backup'] },
     { id: 'guida', voce: 'Guida', ico: '❓', tasto: 'H' }
   ];
+
+  // pagine solo di consultazione: si ridisegnano da sole quando altri utenti cambiano i dati
+  App.PAGINE_CONSULTAZIONE = ['oggi', 'giacenze', 'scadenze', 'movimenti', 'articoli', 'attivita'];
+
+  App.RUOLI = {
+    amministratore: 'Amministratore',
+    farmacista: 'Farmacista',
+    reparto: 'Reparto',
+    consultazione: 'Consultazione'
+  };
 
   /* ---------- utilità ---------- */
   App.h = function (s) {
@@ -49,7 +66,10 @@
     return (prefisso || 'x') + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
   };
 
-  App.oggi = Archivio.oggi;
+  App.oggi = function () {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  };
 
   App.fmtData = function (d) {
     if (!d) return '';
@@ -73,6 +93,21 @@
     return (Number(n) || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' });
   };
 
+  // data e ora da un ISO o da millisecondi
+  App.fmtDataOra = function (v) {
+    if (!v) return '';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    return d.toLocaleDateString('it-IT') + ' ' + d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  App.fmtDimensione = function (byte) {
+    var n = Number(byte) || 0;
+    if (n < 1024) return n + ' byte';
+    if (n < 1024 * 1024) return App.fmtNum(Math.round(n / 1024)) + ' KB';
+    return App.fmtNum(Math.round(n / 1024 / 1024 * 10) / 10) + ' MB';
+  };
+
   App.dataLunga = function (d) {
     var p = d.split('-').map(Number);
     return new Date(p[0], p[1] - 1, p[2]).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
@@ -92,6 +127,46 @@
   };
 
   App.CAUSALI_PERDITA = ['Scaduto', 'Rotto o danneggiato', 'Smarrito', 'Reso al fornitore', 'Altro'];
+
+  /* ---------- utente e permessi (il controllo vero lo fa sempre il server) ---------- */
+  App.puo = function (permesso) {
+    return !!(App.permessi && App.permessi[permesso]);
+  };
+
+  App.eAmministratore = function () {
+    return !!(App.utente && App.utente.ruolo === 'amministratore');
+  };
+
+  // true se l'utente può scrivere in quel reparto (reparti null = tutti)
+  App.repartoPermesso = function (id) {
+    var r = App.permessi && App.permessi.reparti;
+    return !r || r.indexOf(id) >= 0;
+  };
+
+  // reparti attivi in cui l'utente può registrare
+  App.repartiScrivibili = function () {
+    return App.repartiAttivi().filter(function (r) { return App.repartoPermesso(r.id); });
+  };
+
+  App.paginaPermessa = function (id) {
+    var voce = App.MENU.filter(function (v) { return v.id === id; })[0];
+    if (!voce || !voce.perm) return true;
+    var lista = typeof voce.perm === 'string' ? [voce.perm] : voce.perm;
+    return lista.some(function (p) { return App.puo(p); });
+  };
+
+  App.vociPermesse = function () {
+    return App.MENU.filter(function (v) { return v.id && App.paginaPermessa(v.id); });
+  };
+
+  // "Annulla" su un movimento: chi può annullare tutto, oppure i propri consumi e perdite nei propri reparti
+  App.puoAnnullare = function (m) {
+    if (!m || m.annullato) return false;
+    if (App.puo('annullaTutti')) return true;
+    if (m.tipo !== 'consumo' && m.tipo !== 'perdita') return false;
+    if (!App.utente || m.utenteId !== App.utente.id) return false;
+    return App.puo(m.tipo) && App.repartoPermesso(m.repartoId);
+  };
 
   /* ---------- dati ---------- */
   App.articolo = function (id) { return App.S.articoli.filter(function (a) { return a.id === id; })[0]; };
@@ -119,6 +194,10 @@
     return App.S.articoli.filter(function (a) { return a.nome.toLowerCase() === n; })[0];
   };
 
+  App.archivioVuoto = function () {
+    return !App.S || (!App.S.articoli.length && !App.S.movimenti.length);
+  };
+
   App.giacenze = function () {
     if (!App._giacenze) App._giacenze = C.tutteLeGiacenze(App.S);
     return App._giacenze;
@@ -136,7 +215,7 @@
   App.sottoScorta = function (a) {
     if (!a.scortaMinima) return false;
     var c = App.repartoCentrale();
-    return App.giacenza(a.id, c.id) < a.scortaMinima;
+    return !!c && App.giacenza(a.id, c.id) < a.scortaMinima;
   };
 
   /* Lotti con giacenza in tutti i reparti, con i giorni alla scadenza. */
@@ -169,71 +248,35 @@
     return App.lottiInGiacenza().filter(function (l) { return l.giorni !== null && l.giorni <= soglia; }).length;
   };
 
-  /* ---------- registrazione dei movimenti ---------- */
-  App.aggiungiMovimenti = function (lista) {
-    var ora = Date.now();
-    lista.forEach(function (m, i) {
-      m.id = m.id || App.id('m');
-      m.creato = ora + i;
-      m.operatore = App.S.impostazioni.operatore || '';
-      m.quantita = Number(m.quantita);
-      App.S.movimenti.push(m);
-    });
-    return App.salva();
-  };
+  /* ---------- registrazioni: tutto passa dal server ---------- */
 
   /*
-   * Uscita (consumo, perdita, trasferimento): ripartita sui lotti del reparto,
-   * prima quelli che scadono prima. Restituisce i movimenti da registrare.
+   * Registra i movimenti di un modulo. Per consumo, perdita e trasferimento si manda una riga
+   * per ogni riga del modulo (con 'lotto' solo se scelto): la ripartizione sui lotti la fa il server.
+   * L'operatore è l'utente collegato: lo mette il server.
    */
-  App.preparaUscita = function (tipo, dati) {
-    var parti = C.allocaUscita(App.S, dati.articoloId, dati.repartoId, dati.data, dati.quantita, dati.lotto);
-    return parti.map(function (p) {
-      return Object.assign({}, dati, { tipo: tipo, quantita: p.quantita, lotto: p.lotto, scadenza: p.scadenza });
+  App.aggiungiMovimenti = function (lista) {
+    var movimenti = lista.map(function (m) {
+      var x = {};
+      Object.keys(m).forEach(function (k) {
+        if (k === 'id' || k === 'creato' || k === 'operatore' || k === 'utenteId') return;
+        if (m[k] === undefined || m[k] === null) return;
+        if (k === 'lotto' && !m[k]) return;
+        x[k] = m[k];
+      });
+      x.quantita = Number(m.quantita);
+      return x;
     });
+    return root.Api.scrivi('POST', '/api/movimenti', { movimenti: movimenti });
   };
 
   App.annullaMovimento = function (id, motivo) {
-    var m = App.S.movimenti.filter(function (x) { return x.id === id; })[0];
-    if (!m || m.annullato) return Promise.resolve();
-    m.annullato = { il: new Date().toISOString(), da: App.S.impostazioni.operatore || '', motivo: motivo || '' };
-    return App.salva();
+    return root.Api.scrivi('POST', '/api/movimenti/' + encodeURIComponent(id) + '/annulla', { motivo: motivo || '' });
   };
 
-  /* Imposta il consumo totale di un giorno (registro mensile): annulla i consumi del giorno e registra il nuovo valore. */
+  /* Correzione dal registro mensile: il consumo del giorno diventa 'quantita' (0 = nessun consumo). */
   App.impostaConsumoGiorno = function (articoloId, repartoId, data, quantita) {
-    var esistenti = App.S.movimenti.filter(function (m) {
-      return !m.annullato && m.tipo === 'consumo' && m.articoloId === articoloId && m.repartoId === repartoId && m.data === data;
-    });
-    var ora = new Date().toISOString();
-    esistenti.forEach(function (m) {
-      m.annullato = { il: ora, da: App.S.impostazioni.operatore || '', motivo: 'Corretto dal registro mensile' };
-    });
-    App._giacenze = null;
-    var nuovi = quantita > 0
-      ? App.preparaUscita('consumo', { articoloId: articoloId, repartoId: repartoId, data: data, quantita: quantita, note: 'Dal registro mensile' })
-      : [];
-    if (nuovi.length) return App.aggiungiMovimenti(nuovi);
-    return App.salva();
-  };
-
-  /* ---------- salvataggio ---------- */
-  var codaSalvataggio = Promise.resolve();
-  App.salva = function () {
-    App._giacenze = null;
-    var indicatore = document.getElementById('salvataggio');
-    indicatore.className = 'salvataggio';
-    indicatore.textContent = 'Salvataggio…';
-    codaSalvataggio = codaSalvataggio.then(function () { return Archivio.salva(App.S); }).then(function () {
-      indicatore.textContent = '✓ Salvato';
-      App.aggiornaLaterale();
-    }, function (e) {
-      console.error(e);
-      indicatore.className = 'salvataggio errore';
-      indicatore.textContent = 'Non salvato!';
-      App.avviso('Salvataggio non riuscito: ' + (e && e.message ? e.message : e), 'errore');
-    });
-    return codaSalvataggio;
+    return root.Api.scrivi('POST', '/api/consumo-giorno', { articoloId: articoloId, repartoId: repartoId, data: data, quantita: quantita });
   };
 
   /* ---------- file ---------- */
@@ -252,7 +295,7 @@
       var inp = document.createElement('input');
       inp.type = 'file';
       inp.accept = accetta || '';
-      inp.onchange = function () { ok(inp.files && inp.files[0]); };
+      inp.addEventListener('change', function () { ok(inp.files && inp.files[0]); });
       inp.click();
     });
   };
@@ -280,8 +323,14 @@
     document.getElementById('velo').hidden = false;
     chiusuraModale = opz.allaChiusura || null;
     m.querySelectorAll('[data-chiudi]').forEach(function (b) { b.addEventListener('click', App.chiudiModale); });
-    var primo = m.querySelector('.modale-corpo input:not([type=checkbox]), .modale-corpo select, .modale-corpo textarea');
-    setTimeout(function () { (primo || m.querySelector('.modale-piede .btn.primario') || m.querySelector('[data-chiudi]')).focus(); }, 30);
+    var primo = m.querySelector('.modale-corpo input:not([type=checkbox]):not([readonly]), .modale-corpo select, .modale-corpo textarea');
+    setTimeout(function () {
+      // se l'utente sta già scrivendo nella finestra non gli sposto il cursore
+      if (m.contains(document.activeElement)) return;
+      // la finestra può essere già stata chiusa (Esc premuto subito)
+      var el = primo && primo.isConnected ? primo : (m.querySelector('.modale-piede .btn.primario') || m.querySelector('[data-chiudi]'));
+      if (el) el.focus();
+    }, 30);
     if (opz.dopo) opz.dopo(m);
     return m;
   };
@@ -308,7 +357,30 @@
         allaChiusura: function () { ok(risposta); },
         dopo: function (m) {
           m.querySelector('#conferma-si').addEventListener('click', function () { risposta = true; App.chiudiModale(); });
-          setTimeout(function () { m.querySelector('#conferma-si').focus(); }, 40);
+          setTimeout(function () { var b = m.querySelector('#conferma-si'); if (b) b.focus(); }, 40);
+        }
+      });
+    });
+  };
+
+  /* Conferma forte: bisogna scrivere una parola (per esempio RIPRISTINA) per abilitare il pulsante. */
+  App.confermaForte = function (titolo, testoHtml, parola, etichetta) {
+    return new Promise(function (ok) {
+      var risposta = false;
+      App.apriModale({
+        titolo: titolo,
+        corpo: '<div class="banda pericolo"><p>' + testoHtml + '</p></div>' +
+          '<label class="campo"><span>Per confermare scrivi ' + h(parola) + '</span><input id="forte-parola" autocomplete="off" spellcheck="false"></label>',
+        piede: '<button class="btn" type="button" data-chiudi>Annulla</button>' +
+          '<button class="btn pericolo pieno" type="button" id="forte-si" disabled>' + h(etichetta || 'Conferma') + '</button>',
+        allaChiusura: function () { ok(risposta); },
+        dopo: function (m) {
+          var inp = m.querySelector('#forte-parola');
+          var si = m.querySelector('#forte-si');
+          function giusta() { return inp.value.trim().toUpperCase() === parola.toUpperCase(); }
+          inp.addEventListener('input', function () { si.disabled = !giusta(); });
+          inp.addEventListener('keydown', function (e) { if (e.key === 'Enter' && giusta()) { risposta = true; App.chiudiModale(); } });
+          si.addEventListener('click', function () { if (giusta()) { risposta = true; App.chiudiModale(); } });
         }
       });
     });
@@ -332,6 +404,18 @@
     });
   };
 
+  /* ---------- banda "altri utenti hanno cambiato i dati" ---------- */
+  App.mostraBanda = function (testo) {
+    var b = document.getElementById('aggiornamenti');
+    document.getElementById('aggiornamenti-testo').textContent = testo;
+    b.hidden = false;
+  };
+
+  App.nascondiBanda = function () {
+    var b = document.getElementById('aggiornamenti');
+    if (b) b.hidden = true;
+  };
+
   /* ---------- navigazione ---------- */
   App.vai = function (pagina, parametri) {
     App.parametri = parametri || {};
@@ -344,18 +428,28 @@
   };
 
   App.mostra = function (pagina) {
-    if (!App.pagine[pagina]) pagina = 'oggi';
+    if (!App.S) return;
+    if (!App.pagine[pagina] || !App.paginaPermessa(pagina)) {
+      // pagina inesistente o non permessa (per esempio aperta dall'indirizzo): vado su Oggi
+      pagina = 'oggi';
+      if (location.hash && location.hash !== '#oggi' && history.replaceState) history.replaceState(null, '', '#oggi');
+    }
     App.paginaCorrente = pagina;
+    App.rinfresca = null;
+    App.nascondiBanda();
     var voce = App.MENU.filter(function (v) { return v.id === pagina; })[0];
     document.getElementById('titolo-pagina').textContent = voce ? voce.voce : '';
-    document.title = (voce ? voce.voce + ' · ' : '') + 'Gestionale Farmacia · ' + App.S.impostazioni.struttura;
+    document.getElementById('data-oggi').textContent = App.dataLunga(App.oggi());
+    document.title = (voce ? voce.voce + ' · ' : '') + 'Gestionale Farmacia · ' + (App.S.impostazioni.struttura || '');
     document.querySelectorAll('#menu a').forEach(function (a) {
       a.classList.toggle('attivo', a.getAttribute('data-pagina') === pagina);
     });
     document.getElementById('app').classList.remove('menu-aperto');
     var cont = document.getElementById('contenuto');
-    cont.innerHTML = '';
-    App.pagine[pagina](cont, App.parametri || {});
+    // contenitore nuovo: gli ascoltatori della pagina precedente se ne vanno con il vecchio
+    var nuovo = cont.cloneNode(false);
+    cont.parentNode.replaceChild(nuovo, cont);
+    App.pagine[pagina](nuovo, App.parametri || {});
     App.parametri = {};
     window.scrollTo(0, 0);
   };
@@ -364,7 +458,14 @@
 
   App.disegnaMenu = function () {
     var conte = { scadenze: App.contaScadenze() };
-    document.getElementById('menu').innerHTML = App.MENU.map(function (v) {
+    var voci = [];
+    App.MENU.forEach(function (v) {
+      if (v.gruppo) { voci.push(v); return; }
+      if (App.paginaPermessa(v.id)) voci.push(v);
+    });
+    // tolgo i gruppi rimasti senza voci
+    voci = voci.filter(function (v, i) { return !v.gruppo || (voci[i + 1] && !voci[i + 1].gruppo); });
+    document.getElementById('menu').innerHTML = voci.map(function (v) {
       if (v.gruppo) return '<div class="menu-gruppo">' + h(v.gruppo) + '</div>';
       var c = v.conta && conte[v.conta] ? '<span class="conta" title="Lotti in scadenza o scaduti">' + conte[v.conta] + '</span>' : '';
       return '<a href="#' + v.id + '" data-pagina="' + v.id + '"' + (v.id === App.paginaCorrente ? ' class="attivo"' : '') + '>' +
@@ -382,21 +483,91 @@
       '<div class="logo">' + logo + '</div>' +
       '<div><div class="nome">' + h(imp.struttura) + '</div><div class="sotto">' + h(imp.sottotitolo) + '</div></div>' +
       '<div class="prodotto">Gestionale Farmacia · carico e scarico</div>';
-    document.getElementById('operatore').innerHTML = imp.operatore ? 'Operatore: <b>' + h(imp.operatore) + '</b>' : '<a href="#configura">Imposta operatore</a>';
+  };
+
+  App.nomeRuolo = function (ruolo) { return App.RUOLI[ruolo] || ruolo || ''; };
+
+  /* Pulsante utente nella barra in alto: "Nome · Ruolo" con il menu Cambia password / Esci. */
+  App.disegnaUtente = function () {
+    var u = App.utente;
+    var b = document.getElementById('utente-btn');
+    if (!u) { b.innerHTML = ''; return; }
+    b.innerHTML = '<span class="utente-ico" aria-hidden="true">👤</span><span class="utente-nome">' + h(u.nome || u.username) + '</span>' +
+      '<span class="utente-ruolo"> · ' + h(App.nomeRuolo(u.ruolo)) + '</span><span aria-hidden="true" class="utente-freccia">▾</span>';
+    b.title = 'Collegato come ' + u.username;
   };
 
   App.aggiornaLaterale = function () {
+    if (!App.S) return;
     App.disegnaMenu();
     var S = App.S;
+    var u = App.utente || {};
     var attivi = S.movimenti.filter(function (m) { return !m.annullato; }).length;
-    Archivio.statoFile().then(function (f) {
-      var file = f.attivo
-        ? (f.permesso ? 'Copia su file: <b>' + h(f.nome) + '</b>' : 'Copia su file in pausa: <a href="#configura">riattiva</a>')
-        : 'Copia su file: non attiva';
-      document.getElementById('stato-archivio').innerHTML =
-        '<div><b>' + S.articoli.length + '</b> articoli · <b>' + attivi + '</b> movimenti</div>' +
-        '<div>' + file + '</div>';
-    });
+    var reparti = u.ruolo === 'reparto' && App.permessi && App.permessi.reparti
+      ? '<div>Reparti: ' + h(App.permessi.reparti.map(App.nomeReparto).join(', ') || 'nessuno') + '</div>' : '';
+    document.getElementById('stato-archivio').innerHTML =
+      '<div>👤 <b>' + h(u.nome || u.username || '') + '</b> · ' + h(App.nomeRuolo(u.ruolo)) + '</div>' + reparti +
+      '<div><b>' + S.articoli.length + '</b> articoli · <b>' + attivi + '</b> movimenti</div>';
+  };
+
+  /* Dopo un cambio dei propri permessi (per esempio l'amministratore ha cambiato il suo ruolo). */
+  App.aggiornaUtente = function () {
+    App.disegnaUtente();
+    App.aggiornaLaterale();
+    if (!App.paginaPermessa(App.paginaCorrente)) App.vai('oggi');
+  };
+
+  /* ---------- aggiornamenti arrivati dal server ---------- */
+
+  // Chiamata da Api.sincronizza dopo aver unito i dati nuovi.
+  App.dopoSincronizzazione = function (cambi, opz) {
+    if (!App.pronta || !App.S || !cambi.qualcosa) return;
+    if (cambi.impostazioni) App.disegnaMarchio();
+    App.aggiornaLaterale();
+    if ((cambi.articoli || cambi.cancellati) && App.datalistArticoli) App.datalistArticoli();
+    if (opz && opz.remota) App.aggiornamentoRemoto(cambi);
+  };
+
+  function rinfrescaPagina() {
+    if (App.rinfresca) { App.rinfresca(); return; }
+    // ridisegno completo: la pagina resta dove l'utente l'aveva fatta scorrere
+    var x = window.scrollX, y = window.scrollY;
+    App.ridisegna();
+    window.scrollTo(x, y);
+  }
+
+  /*
+   * Dopo una propria modifica fatta da una finestra (per esempio un articolo aperto dalla scheda):
+   * ridisegna la pagina solo se non si perde niente (pagine di consultazione, ridisegni leggeri);
+   * nelle pagine dove si scrive aggiorna solo menu e contatori, così il modulo compilato resta.
+   */
+  App.aggiornaVista = function () {
+    if (App.rinfresca || App.PAGINE_CONSULTAZIONE.indexOf(App.paginaCorrente) >= 0) rinfrescaPagina();
+    else App.aggiornaLaterale();
+  };
+
+  /*
+   * Altri utenti hanno cambiato i dati. Le pagine di consultazione si ridisegnano da sole;
+   * nelle pagine dove si scrive non ridisegno (si perderebbe quello che l'utente sta scrivendo):
+   * aggiorno menu e contatori e mostro una banda con il pulsante "Aggiorna".
+   */
+  App.aggiornamentoRemoto = function (cambi) {
+    var pag = App.paginaCorrente;
+    if (pag === 'guida') return;
+    if ((pag === 'configura' || pag === 'utenti') && !cambi.reparti && !cambi.impostazioni && !cambi.cancellati) return;
+    // Utenti: ridisegno solo l'elenco (i nomi dei reparti possono essere cambiati)
+    if (pag === 'utenti' && App.rinfresca) { App.rinfresca(); return; }
+    var cont = document.getElementById('contenuto');
+    var attivo = document.activeElement;
+    var campoAttivo = !!(attivo && cont.contains(attivo) && inCampo(attivo));
+    if (pag === 'registro') {
+      // il registro si ridisegna se nessuna cella è in modifica
+      if (!(campoAttivo && attivo.matches('td.g input'))) { rinfrescaPagina(); return; }
+    } else if (App.PAGINE_CONSULTAZIONE.indexOf(pag) >= 0) {
+      // con App.rinfresca si ridisegnano solo i risultati: i filtri (anche quello col cursore) restano
+      if (App.rinfresca || !campoAttivo) { rinfrescaPagina(); return; }
+    }
+    App.mostraBanda(cambi.movimenti ? 'Altri utenti hanno registrato dei movimenti.' : 'Altri utenti hanno modificato i dati.');
   };
 
   /* ---------- ricerca rapida (Ctrl+K o /) ---------- */
@@ -404,6 +575,7 @@
   var risultatiRicerca = [];
 
   App.apriRicerca = function () {
+    if (!App.S) return;
     var r = document.getElementById('ricerca');
     r.hidden = false;
     document.getElementById('velo').hidden = false;
@@ -429,7 +601,7 @@
     }).slice(0, 12).map(function (a) {
       return { tipo: 'articolo', id: a.id, testo: a.nome, nota: a.categoria + ' · giacenza ' + App.fmtNum(App.giacenzaTotale(a.id)) + (a.unita ? ' ' + a.unita : '') };
     });
-    var pagine = App.MENU.filter(function (v) { return v.id && t && v.voce.toLowerCase().indexOf(t) >= 0; }).map(function (v) {
+    var pagine = App.vociPermesse().filter(function (v) { return t && v.voce.toLowerCase().indexOf(t) >= 0; }).map(function (v) {
       return { tipo: 'pagina', id: v.id, testo: 'Vai a: ' + v.voce, nota: 'tasto ' + v.tasto };
     });
     risultatiRicerca = pagine.concat(art);
@@ -460,21 +632,99 @@
     });
   }
 
+  /* ---------- menu dell'utente (barra in alto) ---------- */
+  function tendinaAperta() { return !document.getElementById('utente-tendina').hidden; }
+
+  function apriTendina(apri) {
+    var t = document.getElementById('utente-tendina');
+    t.hidden = !apri;
+    document.getElementById('utente-btn').setAttribute('aria-expanded', apri ? 'true' : 'false');
+    if (apri) t.querySelector('button').focus();
+  }
+
+  App.cambiaPassword = function () {
+    App.apriModale({
+      titolo: 'Cambia la tua password',
+      corpo: '<form class="modulo" id="cp-form" autocomplete="on">' +
+        '<input type="text" name="username" autocomplete="username" value="' + h(App.utente ? App.utente.username : '') + '" hidden>' +
+        '<label class="campo largo"><span>Password attuale</span><input type="password" id="cp-attuale" autocomplete="current-password"></label>' +
+        '<label class="campo"><span>Nuova password (almeno 8 caratteri)</span><input type="password" id="cp-nuova" autocomplete="new-password"></label>' +
+        '<label class="campo"><span>Ripeti la nuova password</span><input type="password" id="cp-ripeti" autocomplete="new-password"></label>' +
+        '</form><p class="piccolo tenue">Le altre sessioni aperte con il tuo utente (su altri PC) verranno chiuse.</p>',
+      piede: '<button class="btn" type="button" data-chiudi>Annulla</button><button class="btn primario" type="button" id="cp-salva">Cambia password</button>',
+      dopo: function (m) {
+        var b = m.querySelector('#cp-salva');
+        function salva() {
+          var attuale = m.querySelector('#cp-attuale').value;
+          var nuova = m.querySelector('#cp-nuova').value;
+          var ripeti = m.querySelector('#cp-ripeti').value;
+          if (!attuale) { App.avviso('Scrivi la password attuale.', 'errore'); return; }
+          if (nuova.length < 8) { App.avviso('La nuova password deve avere almeno 8 caratteri.', 'errore'); return; }
+          if (nuova !== ripeti) { App.avviso('Le due password nuove non sono uguali.', 'errore'); return; }
+          if (nuova === attuale) { App.avviso('La nuova password deve essere diversa da quella attuale.', 'errore'); return; }
+          b.disabled = true;
+          // password attuale sbagliata = 400; un 401 qui vuol dire sessione scaduta: torna la schermata di accesso
+          root.Api.richiesta('POST', '/api/password', { attuale: attuale, nuova: nuova }).then(function () {
+            App.chiudiModale();
+            App.avviso('Password cambiata', 'ok');
+          }, function (e) {
+            b.disabled = false;
+            App.avviso(e.message, 'errore');
+          });
+        }
+        b.addEventListener('click', salva);
+        m.querySelector('#cp-form').addEventListener('submit', function (e) { e.preventDefault(); salva(); });
+        m.querySelector('#cp-ripeti').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); salva(); } });
+      }
+    });
+  };
+
+  /* Esce: chiude la sessione sul server, toglie i dati dalla pagina e torna all'accesso. */
+  App.esci = function () {
+    var fine = function () {
+      root.Api.fermaAggiornamenti();
+      // nome e logo della struttura per la schermata di accesso: quelli attuali, anche se cambiati dopo l'avvio
+      var imp = App.S && App.S.impostazioni;
+      if (imp && root.Accesso.stato) {
+        root.Accesso.stato.struttura = imp.struttura;
+        root.Accesso.stato.sottotitolo = imp.sottotitolo;
+        root.Accesso.stato.logo = imp.logo;
+      }
+      App.chiudiModale();
+      chiudiRicerca();
+      App.utente = null;
+      App.permessi = null;
+      App.S = null;
+      App._giacenze = null;
+      root.Api.rev = 0;
+      document.getElementById('contenuto').innerHTML = '';
+      document.getElementById('menu').innerHTML = '';
+      document.getElementById('stato-archivio').innerHTML = '';
+      document.getElementById('app').hidden = true;
+      root.Accesso.mostraAccesso();
+    };
+    root.Api.richiesta('POST', '/api/logout', {}, { senza401: true }).then(fine, fine);
+  };
+
   /* ---------- tasti rapidi ---------- */
   function inCampo(el) {
     return el && (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
   }
+  App.inCampo = inCampo;
 
   function tasti(e) {
+    if (!App.S || !App.utente || (root.Accesso && root.Accesso.visibile())) return;
     var ricercaAperta = !document.getElementById('ricerca').hidden;
     var modaleAperto = !document.getElementById('modale').hidden;
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    if ((e.ctrlKey || e.metaKey) && e.key && e.key.toLowerCase() === 'k') {
       e.preventDefault();
+      apriTendina(false);
       App.apriRicerca();
       return;
     }
     if (e.key === 'Escape') {
-      if (ricercaAperta) chiudiRicerca();
+      if (tendinaAperta()) { apriTendina(false); document.getElementById('utente-btn').focus(); }
+      else if (ricercaAperta) chiudiRicerca();
       else if (modaleAperto) App.chiudiModale();
       return;
     }
@@ -484,49 +734,101 @@
       else if (e.key === 'Enter') { e.preventDefault(); apriRisultato(sceltaRicerca); }
       return;
     }
-    if (modaleAperto || inCampo(document.activeElement) || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (modaleAperto || tendinaAperta() || inCampo(document.activeElement) || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === '/') { e.preventDefault(); App.apriRicerca(); return; }
-    var voce = App.MENU.filter(function (v) { return v.tasto && v.tasto.toLowerCase() === e.key.toLowerCase(); })[0];
+    // solo le pagine permesse hanno il tasto rapido
+    var voce = App.vociPermesse().filter(function (v) { return v.tasto && e.key && v.tasto.toLowerCase() === e.key.toLowerCase(); })[0];
     if (voce) { e.preventDefault(); App.vai(voce.id); }
   }
 
   /* ---------- avvio ---------- */
+
+  // Ascoltatori dell'interfaccia: si collegano una volta sola.
+  function collegaInterfaccia() {
+    window.addEventListener('hashchange', function () {
+      if (!App.S || !App.utente) return;
+      App.parametri = App._parametriInAttesa || {};
+      App._parametriInAttesa = null;
+      App.mostra(location.hash.slice(1));
+    });
+    document.addEventListener('keydown', tasti);
+    document.getElementById('apri-ricerca').addEventListener('click', App.apriRicerca);
+    document.getElementById('apri-menu').addEventListener('click', function () {
+      document.getElementById('app').classList.toggle('menu-aperto');
+    });
+    document.getElementById('velo').addEventListener('click', function () {
+      if (!document.getElementById('ricerca').hidden) chiudiRicerca();
+      else App.chiudiModale();
+    });
+    var inp = document.getElementById('ricerca-testo');
+    inp.addEventListener('input', function () { cercaRapida(inp.value); });
+    document.getElementById('ricerca-risultati').addEventListener('click', function (e) {
+      var li = e.target.closest('li[data-i]');
+      if (li) apriRisultato(Number(li.getAttribute('data-i')));
+    });
+    // menu dell'utente
+    document.getElementById('utente-btn').addEventListener('click', function (e) {
+      e.stopPropagation();
+      apriTendina(!tendinaAperta());
+    });
+    document.getElementById('utente-password').addEventListener('click', function () { apriTendina(false); App.cambiaPassword(); });
+    document.getElementById('utente-esci').addEventListener('click', function () { apriTendina(false); App.esci(); });
+    document.addEventListener('click', function (e) {
+      if (tendinaAperta() && !e.target.closest('#utente-menu')) apriTendina(false);
+    });
+    // banda degli aggiornamenti
+    document.getElementById('aggiornamenti-btn').addEventListener('click', function () { App.nascondiBanda(); App.ridisegna(); });
+    document.getElementById('aggiornamenti-chiudi').addEventListener('click', App.nascondiBanda);
+  }
+
+  /*
+   * Entra nel programma con l'utente collegato: carica i dati dal server e mostra l'app.
+   * Se è lo stesso utente di prima (sessione scaduta e nuovo accesso) risincronizza e resta sulla pagina.
+   */
+  App.entra = function (utente, permessi) {
+    var prima = App.utente;
+    var stessoUtente = !!(prima && utente && prima.id === utente.id && App.S && App.pronta);
+    App.utente = utente;
+    App.permessi = permessi || {};
+    var Api = root.Api;
+    var sinc;
+    if (stessoUtente) {
+      sinc = Api.sincronizza({ remota: true });
+    } else {
+      // utente diverso (o primo ingresso): niente di quello che era aperto deve restare
+      App.chiudiModale();
+      chiudiRicerca();
+      apriTendina(false);
+      App.nascondiBanda();
+      App.S = null;
+      Api.rev = 0;
+      sinc = Api.sincronizza({ completa: true });
+    }
+    return sinc.then(function () {
+      root.Accesso.nascondi();
+      document.getElementById('app').hidden = false;
+      App.disegnaMarchio();
+      App.disegnaUtente();
+      App.aggiornaLaterale();
+      if (!App.pronta) {
+        App.pronta = true;
+        App.mostra((location.hash || '#oggi').slice(1));
+      } else if (!stessoUtente) {
+        App.mostra((location.hash || '#oggi').slice(1));
+      } else if (!App.paginaPermessa(App.paginaCorrente)) {
+        App.vai('oggi');
+      } else if ((App.paginaCorrente === 'utenti' || App.paginaCorrente === 'attivita') && App.rinfresca) {
+        // pagine che leggono direttamente dal server: la lettura fallita per la sessione scaduta si ripete
+        App.rinfresca();
+      }
+      Api.avviaAggiornamenti();
+    });
+  };
+
   App.avvia = function () {
     document.getElementById('data-oggi').textContent = App.dataLunga(App.oggi());
-    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
-    Promise.all([Archivio.carica(), Archivio.leggiManiglia()]).then(function (r) {
-      App.S = r[0];
-      App.disegnaMarchio();
-      App.aggiornaLaterale();
-      var pagina = (location.hash || '#oggi').slice(1);
-      App.mostra(pagina);
-      window.addEventListener('hashchange', function () {
-        App.parametri = App._parametriInAttesa || {};
-        App._parametriInAttesa = null;
-        App.mostra(location.hash.slice(1));
-      });
-      document.addEventListener('keydown', tasti);
-      document.getElementById('apri-ricerca').addEventListener('click', App.apriRicerca);
-      document.getElementById('apri-menu').addEventListener('click', function () {
-        document.getElementById('app').classList.toggle('menu-aperto');
-      });
-      document.getElementById('velo').addEventListener('click', function () {
-        if (!document.getElementById('ricerca').hidden) chiudiRicerca();
-        else App.chiudiModale();
-      });
-      var inp = document.getElementById('ricerca-testo');
-      inp.addEventListener('input', function () { cercaRapida(inp.value); });
-      document.getElementById('ricerca-risultati').addEventListener('click', function (e) {
-        var li = e.target.closest('li[data-i]');
-        if (li) apriRisultato(Number(li.getAttribute('data-i')));
-      });
-      document.getElementById('salvataggio').textContent = '✓ Salvato';
-    }).catch(function (e) {
-      console.error(e);
-      document.getElementById('contenuto').innerHTML =
-        '<div class="banda pericolo"><p><b>Non riesco ad aprire l’archivio.</b> ' + h(e && e.message ? e.message : e) +
-        '. Apri il programma con Microsoft Edge o Google Chrome, non in una finestra anonima.</p></div>';
-    });
+    collegaInterfaccia();
+    root.Accesso.avvia();
   };
 
   root.App = App;

@@ -1,6 +1,6 @@
 /* Gestionale Farmacia · Clinica Posillipo
    Stessa impostazione del Gestionale Agende: menu a sinistra con i tasti rapidi,
-   barra in alto con data, ricerca rapida e stato del salvataggio, pagine a schede. */
+   barra in alto con data, ricerca rapida, utente collegato e stato del collegamento, pagine a schede. */
 
 :root {
   --sfondo: #f2f5f7;
@@ -65,7 +65,8 @@ a { color: var(--primario); }
 .laterale-piede { margin-top: auto; padding: 12px 18px 16px; font-size: 12px; color: var(--laterale-tenue); border-top: 1px solid rgba(255,255,255,.08); display: grid; gap: 4px; }
 .laterale-piede b { color: var(--laterale-testo); font-weight: 600; }
 
-.barra { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 16px; padding: 12px 24px; background: var(--superficie); border-bottom: 1px solid var(--linea); }
+.testa-fissa { position: sticky; top: 0; z-index: 30; }
+.barra { display: flex; align-items: center; gap: 16px; padding: 12px 24px; background: var(--superficie); border-bottom: 1px solid var(--linea); }
 .barra-titolo { flex: 1; min-width: 0; }
 .barra-titolo h1 { font-size: 20px; }
 .barra-titolo p { color: var(--tenue); font-size: 12.5px; text-transform: capitalize; }
@@ -73,10 +74,21 @@ a { color: var(--primario); }
 .ricerca-rapida { display: flex; align-items: center; gap: 24px; border: 1px solid var(--linea); background: var(--superficie-2); color: var(--tenue); border-radius: 8px; padding: 7px 10px 7px 12px; cursor: pointer; min-width: 260px; justify-content: space-between; }
 .ricerca-rapida:hover { border-color: var(--primario); }
 kbd { font: 600 11px var(--mono); border: 1px solid var(--linea-forte); border-radius: 4px; padding: 1px 5px; background: var(--superficie); color: var(--tenue); }
-.operatore { font-size: 12.5px; color: var(--tenue); white-space: nowrap; }
-.operatore b { color: var(--testo); }
-.salvataggio { font-size: 12px; color: var(--ok); white-space: nowrap; min-width: 84px; text-align: right; }
-.salvataggio.errore { color: var(--pericolo); font-weight: 600; }
+.utente-menu { position: relative; }
+.utente-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--linea); background: var(--superficie); border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 13px; white-space: nowrap; max-width: 320px; }
+.utente-btn:hover, .utente-btn[aria-expanded="true"] { border-color: var(--primario); }
+.utente-btn .utente-nome { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.utente-btn .utente-ruolo { color: var(--tenue); }
+.utente-btn .utente-freccia { color: var(--tenue); font-size: 11px; }
+.utente-tendina { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; min-width: 200px; background: var(--superficie); border: 1px solid var(--linea); border-radius: 10px; box-shadow: 0 12px 32px rgba(16, 40, 52, .18); padding: 6px; display: grid; gap: 2px; }
+.utente-tendina button { border: 0; background: transparent; text-align: left; padding: 8px 10px; border-radius: 7px; cursor: pointer; font-weight: 600; }
+.utente-tendina button:hover, .utente-tendina button:focus-visible { background: var(--primario-chiaro); }
+.collegamento { font-size: 12px; color: var(--tenue); white-space: nowrap; min-width: 84px; text-align: right; }
+.collegamento.ok { color: var(--ok); }
+.collegamento.errore { color: var(--pericolo); font-weight: 700; }
+/* banda discreta sotto la barra: altri utenti hanno cambiato i dati (resta visibile scorrendo) */
+.aggiornamenti { display: flex; align-items: center; gap: 10px; padding: 6px 18px 6px 24px; background: var(--info-chiaro); border-bottom: 1px solid #c9d7f5; font-size: 13px; }
+.aggiornamenti span { flex: 1; min-width: 0; }
 
 .contenuto { padding: 22px 24px 48px; display: grid; gap: 18px; align-content: start; outline: none; }
 
@@ -187,6 +199,7 @@ table.registro { border-collapse: separate; border-spacing: 0; font-size: 12.5px
 .registro td.g { min-width: 30px; padding: 0; text-align: center; }
 .registro td.g input { width: 34px; border: 0; background: transparent; text-align: center; padding: 5px 2px; font: inherit; }
 .registro td.g input:focus { background: var(--primario-chiaro); outline: 2px solid var(--primario); }
+.registro td.g .sola { display: block; min-width: 34px; padding: 5px 2px; }
 .registro td.g.festivo, .registro th.festivo { background: #f6f3ee; }
 .registro td.tot { font-weight: 700; background: var(--superficie-2); }
 .registro td.neg { color: var(--pericolo); }
@@ -221,6 +234,36 @@ table.registro { border-collapse: separate; border-spacing: 0; font-size: 12.5px
 @keyframes entra { from { transform: translateY(8px); opacity: 0; } }
 
 .guida { display: grid; gap: 14px; max-width: 860px; }
+
+/* ---------- utenti e attività ---------- */
+.spunte-reparti { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 6px 0; }
+.campo-riga { display: flex; gap: 8px; align-items: center; }
+.campo-riga input { flex: 1; min-width: 0; border: 1px solid var(--linea-forte); border-radius: 7px; padding: 7px 9px; background: var(--superficie); }
+.campo small { font-size: 11.5px; }
+.spunta.largo { grid-column: 1 / -1; }
+.tabella td.dettagli { max-width: 640px; white-space: normal; word-break: break-word; }
+.elenco-ruoli { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 2px; }
+
+/* ---------- schermate di accesso ---------- */
+.accesso { position: fixed; inset: 0; z-index: 75; overflow-y: auto; display: grid; place-items: center; padding: 24px 16px;
+  background: radial-gradient(1200px 600px at 20% 0%, #17495a 0%, transparent 60%), var(--laterale); }
+.accesso-scheda { width: min(440px, 100%); background: var(--superficie); border-radius: 14px; box-shadow: 0 24px 70px rgba(0, 0, 0, .35); padding: 26px 28px 22px; display: grid; gap: 14px; }
+.accesso-marchio { display: grid; grid-template-columns: 50px 1fr; gap: 12px; align-items: center; }
+.accesso-marchio .logo { width: 50px; height: 50px; border-radius: 11px; background: var(--primario); display: grid; place-items: center; overflow: hidden; }
+.accesso-marchio .logo img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
+.accesso-marchio .nome { font-weight: 700; font-size: 18px; line-height: 1.15; }
+.accesso-marchio .sotto { color: var(--oro); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+.accesso-prodotto { font-size: 12.5px; color: var(--tenue); border-bottom: 1px solid var(--linea); padding-bottom: 12px; }
+.accesso-scheda h2 { font-size: 18px; }
+.accesso-corpo { display: grid; gap: 12px; }
+.accesso-modulo { display: grid; gap: 12px; }
+.accesso-modulo .btn.primario { padding: 10px 14px; font-size: 15px; }
+.accesso-errore { background: var(--pericolo-chiaro); color: var(--pericolo); border-radius: 8px; padding: 8px 12px; font-weight: 600; font-size: 13px; }
+.accesso-azioni { display: flex; gap: 10px; justify-content: flex-end; }
+.accesso-attesa { color: var(--tenue); text-align: center; padding: 10px 0; }
+.accesso-indirizzo { font: 600 16px var(--mono); background: var(--superficie-2); border: 1px solid var(--linea); border-radius: 8px; padding: 10px 12px; text-align: center; user-select: all; }
+.accesso-nota { margin-top: 2px; }
+.accesso-versione { font-size: 11.5px; color: var(--tenue); text-align: right; }
 .guida h3 { font-size: 15px; margin-top: 6px; }
 .guida p, .guida li { max-width: 75ch; }
 .guida ul, .guida ol { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
@@ -236,7 +279,9 @@ table.registro { border-collapse: separate; border-spacing: 0; font-size: 12.5px
   .app.menu-aperto .laterale { transform: none; box-shadow: 0 0 40px rgba(0,0,0,.3); }
   .btn-menu { display: inline-block; }
   .ricerca-rapida { min-width: 0; }
-  .ricerca-rapida kbd, .operatore, .barra-titolo p { display: none; }
+  .ricerca-rapida kbd, .utente-ruolo, .utente-ico, .barra-titolo p { display: none; }
+  .collegamento { min-width: 0; }
+  .aggiornamenti { padding: 6px 10px 6px 16px; }
   .barra { padding: 10px 16px; gap: 10px; }
   .contenuto { padding: 16px 16px 40px; }
   .griglia-2 { grid-template-columns: 1fr; }
@@ -246,7 +291,7 @@ table.registro { border-collapse: separate; border-spacing: 0; font-size: 12.5px
 @media print {
   @page { size: A4 landscape; margin: 8mm; }
   body { background: #fff; font-size: 11px; }
-  .laterale, .barra, .strumenti, .no-stampa, .avvisi, .btn { display: none !important; }
+  .laterale, .testa-fissa, .strumenti, .no-stampa, .avvisi, .btn, .accesso { display: none !important; }
   .app { display: block; }
   .contenuto { padding: 0; }
   .scheda { border: 0; box-shadow: none; }
