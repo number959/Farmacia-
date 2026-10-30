@@ -51,10 +51,26 @@ jobs:
         run: |
           Copy-Item -Recurse dist\GestionaleFarmacia C:\GestionaleFarmacia
           & C:\GestionaleFarmacia\installa-servizio.ps1 -Porta 8080
+          if ($LASTEXITCODE -ne 0) { throw "Installazione non riuscita ($LASTEXITCODE)" }
+          $t0 = Get-Date
           $stato = Invoke-RestMethod http://localhost:8080/api/stato
+          "Risposta da localhost in $([int]((Get-Date) - $t0).TotalMilliseconds) ms"
           if ($stato.versione -ne '2.0.0') { throw "Il servizio non risponde come previsto" }
-          Get-ScheduledTask -TaskName 'Gestionale Farmacia' | Format-List TaskName, State
+          $att = Get-ScheduledTask -TaskName 'Gestionale Farmacia'
+          $att | Format-List TaskName, State
+          if ($att.Triggers.Count -ne 2) { throw "Servono due avvii: all'accensione e il controllo ogni 5 minuti" }
+          if ($att.Actions[0].Arguments -notmatch '--servizio') { throw "Manca --servizio" }
+          icacls C:\GestionaleFarmacia
           Get-ChildItem C:\GestionaleFarmacia\dati
+          # accesso d'emergenza con il servizio in funzione: crea prima l'amministratore dal server
+          Invoke-RestMethod -Method Post http://localhost:8080/api/setup -Headers @{ 'X-Richiesta' = '1' } -ContentType 'application/json' -Body '{"username":"admin","nome":"Amministratore","password":"Password-123"}' | Out-Null
+          $uscita = & C:\GestionaleFarmacia\GestionaleFarmacia.exe --reimposta-password admin --servizio | Out-String
+          $uscita
+          if ($uscita -notmatch 'provvisoria per "admin"') { throw "Accesso d'emergenza non riuscito" }
+          # una seconda copia sulla stessa porta deve uscire subito (niente "Premi Invio" sotto il servizio)
+          $p = Start-Process -FilePath C:\GestionaleFarmacia\GestionaleFarmacia.exe -ArgumentList '--porta 8080 --servizio --dati C:\gf-prova-porta' -PassThru -WindowStyle Hidden
+          if (-not $p.WaitForExit(30000)) { $p.Kill(); throw "Con la porta occupata il programma non è uscito" }
+          Get-Content C:\gf-prova-porta\log\errori-avvio.log
           & C:\GestionaleFarmacia\disinstalla-servizio.ps1
           if (Get-ScheduledTask -TaskName 'Gestionale Farmacia' -ErrorAction SilentlyContinue) { throw "Attività non rimossa" }
 

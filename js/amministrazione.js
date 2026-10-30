@@ -349,7 +349,15 @@
     }
     if (chiave === 'articoloId' && typeof v === 'string') return App.S ? App.nomeArticolo(v) : v;
     if (chiave === 'reparti' && Array.isArray(v)) {
-      return v.length ? v.map(function (id) { var r = App.S && App.reparto(id); return r ? r.nome : id; }).join(', ') : 'nessuno';
+      if (!v.length) return 'nessuno';
+      return v.map(function (x) {
+        // elenco di codici (utenti) oppure di reparti salvati da Configura ({ id, nome, centrale, attivo, nuovo })
+        if (x && typeof x === 'object') {
+          return (x.nome || x.id) + (x.nuovo ? ' (nuovo)' : '') + (x.centrale ? ' (centrale)' : '') + (x.attivo === false ? ' (non attivo)' : '');
+        }
+        var r = App.S && App.reparto(x);
+        return r ? r.nome : x;
+      }).join(', ');
     }
     if (chiave === 'tipo' && App.TIPI[v]) return App.TIPI[v];
     if (chiave === 'ruolo' && App.RUOLI[v]) return App.RUOLI[v];
@@ -397,6 +405,7 @@
   }
 
   var memoriaAttivita = {};
+  App.dimenticaAttivita = function () { memoriaAttivita = {}; };
 
   P.attivita = function (cont) {
     var oggi = App.oggi();
@@ -405,6 +414,8 @@
       d.setDate(d.getDate() - 7);
       return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     })();
+    // le date scelte valgono per la giornata: il giorno dopo si riparte dall'ultima settimana
+    if (memoriaAttivita.sceltaIl !== oggi) memoriaAttivita = {};
     var m0 = memoriaAttivita;
     cont.innerHTML =
       '<div class="strumenti">' +
@@ -424,7 +435,7 @@
     var richiestaN = 0;
 
     function filtri() {
-      memoriaAttivita = { dal: valore(cont, '#t-dal'), al: valore(cont, '#t-al'), utente: valore(cont, '#t-utente').trim(), azione: valore(cont, '#t-azione') };
+      memoriaAttivita = { dal: valore(cont, '#t-dal'), al: valore(cont, '#t-al'), utente: valore(cont, '#t-utente').trim(), azione: valore(cont, '#t-azione'), sceltaIl: App.oggi() };
       return memoriaAttivita;
     }
 

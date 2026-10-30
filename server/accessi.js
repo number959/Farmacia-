@@ -105,7 +105,10 @@ function utenteDaRiga(r) {
 function Accessi(database, log) {
   this.database = database;
   this.log = log || function () {};
-  this.fallitiPerIp = {};
+  this.fallitiPerIp = {};      // ip -> [istanti degli errori]
+  this.fallitiPerCoppia = {};  // 'utente|ip' -> [istanti degli errori]
+  this.ipSegnalati = {};       // ip -> istante dell'ultimo evento "bloccato-ip" registrato
+  this.erroriCambioPassword = {}; // hash della sessione -> numero di password attuali sbagliate
 }
 
 Accessi.prototype.db = function () { return this.database.accessi; };
@@ -124,12 +127,17 @@ Accessi.prototype.elencoUtenti = function () {
 
 /* ---------- registro attività ---------- */
 
+var MAX_DETTAGLI = 4000;
+
 Accessi.prototype.evento = function (ctx, azione, dettagli) {
   var u = ctx && ctx.utente;
   try {
+    var testoDettagli = JSON.stringify(dettagli || {});
+    // un evento non può far crescere il registro senza limiti
+    if (testoDettagli.length > MAX_DETTAGLI) testoDettagli = JSON.stringify({ troncato: true, testo: testoDettagli.slice(0, MAX_DETTAGLI) });
     this.db().prepare('INSERT INTO eventi (quando, utente_id, username, azione, dettagli, ip) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(new Date().toISOString(), u ? u.id : null, u ? u.username : (ctx && ctx.username) || '', azione,
-        JSON.stringify(dettagli || {}), (ctx && ctx.ip) || '');
+      .run(new Date().toISOString(), u ? u.id : null, u ? u.username : String((ctx && ctx.username) || '').slice(0, 40), azione,
+        testoDettagli, String((ctx && ctx.ip) || '').slice(0, 60));
   } catch (e) {
     this.log('Registro attività non scritto: ' + e.message);
   }
@@ -142,7 +150,7 @@ Accessi.prototype.eventi = function (filtro) {
   if (filtro.al) { where.push('quando < ?'); par.push(filtro.al); }
   if (filtro.utente) { where.push('username = ? COLLATE NOCASE'); par.push(filtro.utente); }
   if (filtro.azione) { where.push('azione LIKE ?'); par.push(filtro.azione + '%'); }
-  var limite = Math.min(Math.max(Number(filtro.limite) || 500, 1), 5000);
+  var limite = Math.min(Math.max(Math.floor(Number(filtro.limite)) || 500, 1), 5000);
   var sql = 'SELECT * FROM eventi' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY id DESC LIMIT ' + limite;
   var st = this.db().prepare(sql);
   return st.all.apply(st, par).map(function (r) {
@@ -220,12 +228,25 @@ Accessi.prototype.reimpostaPassword = function (ctx, id, nuova) {
     self.db().prepare('UPDATE utenti SET hash = ?, sale = ?, cambio_password = 1, tentativi = 0, bloccato_fino = 0 WHERE id = ?').run(pw.hash, pw.sale, id);
     self.db().prepare('DELETE FROM sessioni WHERE utente_id = ?').run(id);
   });
+  this.sblocca(u.username);
   this.evento(ctx, 'utenti.nuova-password', { utente: u.username });
 };
 
 Accessi.prototype.cambiaPassword = function (ctx, attuale, nuova) {
   var riga = this.db().prepare('SELECT * FROM utenti WHERE id = ?').get(ctx.utente.id);
-  if (!riga || !passwordGiusta(String(attuale || ''), riga)) throw errore(400, 'La password attuale non è giusta.');
+  if (!riga || !passwordGiusta(String(attuale || '').slice(0, 200), riga)) {
+    // con una sessione rubata non si deve poter indovinare la password all'infinito
+    var n = (this.erroriCambioPassword[ctx.tokenHash] || 0) + 1;
+    this.erroriCambioPassword[ctx.tokenHash] = n;
+    this.evento(ctx, 'accesso.cambio-password-fallito', { tentativo: n });
+    if (n >= TENTATIVI_MAX) {
+      delete this.erroriCambioPassword[ctx.tokenHash];
+      this.db().prepare('DELETE FROM sessioni WHERE token_hash = ?').run(ctx.tokenHash || '');
+      throw errore(401, 'Troppe password attuali sbagliate: per sicurezza la sessione è stata chiusa. Accedi di nuovo.');
+    }
+    throw errore(400, 'La password attuale non è giusta.');
+  }
+  delete this.erroriCambioPassword[ctx.tokenHash];
   if (String(nuova) === String(attuale)) throw errore(400, 'La nuova password deve essere diversa da quella attuale.');
   var pw = nuovaPassword(nuova);
   var self = this;
@@ -239,54 +260,88 @@ Accessi.prototype.cambiaPassword = function (ctx, attuale, nuova) {
 
 /* ---------- accesso ---------- */
 
-Accessi.prototype.troppiTentativiIp = function (ip) {
-  var adesso = Date.now();
+/*
+ * Protezione dai tentativi:
+ * - 5 errori per la stessa coppia (utente, computer) in 15 minuti bloccano quella coppia, non l'utente:
+ *   da un altro computer (e sempre dal server stesso) l'utente vero può ancora entrare;
+ * - 100 errori dallo stesso computer in 15 minuti bloccano quel computer (tentativi a tappeto).
+ * La risposta è la stessa per utenti esistenti e inesistenti, così non si scopre quali nomi esistono.
+ */
+var ERRORI_IP_MAX = 100;
+
+function recenti(lista, adesso) {
+  return (lista || []).filter(function (t) { return adesso - t < BLOCCO_MS; });
+}
+
+Accessi.prototype.pulisciContatori = function (adesso) {
   var self = this;
-  Object.keys(this.fallitiPerIp).forEach(function (k) {
-    if (!self.fallitiPerIp[k].some(function (t) { return adesso - t < BLOCCO_MS; })) delete self.fallitiPerIp[k];
+  [this.fallitiPerIp, this.fallitiPerCoppia].forEach(function (mappa) {
+    Object.keys(mappa).forEach(function (k) {
+      mappa[k] = recenti(mappa[k], adesso);
+      if (!mappa[k].length) delete mappa[k];
+    });
   });
-  var lista = (this.fallitiPerIp[ip] || []).filter(function (t) { return adesso - t < BLOCCO_MS; });
-  this.fallitiPerIp[ip] = lista;
-  return lista.length >= 20;
+  Object.keys(this.ipSegnalati).forEach(function (k) {
+    if (adesso - self.ipSegnalati[k] > BLOCCO_MS) delete self.ipSegnalati[k];
+  });
+};
+
+Accessi.prototype.sblocca = function (username) {
+  var self = this;
+  Object.keys(this.fallitiPerCoppia).forEach(function (k) {
+    if (k.indexOf(username + '|') === 0) delete self.fallitiPerCoppia[k];
+  });
 };
 
 Accessi.prototype.login = function (ctx, username, password, agente) {
   username = String(username || '').trim().toLowerCase();
   password = String(password || '');
-  if (this.troppiTentativiIp(ctx.ip)) {
-    this.evento(ctx, 'accesso.bloccato-ip', { utente: username });
-    throw errore(429, 'Troppi tentativi da questo computer: riprova tra 15 minuti.');
+  var adesso = Date.now();
+  this.pulisciContatori(adesso);
+  var valido = /^[a-z0-9._-]{3,40}$/.test(username) && password.length <= 200;
+  var coppia = username.slice(0, 40) + '|' + ctx.ip;
+  var locale = !!ctx.locale; // dal server stesso non si blocca mai: è l'accesso d'emergenza
+  var self = this;
+
+  function fallito(motivo, conNome) {
+    if (!locale) {
+      (self.fallitiPerIp[ctx.ip] = self.fallitiPerIp[ctx.ip] || []).push(adesso);
+      if (valido) (self.fallitiPerCoppia[coppia] = self.fallitiPerCoppia[coppia] || []).push(adesso);
+    }
+    // il nome scritto si registra solo se è di un utente vero: spesso nel campo sbagliato finisce la password
+    self.evento({ ip: ctx.ip, username: conNome ? username : '' }, 'accesso.fallito', conNome ? { utente: username, motivo: motivo } : { motivo: motivo });
+    if (!locale && valido && self.fallitiPerCoppia[coppia].length >= TENTATIVI_MAX) {
+      throw errore(429, 'Troppi tentativi sbagliati: per questo utente da questo computer riprova tra 15 minuti, oppure chiedi all’amministratore una nuova password.');
+    }
+    throw errore(401, 'Nome utente o password non giusti.');
+  }
+
+  if (!locale) {
+    if (recenti(this.fallitiPerIp[ctx.ip], adesso).length >= ERRORI_IP_MAX) {
+      if (!this.ipSegnalati[ctx.ip]) {
+        this.ipSegnalati[ctx.ip] = adesso;
+        this.evento({ ip: ctx.ip }, 'accesso.bloccato-ip', {});
+      }
+      throw errore(429, 'Troppi tentativi da questo computer: riprova tra 15 minuti.');
+    }
+    if (valido && recenti(this.fallitiPerCoppia[coppia], adesso).length >= TENTATIVI_MAX) {
+      throw errore(429, 'Troppi tentativi sbagliati: per questo utente da questo computer riprova tra 15 minuti, oppure chiedi all’amministratore una nuova password.');
+    }
   }
   var db = this.db();
-  var riga = db.prepare('SELECT * FROM utenti WHERE username = ?').get(username);
-  var adesso = Date.now();
+  var riga = valido ? db.prepare('SELECT * FROM utenti WHERE username = ?').get(username) : null;
   if (!riga) {
-    hashPassword(password, SALE_FINTO);
-    (this.fallitiPerIp[ctx.ip] = this.fallitiPerIp[ctx.ip] || []).push(adesso);
-    this.evento(Object.assign({}, ctx, { username: username }), 'accesso.fallito', { utente: username, motivo: 'utente inesistente' });
-    throw errore(401, 'Nome utente o password non giusti.');
+    hashPassword(password.slice(0, 200), SALE_FINTO);
+    return fallito('utente inesistente', false);
   }
-  if (riga.bloccato_fino > adesso) {
-    this.evento(Object.assign({}, ctx, { username: username }), 'accesso.fallito', { utente: username, motivo: 'utente bloccato' });
-    var minuti = Math.ceil((riga.bloccato_fino - adesso) / 60000);
-    throw errore(423, 'Troppi tentativi sbagliati: utente bloccato per ' + minuti + (minuti === 1 ? ' minuto.' : ' minuti.') + ' L’amministratore può sbloccarlo dandogli una nuova password.');
-  }
-  if (!passwordGiusta(password, riga)) {
-    var tentativi = riga.tentativi + 1;
-    var blocco = tentativi >= TENTATIVI_MAX ? adesso + BLOCCO_MS : 0;
-    db.prepare('UPDATE utenti SET tentativi = ?, bloccato_fino = ? WHERE id = ?').run(blocco ? 0 : tentativi, blocco, riga.id);
-    (this.fallitiPerIp[ctx.ip] = this.fallitiPerIp[ctx.ip] || []).push(adesso);
-    this.evento(Object.assign({}, ctx, { username: username }), 'accesso.fallito', { utente: username, motivo: blocco ? 'password sbagliata, utente bloccato' : 'password sbagliata' });
-    if (blocco) throw errore(423, 'Troppi tentativi sbagliati: utente bloccato per 15 minuti.');
-    throw errore(401, 'Nome utente o password non giusti.');
-  }
+  if (!passwordGiusta(password, riga)) return fallito('password sbagliata', true);
   if (!riga.attivo) {
-    this.evento(Object.assign({}, ctx, { username: username }), 'accesso.fallito', { utente: username, motivo: 'utente disattivato' });
+    this.evento({ ip: ctx.ip, username: username }, 'accesso.fallito', { utente: username, motivo: 'utente disattivato' });
     throw errore(403, 'Questo utente è disattivato. Rivolgiti all’amministratore.');
   }
+  delete this.fallitiPerCoppia[coppia];
   var token = crypto.randomBytes(32).toString('base64url');
   var th = hashToken(token);
-  var self = this;
   this.database.transazioneAccessi(function () {
     db.prepare('UPDATE utenti SET tentativi = 0, bloccato_fino = 0, ultimo_accesso = ? WHERE id = ?').run(new Date(adesso).toISOString(), riga.id);
     db.prepare('INSERT INTO sessioni (token_hash, utente_id, creata, ultimo_uso, ip, agente) VALUES (?, ?, ?, ?, ?, ?)')
@@ -295,8 +350,23 @@ Accessi.prototype.login = function (ctx, username, password, agente) {
     db.prepare('DELETE FROM sessioni WHERE ultimo_uso < ? OR creata < ?').run(adesso - INATTIVITA_MS, adesso - DURATA_MAX_MS);
   });
   var utente = this.utente(riga.id);
-  self.evento({ utente: utente, ip: ctx.ip }, 'accesso.entrata', {});
+  this.evento({ utente: utente, ip: ctx.ip }, 'accesso.entrata', {});
   return { token: token, tokenHash: th, utente: utente };
+};
+
+/* Accesso d'emergenza da riga di comando sul server: nuova password provvisoria per un utente. */
+Accessi.prototype.passwordEmergenza = function (username) {
+  var riga = this.db().prepare('SELECT * FROM utenti WHERE username = ?').get(String(username || '').trim().toLowerCase());
+  if (!riga) throw errore(404, 'Utente "' + username + '" non trovato.');
+  var provvisoria = crypto.randomBytes(9).toString('base64url');
+  var pw = nuovaPassword(provvisoria);
+  var self = this;
+  this.database.transazioneAccessi(function () {
+    self.db().prepare('UPDATE utenti SET hash = ?, sale = ?, cambio_password = 1, attivo = 1, tentativi = 0, bloccato_fino = 0 WHERE id = ?').run(pw.hash, pw.sale, riga.id);
+    self.db().prepare('DELETE FROM sessioni WHERE utente_id = ?').run(riga.id);
+  });
+  this.evento({ ip: 'riga di comando sul server', username: riga.username }, 'utenti.password-emergenza', { utente: riga.username });
+  return provvisoria;
 };
 
 /*

@@ -91,6 +91,8 @@ kbd { font: 600 11px var(--mono); border: 1px solid var(--linea-forte); border-r
 .aggiornamenti span { flex: 1; min-width: 0; }
 
 .contenuto { padding: 22px 24px 48px; display: grid; gap: 18px; align-content: start; outline: none; }
+/* i figli di una griglia non devono allargarla: tabelle e registro scorrono dentro il loro riquadro */
+.contenuto > * { min-width: 0; }
 
 /* ---------- elementi ---------- */
 .scheda { background: var(--superficie); border: 1px solid var(--linea); border-radius: var(--raggio); box-shadow: var(--ombra); }
@@ -281,6 +283,12 @@ table.registro { border-collapse: separate; border-spacing: 0; font-size: 12.5px
   .ricerca-rapida { min-width: 0; }
   .ricerca-rapida kbd, .utente-ruolo, .utente-ico, .barra-titolo p { display: none; }
   .collegamento { min-width: 0; }
+  /* barra stretta: ogni elemento si può restringere, i testi lunghi finiscono con i puntini */
+  .barra > * { min-width: 0; }
+  .barra-titolo h1, .ricerca-rapida span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ricerca-rapida { overflow: hidden; flex: 0 1 auto; }
+  .utente-btn { max-width: 120px; }
+  .utente-btn .utente-nome { min-width: 0; }
   .aggiornamenti { padding: 6px 10px 6px 16px; }
   .barra { padding: 10px 16px; gap: 10px; }
   .contenuto { padding: 16px 16px 40px; }

@@ -1,8 +1,6 @@
 {
-  "porta": 8080,
-  "host": "0.0.0.0",
-  "https_esempio": {
-    "nota": "Per usare HTTPS rinomina questa voce in \"https\" e metti i file del certificato nella cartella dati.",
+  "nota": "Esempio per HTTPS. Copia questo file nella cartella dati con il nome configurazione.json, togli questa riga di nota e metti nella cartella dati i file del certificato. La porta si sceglie con l'installazione (Installa servizio.bat -Porta 8443), non qui.",
+  "https": {
     "cert": "certificato.pem",
     "key": "chiave.pem"
   }

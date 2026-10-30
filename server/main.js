@@ -48,15 +48,34 @@ function cartellaProgramma() {
 }
 
 function aspettaInvio() {
-  // se l'exe è stato aperto con un doppio clic, la finestra resta aperta per leggere l'errore
+  // se l'exe è stato aperto con un doppio clic, la finestra resta aperta per leggere l'errore.
+  // Avviato come servizio (--servizio) non c'è nessuno a premere Invio: si esce subito, e
+  // comunque dopo 2 minuti, così l'attività pianificata può riprovare.
+  if (argomenti(process.argv.slice(2)).servizio) return Promise.resolve();
   var tty = false;
   try { tty = !!process.stdin.isTTY; } catch (e) { tty = false; }
   if (!tty) return Promise.resolve();
   return new Promise(function (ok) {
     stampa('\nPremi Invio per chiudere.');
-    process.stdin.resume();
-    process.stdin.once('data', function () { ok(); });
+    setTimeout(ok, 120000).unref();
+    try {
+      process.stdin.resume();
+      process.stdin.once('data', function () { ok(); });
+    } catch (e) { ok(); }
   });
+}
+
+/* Ora locale per il registro del server (le copie di sicurezza usano la stessa ora nel nome). */
+function oraLocale(d) {
+  function due(n) { return String(n).padStart(2, '0'); }
+  return d.getFullYear() + '-' + due(d.getMonth() + 1) + '-' + due(d.getDate()) + ' ' + due(d.getHours()) + ':' + due(d.getMinutes()) + ':' + due(d.getSeconds());
+}
+
+/* configurazione.json scritto con il Blocco note o con PowerShell può avere il BOM o essere in UTF-16. */
+function leggiJson(file) {
+  var b = fs.readFileSync(file);
+  var testo = b[0] === 0xff && b[1] === 0xfe ? b.slice(2).toString('utf16le') : b.toString('utf8');
+  return JSON.parse(testo.replace(/^\uFEFF/, ''));
 }
 
 function fatale(messaggio) {
@@ -64,7 +83,7 @@ function fatale(messaggio) {
   try {
     var dir = path.resolve(String(argomenti(process.argv.slice(2)).dati || process.env.GESTIONALE_FARMACIA_DATI || path.join(cartellaProgramma(), 'dati')), 'log');
     fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(path.join(dir, 'errori-avvio.log'), new Date().toISOString() + '  ' + messaggio + os.EOL);
+    fs.appendFileSync(path.join(dir, 'errori-avvio.log'), oraLocale(new Date()) + '  ' + messaggio + os.EOL);
   } catch (e) { /* niente da fare */ }
   aspettaInvio().then(function () { process.exit(1); });
 }
@@ -83,9 +102,17 @@ function indirizziRete() {
 function avvia() {
   // una console chiusa o assente non deve generare errori a catena
   try { process.stdout.on('error', function () {}); process.stderr.on('error', function () {}); } catch (e) { /* nessuna console */ }
+  process.on('uncaughtException', function (e) {
+    // prima dell'avvio completo un errore va almeno in dati\log\errori-avvio.log
+    fatale('Errore imprevisto: ' + (e && (e.stack || e.message)));
+  });
   var arg = argomenti(process.argv.slice(2));
   if (arg.help || arg.aiuto) {
-    stampa('Gestionale Farmacia ' + VERSIONE + '\n\n  --porta <n>       porta HTTP (predefinita 8080)\n  --host <ind>      indirizzo di ascolto (predefinito: tutta la rete, IPv4 e IPv6)\n  --dati <cartella> cartella dei dati (predefinita: "dati" accanto al programma)\n');
+    stampa('Gestionale Farmacia ' + VERSIONE + '\n\n' +
+      '  --porta <n>                    porta HTTP (predefinita 8080)\n' +
+      '  --host <ind>                   indirizzo di ascolto (predefinito: tutta la rete, IPv4 e IPv6)\n' +
+      '  --dati <cartella>              cartella dei dati (predefinita: "dati" accanto al programma)\n' +
+      '  --reimposta-password <utente>  accesso d\'emergenza: nuova password provvisoria per l\'utente, poi esce\n');
     return;
   }
   var cartellaDati = path.resolve(String(arg.dati || process.env.GESTIONALE_FARMACIA_DATI || path.join(cartellaProgramma(), 'dati')));
@@ -96,17 +123,18 @@ function avvia() {
   var conf = {};
   var fileConf = path.join(cartellaDati, 'configurazione.json');
   if (fs.existsSync(fileConf)) {
-    try { conf = JSON.parse(fs.readFileSync(fileConf, 'utf8')); } catch (e) {
+    try { conf = leggiJson(fileConf); } catch (e) {
       return fatale('Il file ' + fileConf + ' non è un JSON valido: ' + e.message);
     }
   }
   var porta = Number(arg.porta || conf.porta || 8080);
+  if (!(porta >= 1 && porta <= 65535 && Math.floor(porta) === porta)) return fatale('Porta non valida: ' + (arg.porta || conf.porta) + '. Usa un numero intero tra 1 e 65535.');
   // senza --host ascolta su IPv4 e IPv6: su Windows "localhost" prova prima ::1 e con solo IPv4 ogni collegamento
   // da localhost aspetterebbe un paio di secondi prima di ripiegare su 127.0.0.1
   var host = arg.host || conf.host ? String(arg.host || conf.host) : null;
 
   function log(msg) {
-    var riga = new Date().toISOString().replace('T', ' ').slice(0, 19) + '  ' + msg;
+    var riga = oraLocale(new Date()) + '  ' + msg;
     stampa(riga);
     try {
       fs.appendFileSync(path.join(cartellaDati, 'log', 'server-' + riga.slice(0, 7) + '.log'), riga + os.EOL);
@@ -121,6 +149,20 @@ function avvia() {
       '\nForse il programma è già in esecuzione, oppure la cartella non è scrivibile.');
   }
   var accessi = new Accessi(database, log);
+
+  // accesso d'emergenza: si usa sul server, anche mentre il servizio è in funzione
+  if (arg['reimposta-password']) {
+    try {
+      var provvisoria = accessi.passwordEmergenza(String(arg['reimposta-password']));
+      stampa('\nNuova password provvisoria per "' + arg['reimposta-password'] + '":  ' + provvisoria +
+        '\nAl prossimo accesso il programma chiederà di cambiarla. L\'utente è stato anche riattivato.\n');
+      database.chiudi();
+      return aspettaInvio().then(function () { process.exit(0); });
+    } catch (e) {
+      database.chiudi();
+      return fatale(e.message);
+    }
+  }
   var server;
   var operazioni = new Operazioni(database, accessi, function (rev) { server.notifica(rev); });
   var backup = new Backup(database, log);
@@ -138,23 +180,30 @@ function avvia() {
   }
 
   server = new Server({ database: database, accessi: accessi, operazioni: operazioni, backup: backup, log: log, versione: VERSIONE, https: !!opzHttps });
-  var srv = opzHttps ? https.createServer(opzHttps, server.gestore()) : http.createServer(server.gestore());
+  var srv;
+  try {
+    srv = opzHttps ? https.createServer(opzHttps, server.gestore()) : http.createServer(server.gestore());
+  } catch (e) {
+    return fatale('Certificato HTTPS non valido (chiave, passphrase o formato): ' + e.message);
+  }
   srv.keepAliveTimeout = 65000;
   srv.headersTimeout = 70000;
+  srv.requestTimeout = 60000; // una richiesta deve arrivare intera entro un minuto
 
   srv.on('error', function (e) {
     if (!host && (e.code === 'EAFNOSUPPORT' || e.code === 'EADDRNOTAVAIL') && !srv.soloIpv4) {
       // IPv6 disattivato sul server: solo IPv4
       srv.soloIpv4 = true;
-      return srv.listen(porta, '0.0.0.0', avviato);
+      return srv.listen(porta, '0.0.0.0');
     }
     if (e.code === 'EADDRINUSE') return fatale('La porta ' + porta + ' è già usata da un altro programma (forse il Gestionale è già avviato).\nChiudilo, oppure avvia con --porta e un altro numero.');
     if (e.code === 'EACCES') return fatale('Non ho il permesso di usare la porta ' + porta + '. Usa un numero sopra 1024 o avvia come amministratore.');
     fatale('Errore del server: ' + e.message);
   });
 
-  if (host) srv.listen(porta, host, avviato);
-  else srv.listen({ port: porta, host: '::', ipv6Only: false }, avviato);
+  srv.once('listening', avviato);
+  if (host) srv.listen(porta, host);
+  else srv.listen({ port: porta, host: '::', ipv6Only: false });
 
   function avviato() {
     var schema = opzHttps ? 'https' : 'http';
@@ -186,6 +235,8 @@ function avvia() {
   process.on('SIGINT', chiudi);
   process.on('SIGTERM', chiudi);
   process.on('SIGBREAK', chiudi);
+  // da qui in poi un errore imprevisto si registra ma il server resta in funzione
+  process.removeAllListeners('uncaughtException');
   process.on('uncaughtException', function (e) {
     log('Errore imprevisto: ' + (e && (e.stack || e.message)));
   });

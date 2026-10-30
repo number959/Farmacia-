@@ -27,7 +27,8 @@ async function avviaServer() {
   proc.stdout.on('data', (d) => { uscita += d; });
   proc.stderr.on('data', (d) => { uscita += d; });
   const base = 'http://127.0.0.1:' + porta;
-  for (let i = 0; i < 100; i++) {
+  // l'eseguibile compilato (soprattutto l'exe Windows sotto Wine) può metterci di più a partire
+  for (let i = 0; i < (ESEGUIBILE ? 600 : 100); i++) {
     try { const r = await fetch(base + '/api/stato'); if (r.ok) break; } catch (e) { /* non ancora pronto */ }
     await new Promise((r) => setTimeout(r, 100));
   }
@@ -83,6 +84,16 @@ test('primo avvio: stato, setup solo una volta', async () => {
   const st = await admin.get('/api/stato');
   assert.equal(st.json.inizializzato, false);
   assert.equal(st.json.daServer, true);
+  // DNS rebinding: un sito esterno che punta a 127.0.0.1 arriva con un altro nome nell'intestazione Host
+  const rebinding = await new Promise((ok, ko) => {
+    const corpo = JSON.stringify({ username: 'intruso', nome: 'Intruso', password: PW });
+    const req = require('node:http').request({ host: '127.0.0.1', port: S.porta, path: '/api/setup', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Richiesta': '1', Host: 'attaccante.example:' + S.porta, 'Content-Length': Buffer.byteLength(corpo) } },
+    (res) => { res.resume(); res.on('end', () => ok(res.statusCode)); });
+    req.on('error', ko);
+    req.end(corpo);
+  });
+  assert.equal(rebinding, 403);
   const corta = await admin.post('/api/setup', { username: 'admin', nome: 'Amministratore Prova', password: 'corta' });
   assert.equal(corta.stato, 400);
   const ok = await admin.post('/api/setup', { username: 'admin', nome: 'Amministratore Prova', password: PW });
@@ -247,6 +258,51 @@ test('registro mensile: correzione del consumo di un giorno', async () => {
   assert.equal((await sala.post('/api/consumo-giorno', { articoloId: ART.id, repartoId: 'r-degenza', data: oggi(), quantita: 1 })).stato, 403);
 });
 
+test('conflitti: registro, inventario e lotto scelti su dati vecchi', async () => {
+  const f = U.farma.client;
+  const deg = U.infdeg.client;
+  await f.post('/api/movimenti', { movimenti: [{ tipo: 'trasferimento', data: oggi(), articoloId: ART.id, repartoId: 'r-farmacia', repartoDestId: 'r-degenza', quantita: 1 }] });
+  // registro: il farmacista vede 0 per oggi in Degenza, intanto l'infermiere registra 0,5
+  await deg.post('/api/movimenti', { movimenti: [{ tipo: 'consumo', data: oggi(), articoloId: ART.id, repartoId: 'r-degenza', quantita: 0.5 }] });
+  const d0 = (await f.get('/api/dati?da=0')).json;
+  const visti = d0.movimenti.filter((m) => !m.annullato && m.tipo === 'consumo' && m.repartoId === 'r-degenza' && m.data === oggi()).reduce((t, m) => t + m.quantita, 0);
+  const vecchio = await f.post('/api/consumo-giorno', { articoloId: ART.id, repartoId: 'r-degenza', data: oggi(), quantita: 0.3, prima: visti - 0.5 });
+  assert.equal(vecchio.stato, 409);
+  const ok = await f.post('/api/consumo-giorno', { articoloId: ART.id, repartoId: 'r-degenza', data: oggi(), quantita: visti, prima: visti });
+  assert.equal(ok.stato, 200, JSON.stringify(ok.json));
+  // inventario: la giacenza vista è cambiata nel frattempo
+  const g = await giacenza(f, ART.id, 'r-farmacia');
+  const rett = await f.post('/api/movimenti', { movimenti: [{ tipo: 'rettifica', data: oggi(), articoloId: ART.id, repartoId: 'r-farmacia', quantita: -1, teorica: g + 3 }] });
+  assert.equal(rett.stato, 409);
+  const rett2 = await f.post('/api/movimenti', { movimenti: [{ tipo: 'rettifica', data: oggi(), articoloId: ART.id, repartoId: 'r-farmacia', quantita: 1, teorica: g }] });
+  assert.equal(rett2.stato, 200, JSON.stringify(rett2.json));
+  // lotto scelto ma ormai esaurito
+  const lottoA = await f.post('/api/movimenti', { movimenti: [{ tipo: 'trasferimento', data: oggi(), articoloId: ART.id, repartoId: 'r-farmacia', repartoDestId: 'r-sala', quantita: 1, lotto: 'A' }] });
+  assert.equal(lottoA.stato, 409);
+});
+
+test('importazione articoli ripetuta: la giacenza iniziale non si raddoppia', async () => {
+  const f = U.farma.client;
+  const corpo = { articoli: [{ nome: 'IMPORTATO DUE VOLTE', categoria: 'PRESIDI', giacenza: 40 }], repartoId: 'r-farmacia', data: oggi(), conGiacenza: true, origine: 'prova.xlsx' };
+  const p1 = await f.post('/api/articoli/importa', corpo);
+  assert.equal(p1.json.carichi, 1);
+  const p2 = await f.post('/api/articoli/importa', corpo);
+  assert.equal(p2.json.carichi, 0);
+  assert.equal(p2.json.saltati, 1);
+  const d = (await f.get('/api/dati?da=0')).json;
+  const a = d.articoli.find((x) => x.nome === 'IMPORTATO DUE VOLTE');
+  assert.equal(await giacenza(f, a.id, 'r-farmacia'), 40);
+});
+
+test('troppe righe in una richiesta e permesso controllato prima del corpo', async () => {
+  const righe = Array.from({ length: 501 }, () => ({ tipo: 'consumo', data: oggi(), articoloId: ART.id, repartoId: 'r-degenza', quantita: 1 }));
+  assert.equal((await U.infdeg.client.post('/api/movimenti', { movimenti: righe })).stato, 400);
+  const t = Date.now();
+  const r = await U.infdeg.client.post('/api/importa-archivio', { articoli: [], movimenti: [], reparti: [], zavorra: 'x'.repeat(5 * 1024 * 1024) });
+  assert.equal(r.stato, 403);
+  assert.ok(Date.now() - t < 5000);
+});
+
 test('sincronizzazione per revisione e cancellazioni', async () => {
   const f = U.farma.client;
   const prima = (await f.get('/api/dati?da=0')).json;
@@ -263,6 +319,9 @@ test('sincronizzazione per revisione e cancellazioni', async () => {
   assert.equal((await f.del('/api/articoli/' + ART.id)).stato, 409); // ha movimenti
   const futuro = (await f.get('/api/dati?da=999999')).json;
   assert.equal(futuro.completo, true);
+  assert.ok(delta2.storia);
+  assert.equal((await f.get('/api/dati?da=' + delta2.rev + '&storia=' + delta2.storia)).json.completo, false);
+  assert.equal((await f.get('/api/dati?da=' + delta2.rev + '&storia=altra')).json.completo, true);
 });
 
 test('notifiche in tempo reale (Server-Sent Events)', async () => {
@@ -305,17 +364,63 @@ test('impostazioni e reparti solo per l\'amministratore', async () => {
   assert.equal((await admin.del('/api/reparti/' + dh.id)).stato, 200);
 });
 
-test('utente bloccato dopo 5 password sbagliate; l\'amministratore lo sblocca', async () => {
-  const c = new Client(S.base);
+function ipRete() {
+  const r = Object.values(os.networkInterfaces()).flat().find((x) => x && x.family === 'IPv4' && !x.internal);
+  return r ? r.address : null;
+}
+
+test('tentativi sbagliati: blocco per utente e computer, mai dal server stesso', async () => {
+  const ip = ipRete();
+  if (!ip) return; // senza una rete non si può simulare un altro computer
+  const c = new Client('http://' + ip + ':' + S.porta);
   for (let i = 0; i < 4; i++) assert.equal((await c.post('/api/login', { username: 'infsala', password: 'sbagliata' })).stato, 401);
-  assert.equal((await c.post('/api/login', { username: 'infsala', password: 'sbagliata' })).stato, 423);
-  assert.equal((await c.post('/api/login', { username: 'infsala', password: PW })).stato, 423);
+  assert.equal((await c.post('/api/login', { username: 'infsala', password: 'sbagliata' })).stato, 429);
+  assert.equal((await c.post('/api/login', { username: 'infsala', password: PW })).stato, 429);
+  // un nome inesistente si comporta allo stesso modo: non si scopre quali utenti esistono
+  for (let i = 0; i < 4; i++) assert.equal((await c.post('/api/login', { username: 'nessuno', password: 'x' })).stato, 401);
+  assert.equal((await c.post('/api/login', { username: 'nessuno', password: 'x' })).stato, 429);
+  // dal server stesso l'utente vero entra comunque (accesso d'emergenza)
+  const locale = new Client(S.base);
+  assert.equal((await locale.post('/api/login', { username: 'infsala', password: PW })).stato, 200);
+  // l'amministratore che dà una nuova password sblocca anche gli altri computer
   assert.equal((await admin.post('/api/utenti/' + U.infsala.id + '/password', { nuova: 'Sblocco-123' })).stato, 200);
   const dopo = await c.post('/api/login', { username: 'infsala', password: 'Sblocco-123' });
   assert.equal(dopo.stato, 200);
   assert.equal(dopo.json.utente.cambioPassword, true);
-  // la vecchia sessione dell'utente non vale più
-  assert.equal((await U.infsala.client.get('/api/dati?da=0')).stato, 401);
+  assert.equal((await U.infsala.client.get('/api/dati?da=0')).stato, 401); // le vecchie sessioni non valgono più
+  const nuovo = new Client(S.base);
+  await nuovo.accedi('infsala', 'Sblocco-123');
+  assert.equal((await nuovo.post('/api/password', { attuale: 'Sblocco-123', nuova: PW })).stato, 200);
+  U.infsala.client = nuovo;
+});
+
+test('accessi falliti: niente corpi grandi né nomi lunghi nel registro', async () => {
+  const anon = new Client(S.base);
+  const grande = await anon.post('/api/login', { username: 'x'.repeat(100000), password: 'x' });
+  assert.equal(grande.stato, 413);
+  const lungo = await anon.post('/api/login', { username: 'x'.repeat(5000), password: 'x' });
+  assert.equal(lungo.stato, 401);
+  const segreto = await anon.post('/api/login', { username: 'Rossi.Maria#2026', password: 'x' });
+  assert.equal(segreto.stato, 401);
+  const ev = (await admin.get('/api/attivita?limite=50&azione=accesso.fallito')).json.eventi;
+  assert.ok(ev.every((e) => JSON.stringify(e).length < 5000));
+  assert.ok(!JSON.stringify(ev).toLowerCase().includes('rossi.maria'), 'i nomi utente inesistenti non si registrano');
+  assert.equal((await admin.get('/api/attivita?limite=2.5')).stato, 200);
+});
+
+test('sessione: cookie estranei, utente cambiato in un\'altra scheda, password attuale indovinata', async () => {
+  const r = await fetch(S.base + '/api/stato', { headers: { Cookie: 'altra_app=sconto 100%; ' + admin.cookie } });
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).utente.username, 'admin');
+  const conAltro = await fetch(S.base + '/api/dati?da=0', { headers: { Cookie: admin.cookie, 'X-Utente': U.farma.id } });
+  assert.equal(conAltro.status, 401);
+  const giusto = await fetch(S.base + '/api/dati?da=0', { headers: { Cookie: admin.cookie, 'X-Utente': (await admin.get('/api/stato')).json.utente.id } });
+  assert.equal(giusto.status, 200);
+  const c = new Client(S.base);
+  await c.accedi('dir', PW);
+  for (let i = 0; i < 4; i++) assert.equal((await c.post('/api/password', { attuale: 'no-' + i, nuova: 'Altra-123456' })).stato, 400);
+  assert.equal((await c.post('/api/password', { attuale: 'no-5', nuova: 'Altra-123456' })).stato, 401);
+  assert.equal((await c.get('/api/dati?da=0')).stato, 401);
 });
 
 test('disattivare un utente chiude le sue sessioni; resta almeno un amministratore', async () => {
@@ -411,4 +516,51 @@ test('dati di prova in un archivio nuovo', async () => {
   } finally {
     await S3.ferma();
   }
+});
+
+function eseguiProgramma(argomenti, ms) {
+  const comando = ESEGUIBILE || process.execPath;
+  const tutti = (ESEGUIBILE ? [] : [path.join(__dirname, '..', 'server', 'main.js')]).concat(argomenti);
+  return new Promise((ok) => {
+    const p = spawn(comando, tutti, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let testo = '';
+    p.stdout.on('data', (d) => { testo += d; });
+    p.stderr.on('data', (d) => { testo += d; });
+    const t = setTimeout(() => { p.kill('SIGKILL'); ok({ codice: 'scaduto', testo }); }, ms || 20000);
+    p.on('exit', (codice) => { clearTimeout(t); ok({ codice, testo }); });
+  });
+}
+
+test('modalità servizio: con la porta occupata esce subito e scrive il motivo nel registro', async () => {
+  const dati = fs.mkdtempSync(path.join(os.tmpdir(), 'gf-servizio-'));
+  const r = await eseguiProgramma(['--porta', String(S.porta), '--dati', dati, '--servizio'], 20000);
+  assert.equal(r.codice, 1, r.testo);
+  const log = fs.readFileSync(path.join(dati, 'log', 'errori-avvio.log'), 'utf8');
+  assert.match(log, /porta .* già usata/);
+});
+
+test('configurazione.json salvato con BOM dal Blocco note', async () => {
+  const S4dati = fs.mkdtempSync(path.join(os.tmpdir(), 'gf-bom-'));
+  const porta = await portaLibera();
+  fs.writeFileSync(path.join(S4dati, 'configurazione.json'), '﻿{ "porta": ' + porta + ' }');
+  const proc = spawn(ESEGUIBILE || process.execPath, (ESEGUIBILE ? [] : [path.join(__dirname, '..', 'server', 'main.js')]).concat(['--dati', S4dati]), { stdio: 'ignore' });
+  let ok = false;
+  for (let i = 0; i < 100 && !ok; i++) {
+    try { ok = (await fetch('http://127.0.0.1:' + porta + '/api/stato')).ok; } catch (e) { await new Promise((r) => setTimeout(r, 100)); }
+  }
+  await new Promise((r) => { proc.once('exit', r); proc.kill('SIGTERM'); });
+  assert.ok(ok, 'il server deve partire sulla porta scritta nel file con BOM');
+});
+
+test('accesso d\'emergenza da riga di comando, anche con il server in funzione', async () => {
+  const r = await eseguiProgramma(['--dati', S.dati, '--reimposta-password', 'admin'], 20000);
+  assert.equal(r.codice, 0, r.testo);
+  const m = /provvisoria per "admin":\s+(\S+)/.exec(r.testo);
+  assert.ok(m, r.testo);
+  const c = new Client(S.base);
+  const acc = await c.accedi('admin', m[1]);
+  assert.equal(acc.utente.cambioPassword, true);
+  assert.equal((await admin.get('/api/dati?da=0')).stato, 401); // le sessioni di prima sono chiuse
+  const sconosciuto = await eseguiProgramma(['--dati', S.dati, '--reimposta-password', 'nessuno'], 20000);
+  assert.equal(sconosciuto.codice, 1);
 });

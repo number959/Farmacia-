@@ -11,6 +11,7 @@ var errore = A.errore;
 
 var COOKIE = 'gf_sessione';
 var LIMITE_CORPO = 2 * 1024 * 1024;
+var LIMITE_PUBBLICO = 16 * 1024; // accesso, primo amministratore, uscita: non servono corpi grandi
 var LIMITE_ARCHIVIO = 50 * 1024 * 1024;
 
 var TIPI_MIME = {
@@ -70,7 +71,9 @@ function leggiCookie(req) {
   var out = {};
   String(req.headers.cookie || '').split(';').forEach(function (c) {
     var i = c.indexOf('=');
-    if (i > 0) out[c.slice(0, i).trim()] = decodeURIComponent(c.slice(i + 1).trim());
+    if (i <= 0) return;
+    // altri programmi sullo stesso server possono lasciare cookie non decodificabili: si ignorano
+    try { out[c.slice(0, i).trim()] = decodeURIComponent(c.slice(i + 1).trim()); } catch (e) { /* cookie di altri */ }
   });
   return out;
 }
@@ -82,6 +85,12 @@ function ipDi(req) {
 function eLocale(req) {
   var ip = ipDi(req);
   return ip === '127.0.0.1' || ip === '::1';
+}
+
+/* Il nome con cui il browser ha chiamato il server è "localhost" (protezione dal DNS rebinding). */
+function hostLocale(req) {
+  var h = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '');
+  return h === 'localhost' || h === '127.0.0.1' || h === '[::1]';
 }
 
 function intestazioniSicurezza(res) {
@@ -178,14 +187,14 @@ Server.prototype.definisciRotte = function () {
   var acc = this.accessi;
   var op = this.operazioni;
   var db = this.database;
-  var PUBBLICA = { pubblica: true };
-  var LIBERA = { anchePasswordDaCambiare: true };
+  var PUBBLICA = { pubblica: true, limite: LIMITE_PUBBLICO };
+  var LIBERA = { anchePasswordDaCambiare: true, limite: LIMITE_PUBBLICO };
 
   this.rotta('GET', '/api/stato', PUBBLICA, function (ctx) { return self.statoPubblico(ctx); });
 
   this.rotta('POST', '/api/setup', PUBBLICA, function (ctx) {
     if (acc.contaUtenti() > 0) throw errore(409, 'Il primo amministratore esiste già.');
-    if (!ctx.locale) throw errore(403, 'Il primo amministratore si crea aprendo il programma sul server stesso (http://localhost).');
+    if (!ctx.locale || !hostLocale(ctx.req)) throw errore(403, 'Il primo amministratore si crea aprendo il programma sul server stesso, all’indirizzo http://localhost.');
     var c = ctx.corpo;
     var reparti = db.reparti();
     var u = acc.creaUtente(ctx, { username: c.username, nome: c.nome, ruolo: 'amministratore', password: c.password }, reparti, true);
@@ -212,7 +221,7 @@ Server.prototype.definisciRotte = function () {
     return { ok: true, utente: acc.utente(ctx.utente.id) };
   });
 
-  this.rotta('GET', '/api/dati', {}, function (ctx) { return db.cambiamenti(ctx.query.get('da')); });
+  this.rotta('GET', '/api/dati', {}, function (ctx) { return db.cambiamenti(ctx.query.get('da'), ctx.query.get('storia')); });
 
   this.rotta('POST', '/api/movimenti', {}, function (ctx) { return op.registraMovimenti(ctx, ctx.corpo.movimenti); });
   this.rotta('POST', '/api/movimenti/:id/annulla', {}, function (ctx) { return op.annullaMovimento(ctx, ctx.par.id, ctx.corpo.motivo); });
@@ -225,33 +234,41 @@ Server.prototype.definisciRotte = function () {
 
   this.rotta('PUT', '/api/impostazioni', {}, function (ctx) { return op.salvaImpostazioni(ctx, ctx.corpo); });
   this.rotta('PUT', '/api/reparti', {}, function (ctx) { return op.salvaReparti(ctx, ctx.corpo); });
-  this.rotta('DELETE', '/api/reparti/:id', {}, function (ctx) { return op.eliminaReparto(ctx, ctx.par.id); });
+  this.rotta('DELETE', '/api/reparti/:id', { permesso: 'impostazioni' }, function (ctx) {
+    var r = op.eliminaReparto(ctx, ctx.par.id);
+    self.notificaPermessi(r.utentiAggiornati || []);
+    return { rev: r.rev };
+  });
 
   function soloAdmin(ctx, permesso) {
     if (!ctx.permessi[permesso]) throw errore(403, 'Il tuo utente non può fare questa operazione.');
   }
+  // il permesso nelle opzioni si controlla prima di leggere il corpo della richiesta
+  var UTENTI = { permesso: 'utenti' };
+  var BACKUP = { permesso: 'backup' };
 
-  this.rotta('GET', '/api/utenti', {}, function (ctx) {
+  this.rotta('GET', '/api/utenti', UTENTI, function (ctx) {
     soloAdmin(ctx, 'utenti');
     return { utenti: acc.elencoUtenti() };
   });
-  this.rotta('POST', '/api/utenti', {}, function (ctx) {
+  this.rotta('POST', '/api/utenti', UTENTI, function (ctx) {
     soloAdmin(ctx, 'utenti');
     return { utente: acc.creaUtente(ctx, ctx.corpo, db.reparti(), false) };
   });
-  this.rotta('PUT', '/api/utenti/:id', {}, function (ctx) {
+  this.rotta('PUT', '/api/utenti/:id', UTENTI, function (ctx) {
     soloAdmin(ctx, 'utenti');
     var u = acc.modificaUtente(ctx, ctx.par.id, ctx.corpo, db.reparti());
     self.chiudiSseUtente(u);
+    self.notificaPermessi([u.id]);
     return { utente: u };
   });
-  this.rotta('POST', '/api/utenti/:id/password', {}, function (ctx) {
+  this.rotta('POST', '/api/utenti/:id/password', UTENTI, function (ctx) {
     soloAdmin(ctx, 'utenti');
     acc.reimpostaPassword(ctx, ctx.par.id, ctx.corpo.nuova);
     return { ok: true };
   });
 
-  this.rotta('GET', '/api/attivita', {}, function (ctx) {
+  this.rotta('GET', '/api/attivita', { permesso: 'attivita' }, function (ctx) {
     soloAdmin(ctx, 'attivita');
     var q = ctx.query;
     var al = q.get('al');
@@ -265,17 +282,17 @@ Server.prototype.definisciRotte = function () {
     return { eventi: acc.eventi({ dal: dal, al: al, utente: q.get('utente'), azione: q.get('azione'), limite: q.get('limite') }) };
   });
 
-  this.rotta('GET', '/api/backup', {}, function (ctx) {
+  this.rotta('GET', '/api/backup', BACKUP, function (ctx) {
     soloAdmin(ctx, 'backup');
     return { backup: self.backup.elenco(), cartella: self.backup.cartella };
   });
-  this.rotta('POST', '/api/backup', {}, function (ctx) {
+  this.rotta('POST', '/api/backup', BACKUP, function (ctx) {
     soloAdmin(ctx, 'backup');
     var nome = self.backup.crea('manuale');
     acc.evento(ctx, 'backup.crea', { copia: nome });
     return { nome: nome, backup: self.backup.elenco() };
   });
-  this.rotta('GET', '/api/backup/:nome', {}, function (ctx) {
+  this.rotta('GET', '/api/backup/:nome', BACKUP, function (ctx) {
     soloAdmin(ctx, 'backup');
     var file = self.backup.percorso(ctx.par.nome);
     acc.evento(ctx, 'backup.scarica', { copia: ctx.par.nome });
@@ -289,15 +306,19 @@ Server.prototype.definisciRotte = function () {
     fs.createReadStream(file).pipe(ctx.res);
     return undefined; // risposta già inviata
   });
-  this.rotta('POST', '/api/backup/:nome/ripristina', {}, function (ctx) {
+  this.rotta('POST', '/api/backup/:nome/ripristina', BACKUP, function (ctx) {
     soloAdmin(ctx, 'backup');
     var r = self.backup.ripristina(ctx.par.nome);
-    acc.evento(ctx, 'backup.ripristina', { copia: ctx.par.nome, copiaDiSicurezza: r.sicurezza });
+    // gli utenti di reparto non devono restare legati a reparti che nella copia non esistono
+    var esistenti = db.reparti().map(function (x) { return x.id; });
+    var toccati = op.allineaRepartiUtenti(esistenti);
+    acc.evento(ctx, 'backup.ripristina', { copia: ctx.par.nome, copiaDiSicurezza: r.sicurezza, utentiAggiornati: toccati.length });
     self.notifica(r.rev);
+    self.notificaPermessi(toccati);
     return { rev: r.rev, sicurezza: r.sicurezza };
   });
 
-  this.rotta('POST', '/api/importa-archivio', { limite: LIMITE_ARCHIVIO }, function (ctx) {
+  this.rotta('POST', '/api/importa-archivio', { limite: LIMITE_ARCHIVIO, permesso: 'impostazioni' }, function (ctx) {
     soloAdmin(ctx, 'impostazioni');
     if (!op.archivioVuoto()) throw errore(409, 'L’archivio della versione per un solo PC si può importare solo in un archivio vuoto.');
     // copia di sicurezza prima di un'operazione grande
@@ -305,6 +326,14 @@ Server.prototype.definisciRotte = function () {
     return op.importaArchivio(ctx, ctx.corpo);
   });
   this.rotta('POST', '/api/demo', {}, function (ctx) { return op.caricaDemo(ctx); });
+};
+
+/* Avvisa i browser degli utenti indicati che ruolo o reparti sono cambiati. */
+Server.prototype.notificaPermessi = function (utentiIds) {
+  if (!utentiIds || !utentiIds.length) return;
+  this.ascoltatori.forEach(function (a) {
+    if (utentiIds.indexOf(a.utenteId) >= 0) { try { a.res.write('event: permessi\ndata: {}\n\n'); } catch (e) { /* chiusa */ } }
+  });
 };
 
 Server.prototype.chiudiSseUtente = function (utente) {
@@ -321,6 +350,7 @@ Server.prototype.contesto = function (req, res) {
     utente: null, permessi: null, tokenHash: null
   };
   var token = leggiCookie(req)[COOKIE];
+  ctx.token = token;
   if (token) {
     var automatica = req.method === 'GET' && (url.pathname === '/api/dati' || url.pathname === '/api/eventi');
     var s = this.accessi.sessione(token, automatica);
@@ -376,12 +406,23 @@ Server.prototype.gestisciApi = function (req, res) {
   }
   if (!trovata.opz.pubblica) {
     if (!ctx.utente) return inviaJson(res, 401, { errore: 'Sessione scaduta: accedi di nuovo.' });
+    if (utenteDiverso(req, ctx)) return inviaJson(res, 401, { errore: 'In questo browser è entrato un altro utente: accedi di nuovo.', altroUtente: true });
     if (ctx.utente.cambioPassword && !trovata.opz.anchePasswordDaCambiare) return inviaJson(res, 403, { errore: 'Prima di continuare cambia la password.' });
+    if (trovata.opz.permesso && !ctx.permessi[trovata.opz.permesso]) return inviaJson(res, 403, { errore: 'Il tuo utente non può fare questa operazione.' });
   }
 
   var corpo = metodo === 'GET' || metodo === 'HEAD' ? Promise.resolve({}) : leggiCorpo(req, trovata.opz.limite || LIMITE_CORPO);
   corpo.then(function (c) {
     ctx.corpo = c && typeof c === 'object' ? c : {};
+    if (!trovata.opz.pubblica && metodo !== 'GET') {
+      // mentre arrivava il corpo l'utente potrebbe essere stato disattivato o declassato: ricontrollo
+      var s = self.accessi.sessione(ctx.token, true);
+      if (!s) throw errore(401, 'Sessione scaduta: accedi di nuovo.');
+      ctx.utente = s.utente;
+      ctx.permessi = A.permessi(s.utente);
+      if (ctx.utente.cambioPassword && !trovata.opz.anchePasswordDaCambiare) throw errore(403, 'Prima di continuare cambia la password.');
+      if (trovata.opz.permesso && !ctx.permessi[trovata.opz.permesso]) throw errore(403, 'Il tuo utente non può fare questa operazione.');
+    }
     var risultato = trovata.gestore(ctx);
     if (risultato !== undefined && !res.headersSent) inviaJson(res, 200, risultato);
   }).catch(function (e) {
@@ -393,9 +434,19 @@ Server.prototype.gestisciApi = function (req, res) {
   });
 };
 
+/*
+ * Il client dice quale utente crede di essere (intestazione X-Utente, o ?utente= per le notifiche):
+ * se nello stesso browser un'altra scheda è entrata con un altro utente, il cookie è cambiato
+ * e questa scheda non deve registrare a nome dell'altro.
+ */
+function utenteDiverso(req, ctx) {
+  var atteso = req.headers['x-utente'] || ctx.query.get('utente');
+  return !!atteso && !!ctx.utente && atteso !== ctx.utente.id;
+}
+
 Server.prototype.eventi = function (ctx) {
   var self = this;
-  if (!ctx.utente) return inviaJson(ctx.res, 401, { errore: 'Sessione scaduta: accedi di nuovo.' });
+  if (!ctx.utente || utenteDiverso(ctx.req, ctx)) return inviaJson(ctx.res, 401, { errore: 'Sessione scaduta: accedi di nuovo.' });
   var res = ctx.res;
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -449,7 +500,6 @@ Server.prototype.gestore = function () {
   var self = this;
   return function (req, res) {
     intestazioniSicurezza(res);
-    if (self.https) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
     var p = String(req.url || '/');
     if (p === '/api' || p.indexOf('/api/') === 0) return self.gestisciApi(req, res);
     return self.gestisciStatico(req, res);

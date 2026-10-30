@@ -113,9 +113,22 @@
     return new Date(p[0], p[1] - 1, p[2]).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   };
 
+  /* Numero per le caselle da modificare: senza separatore delle migliaia, con la virgola decimale. */
+  App.fmtCampo = function (n) {
+    if (n === null || n === undefined || n === '' || !Number(n)) return '';
+    return String(Math.round(Number(n) * 1000) / 1000).replace('.', ',');
+  };
+
+  /*
+   * Legge un numero scritto all'italiana: "12,5", "1.234,5", "12.000" (punto delle migliaia).
+   * "1.5" resta 1,5 (un solo decimale dopo il punto non è un separatore delle migliaia).
+   */
   App.numero = function (v) {
-    var n = parseFloat(String(v === undefined || v === null ? '' : v).replace(',', '.'));
-    return isFinite(n) ? n : 0;
+    var t = String(v === undefined || v === null ? '' : v).trim().replace(/\s/g, '');
+    if (t.indexOf(',') >= 0) t = t.replace(/\./g, '').replace(',', '.');
+    else if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, '');
+    var n = parseFloat(t);
+    return isFinite(n) ? Math.round(n * 1000) / 1000 : 0;
   };
 
   App.TIPI = {
@@ -275,8 +288,17 @@
   };
 
   /* Correzione dal registro mensile: il consumo del giorno diventa 'quantita' (0 = nessun consumo). */
-  App.impostaConsumoGiorno = function (articoloId, repartoId, data, quantita) {
-    return root.Api.scrivi('POST', '/api/consumo-giorno', { articoloId: articoloId, repartoId: repartoId, data: data, quantita: quantita });
+  /*
+   * Correzione di una casella del registro. "prima" è il consumo che l'utente vedeva: se nel frattempo
+   * un altro utente ha registrato consumi per quel giorno il server risponde 409 e non cancella niente;
+   * in quel caso risincronizzo prima di rifiutare, così il registro si ridisegna con i dati veri.
+   */
+  App.impostaConsumoGiorno = function (articoloId, repartoId, data, quantita, prima) {
+    return root.Api.scrivi('POST', '/api/consumo-giorno', { articoloId: articoloId, repartoId: repartoId, data: data, quantita: quantita, prima: prima })
+      .catch(function (e) {
+        if (e && e.stato === 409) return root.Api.sincronizza().then(function () { throw e; }, function () { throw e; });
+        throw e;
+      });
   };
 
   /* ---------- file ---------- */
@@ -511,10 +533,17 @@
   };
 
   /* Dopo un cambio dei propri permessi (per esempio l'amministratore ha cambiato il suo ruolo). */
-  App.aggiornaUtente = function () {
+  App.aggiornaUtente = function (ridisegna) {
     App.disegnaUtente();
     App.aggiornaLaterale();
-    if (!App.paginaPermessa(App.paginaCorrente)) App.vai('oggi');
+    if (!App.paginaPermessa(App.paginaCorrente)) { App.vai('oggi'); return; }
+    if (!ridisegna) return;
+    // pulsanti e reparti della pagina dipendono dai permessi: ridisegno se non si perde quello che si sta scrivendo
+    var attivo = document.activeElement;
+    var cont = document.getElementById('contenuto');
+    if (attivo && cont.contains(attivo) && inCampo(attivo)) App.mostraBanda('I tuoi permessi sono cambiati.');
+    else App.ridisegna();
+    App.avviso('L’amministratore ha cambiato il tuo ruolo o i tuoi reparti.', 'ok');
   };
 
   /* ---------- aggiornamenti arrivati dal server ---------- */
@@ -557,6 +586,8 @@
     if ((pag === 'configura' || pag === 'utenti') && !cambi.reparti && !cambi.impostazioni && !cambi.cancellati) return;
     // Utenti: ridisegno solo l'elenco (i nomi dei reparti possono essere cambiati)
     if (pag === 'utenti' && App.rinfresca) { App.rinfresca(); return; }
+    // Consumi e Inventario tengono da parte le quantità scritte: si possono aggiornare subito
+    if ((pag === 'consumi' || pag === 'inventario') && App.rinfresca) { App.rinfresca(); return; }
     var cont = document.getElementById('contenuto');
     var attivo = document.activeElement;
     var campoAttivo = !!(attivo && cont.contains(attivo) && inCampo(attivo));
@@ -697,6 +728,8 @@
       App.S = null;
       App._giacenze = null;
       root.Api.rev = 0;
+      root.Api.storia = null;
+      if (App.dimenticaScelte) App.dimenticaScelte();
       document.getElementById('contenuto').innerHTML = '';
       document.getElementById('menu').innerHTML = '';
       document.getElementById('stato-archivio').innerHTML = '';
@@ -723,6 +756,7 @@
       return;
     }
     if (e.key === 'Escape') {
+      document.getElementById('app').classList.remove('menu-aperto');
       if (tendinaAperta()) { apriTendina(false); document.getElementById('utente-btn').focus(); }
       else if (ricercaAperta) chiudiRicerca();
       else if (modaleAperto) App.chiudiModale();
@@ -759,6 +793,14 @@
     document.getElementById('velo').addEventListener('click', function () {
       if (!document.getElementById('ricerca').hidden) chiudiRicerca();
       else App.chiudiModale();
+    });
+    // telefono: il menu laterale si chiude toccando il contenuto o una voce (anche quella già aperta)
+    document.getElementById('contenuto').parentNode.addEventListener('click', function (e) {
+      var app = document.getElementById('app');
+      if (app.classList.contains('menu-aperto') && !e.target.closest('#apri-menu')) app.classList.remove('menu-aperto');
+    });
+    document.getElementById('menu').addEventListener('click', function (e) {
+      if (e.target.closest('a')) document.getElementById('app').classList.remove('menu-aperto');
     });
     var inp = document.getElementById('ricerca-testo');
     inp.addEventListener('input', function () { cercaRapida(inp.value); });
@@ -802,6 +844,8 @@
       App.nascondiBanda();
       App.S = null;
       Api.rev = 0;
+      Api.storia = null;
+      if (App.dimenticaScelte) App.dimenticaScelte(); // date e filtri dell'utente di prima
       sinc = Api.sincronizza({ completa: true });
     }
     return sinc.then(function () {

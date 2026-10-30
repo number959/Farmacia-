@@ -111,11 +111,16 @@ Operazioni.prototype.normalizzaMovimento = function (ctx, m) {
   if (m.tipo === 'carico' && m.prezzo !== undefined && m.prezzo !== null && m.prezzo !== '') {
     out.prezzo = numero(m.prezzo, 'prezzo', { min: 0 });
   }
+  // inventario: la giacenza che il client vedeva quando ha calcolato la differenza
+  if (m.tipo === 'rettifica' && m.teorica !== undefined && m.teorica !== null && m.teorica !== '') {
+    out.teorica = numero(m.teorica, 'giacenza teorica');
+  }
   out.articolo = articolo;
+  out.reparto = reparto;
   return out;
 };
 
-Operazioni.prototype.inserisciMovimento = function (ctx, rev, m) {
+Operazioni.prototype.inserisciMovimento = function (ctx, rev, m, cache) {
   var id = nuovoId('m');
   // millisecondi sempre crescenti: a parità di data i movimenti restano nell'ordine di registrazione
   var creato = m.creato || Math.max(Date.now(), this.ultimoCreato + 1);
@@ -127,29 +132,60 @@ Operazioni.prototype.inserisciMovimento = function (ctx, rev, m) {
     m.fornitore || '', m.documento || '', m.causale || '', m.note || '', m.prezzo === null || m.prezzo === undefined ? null : m.prezzo,
     m.operatore !== undefined ? m.operatore : (ctx.utente ? ctx.utente.nome : ''), m.utenteId !== undefined ? m.utenteId : (ctx.utente ? ctx.utente.id : null),
     creato, rev);
+  if (cache && cache[m.articoloId]) {
+    cache[m.articoloId].push({ id: id, tipo: m.tipo, data: m.data, articoloId: m.articoloId, repartoId: m.repartoId,
+      repartoDestId: m.repartoDestId || undefined, quantita: m.quantita, lotto: m.lotto || '', scadenza: m.scadenza || '', creato: creato, annullato: null });
+  }
   return id;
 };
 
-/* Ripartisce un'uscita sui lotti (FEFO) guardando i movimenti già nel database, anche quelli di questa transazione. */
-Operazioni.prototype.ripartisci = function (m) {
-  var stato = { articoli: [], movimenti: this.database.movimentiArticolo(m.articoloId) };
+/*
+ * Movimenti di un articolo per i calcoli dentro una transazione: letti una volta sola dal database
+ * e poi aggiornati a ogni inserimento (cache), così anche centinaia di righe restano veloci.
+ */
+Operazioni.prototype.statoArticolo = function (articoloId, cache) {
+  if (!cache[articoloId]) cache[articoloId] = this.database.movimentiArticolo(articoloId);
+  return { articoli: [], movimenti: cache[articoloId] };
+};
+
+/* Ripartisce un'uscita sui lotti (FEFO), compresi i movimenti già inseriti in questa transazione. */
+Operazioni.prototype.ripartisci = function (m, cache) {
+  var stato = this.statoArticolo(m.articoloId, cache);
+  if (m.lotto && Calcoli.disponibilitaLotto(stato, m.articoloId, m.repartoId, m.data, m.lotto) <= 0) {
+    throw errore(409, 'Il lotto ' + m.lotto + ' di ' + m.articolo.nome + ' non è più disponibile in ' + m.reparto.nome +
+      ' alla data indicata (forse l’ha appena usato un altro utente): aggiorna e scegli di nuovo il lotto.');
+  }
   return Calcoli.allocaUscita(stato, m.articoloId, m.repartoId, m.data, m.quantita, m.lotto);
 };
 
 Operazioni.prototype.registraMovimenti = function (ctx, lista) {
   if (!Array.isArray(lista) || !lista.length) throw errore(400, 'Nessun movimento da registrare.');
-  if (lista.length > 2000) throw errore(400, 'Troppi movimenti in una volta sola.');
+  if (lista.length > 500) throw errore(400, 'Troppi movimenti in una volta sola (massimo 500).');
   var self = this;
   var normalizzati = lista.map(function (m) { return self.normalizzaMovimento(ctx, m); });
   var r = this.database.scrivi(function (rev) {
     var creati = [];
+    var cache = {};
+    var cambiati = [];
     normalizzati.forEach(function (m) {
+      if (m.tipo === 'rettifica' && m.teorica !== undefined) {
+        var attuale = Calcoli.giacenza(self.statoArticolo(m.articoloId, cache), m.articoloId, m.repartoId, m.data);
+        if (Calcoli.r3(attuale) !== Calcoli.r3(m.teorica)) cambiati.push(m.articolo.nome + ' (ora ' + Calcoli.r3(attuale) + ')');
+      }
+    });
+    if (cambiati.length) {
+      var e = errore(409, 'Mentre contavi, altri movimenti hanno cambiato la giacenza di: ' + cambiati.join(', ') +
+        '. Ho aggiornato le giacenze: controlla le differenze e registra di nuovo.');
+      throw e;
+    }
+    normalizzati.forEach(function (m) {
+      self.statoArticolo(m.articoloId, cache);
       if (USCITE.indexOf(m.tipo) >= 0) {
-        self.ripartisci(m).forEach(function (p) {
-          creati.push(self.inserisciMovimento(ctx, rev, Object.assign({}, m, { quantita: p.quantita, lotto: p.lotto, scadenza: p.scadenza })));
+        self.ripartisci(m, cache).forEach(function (p) {
+          creati.push(self.inserisciMovimento(ctx, rev, Object.assign({}, m, { quantita: p.quantita, lotto: p.lotto, scadenza: p.scadenza }), cache));
         });
       } else {
-        creati.push(self.inserisciMovimento(ctx, rev, m));
+        creati.push(self.inserisciMovimento(ctx, rev, m, cache));
       }
       if (m.tipo === 'carico' && m.prezzo !== null && m.prezzo !== m.articolo.prezzo) {
         self.db().prepare('UPDATE articoli SET prezzo = ?, versione = versione + 1, rev = ? WHERE id = ?').run(m.prezzo, rev, m.articoloId);
@@ -191,12 +227,18 @@ Operazioni.prototype.consumoGiorno = function (ctx, dati) {
   this.richiedi(ctx, 'registro');
   var m = this.normalizzaMovimento(ctx, { tipo: 'consumo', data: dati && dati.data, articoloId: dati && dati.articoloId, repartoId: dati && dati.repartoId, quantita: 1 });
   var quantita = numero(dati.quantita, 'quantità', { min: 0 });
+  // il valore che il client vedeva: se nel frattempo altri hanno registrato consumi per quel giorno, non li cancello
+  var prima = dati.prima === undefined || dati.prima === null || dati.prima === '' ? null : numero(dati.prima, 'valore precedente', { min: 0 });
   var self = this;
   var precedenti = 0;
   var r = this.database.scrivi(function (rev) {
     var esistenti = self.db().prepare("SELECT id, quantita FROM movimenti WHERE tipo = 'consumo' AND articolo_id = ? AND reparto_id = ? AND data = ? AND annullato_il IS NULL")
       .all(m.articoloId, m.repartoId, m.data);
-    esistenti.forEach(function (e) { precedenti += e.quantita; });
+    esistenti.forEach(function (e) { precedenti = Calcoli.r3(precedenti + e.quantita); });
+    if (prima !== null && prima !== precedenti) {
+      throw errore(409, 'Nel frattempo un altro utente ha registrato consumi di ' + m.articolo.nome + ' per quel giorno (ora ' +
+        precedenti + '): ho aggiornato il registro, controlla e correggi di nuovo se serve.');
+    }
     var adesso = new Date().toISOString();
     esistenti.forEach(function (e) {
       self.db().prepare('UPDATE movimenti SET annullato_il = ?, annullato_da = ?, annullato_motivo = ?, rev = ? WHERE id = ?')
@@ -204,7 +246,7 @@ Operazioni.prototype.consumoGiorno = function (ctx, dati) {
     });
     if (quantita > 0) {
       var nuovo = Object.assign({}, m, { quantita: quantita, note: 'Dal registro mensile' });
-      self.ripartisci(nuovo).forEach(function (p) {
+      self.ripartisci(nuovo, {}).forEach(function (p) {
         self.inserisciMovimento(ctx, rev, Object.assign({}, nuovo, { quantita: p.quantita, lotto: p.lotto, scadenza: p.scadenza }));
       });
     }
@@ -308,6 +350,7 @@ Operazioni.prototype.importaArticoli = function (ctx, dati) {
   var self = this;
   var nuovi = 0;
   var carichi = 0;
+  var saltati = 0;
   var r = this.database.scrivi(function (rev) {
     validi.forEach(function (a) {
       var esiste = self.database.articoloPerNome(a.nome);
@@ -318,22 +361,26 @@ Operazioni.prototype.importaArticoli = function (ctx, dati) {
         nuovi++;
       }
       if (conGiacenza && a.giacenza > 0) {
+        // la giacenza iniziale vale solo per chi non ha ancora movimenti in quel reparto: reimportare
+        // lo stesso file (o il modulo del mese dopo) non deve raddoppiare le giacenze
+        var giaMovimentato = esiste && self.db().prepare('SELECT 1 FROM movimenti WHERE articolo_id = ? AND (reparto_id = ? OR reparto_dest_id = ?) AND annullato_il IS NULL LIMIT 1')
+          .get(id, reparto.id, reparto.id);
+        if (giaMovimentato) { saltati++; return; }
         self.inserisciMovimento(ctx, rev, { tipo: 'carico', data: dati.data, articoloId: id, repartoId: reparto.id, quantita: a.giacenza, note: 'Giacenza iniziale importata' + (origine ? ' da ' + origine : '') });
         carichi++;
       }
     });
   });
-  this.accessi.evento(ctx, 'articoli.importa', { origine: origine, righe: validi.length, nuovi: nuovi, carichi: carichi, reparto: reparto ? reparto.id : undefined });
+  this.accessi.evento(ctx, 'articoli.importa', { origine: origine, righe: validi.length, nuovi: nuovi, carichi: carichi, saltati: saltati, reparto: reparto ? reparto.id : undefined });
   this.dopoScrittura(r);
-  return { rev: r.rev, nuovi: nuovi, carichi: carichi };
+  return { rev: r.rev, nuovi: nuovi, carichi: carichi, saltati: saltati };
 };
 
 /* ---------- impostazioni e reparti ---------- */
 
-Operazioni.prototype.salvaImpostazioni = function (ctx, dati) {
-  this.richiedi(ctx, 'impostazioni');
+/* Impostazioni valide (usata sia da Configura sia dall'importazione dell'archivio). */
+function validaImpostazioni(dati) {
   dati = dati || {};
-  var prima = this.database.impostazioni();
   var nuove = {
     struttura: testo(dati.struttura, 100, 'struttura') || 'Clinica Posillipo',
     sottotitolo: testo(dati.sottotitolo, 100, 'sottotitolo'),
@@ -349,6 +396,13 @@ Operazioni.prototype.salvaImpostazioni = function (ctx, dati) {
     if (logo.length > 600000) throw errore(400, 'Il logo è troppo grande: usa un’immagine sotto i 400 KB.');
     nuove.logo = logo;
   }
+  return nuove;
+}
+
+Operazioni.prototype.salvaImpostazioni = function (ctx, dati) {
+  this.richiedi(ctx, 'impostazioni');
+  var prima = this.database.impostazioni();
+  var nuove = validaImpostazioni(dati);
   var self = this;
   var r = this.database.scrivi(function (rev) {
     var st = self.db().prepare('INSERT INTO impostazioni (chiave, valore, rev) VALUES (?, ?, ?) ON CONFLICT(chiave) DO UPDATE SET valore = excluded.valore, rev = excluded.rev');
@@ -413,19 +467,37 @@ Operazioni.prototype.eliminaReparto = function (ctx, id) {
     self.db().prepare('DELETE FROM reparti WHERE id = ?').run(rep.id);
     self.db().prepare('INSERT OR REPLACE INTO cancellati (tabella, id, rev) VALUES (?, ?, ?)').run('reparti', rep.id, rev);
   });
-  this.togliRepartoDagliUtenti(rep.id);
+  var toccati = this.togliRepartoDagliUtenti([rep.id]);
   this.accessi.evento(ctx, 'reparti.elimina', { reparto: rep.nome });
   this.dopoScrittura(r);
-  return { rev: r.rev };
+  return { rev: r.rev, utentiAggiornati: toccati };
 };
 
-Operazioni.prototype.togliRepartoDagliUtenti = function (repartoId) {
+/* Toglie i reparti indicati dagli utenti di reparto (accessi.db). Restituisce gli id degli utenti cambiati. */
+Operazioni.prototype.togliRepartoDagliUtenti = function (repartiIds) {
   var acc = this.database.accessi;
+  var toccati = [];
   acc.prepare('SELECT id, reparti FROM utenti').all().forEach(function (u) {
     var l = [];
     try { l = JSON.parse(u.reparti); } catch (e) { l = []; }
-    if (l.indexOf(repartoId) >= 0) acc.prepare('UPDATE utenti SET reparti = ? WHERE id = ?').run(JSON.stringify(l.filter(function (x) { return x !== repartoId; })), u.id);
+    var resta = l.filter(function (x) { return repartiIds.indexOf(x) < 0; });
+    if (resta.length !== l.length) {
+      acc.prepare('UPDATE utenti SET reparti = ? WHERE id = ?').run(JSON.stringify(resta), u.id);
+      toccati.push(u.id);
+    }
   });
+  return toccati;
+};
+
+/* Dopo un ripristino: gli utenti di reparto tengono solo i reparti che esistono nel magazzino. */
+Operazioni.prototype.allineaRepartiUtenti = function (esistenti) {
+  var mancanti = {};
+  this.database.accessi.prepare('SELECT reparti FROM utenti').all().forEach(function (u) {
+    var l = [];
+    try { l = JSON.parse(u.reparti); } catch (e) { l = []; }
+    l.forEach(function (id) { if (esistenti.indexOf(id) < 0) mancanti[id] = true; });
+  });
+  return Object.keys(mancanti).length ? this.togliRepartoDagliUtenti(Object.keys(mancanti)) : [];
 };
 
 /* ---------- archivio vuoto: dati di prova e importazione dalla versione per un solo PC ---------- */
@@ -469,32 +541,56 @@ Operazioni.prototype.importaArchivio = function (ctx, dati) {
   var nomiUsati = {};
   var mappaArticoli = {};
   var repartiIds = {};
+  var tolti = [];
+  // prima si controlla tutto, poi si scrive: un archivio sbagliato non deve lasciare modifiche a metà
+  var reparti = dati.reparti.map(function (rp, i) {
+    if (!rp || typeof rp !== 'object') throw errore(400, 'L’archivio contiene un reparto non valido.');
+    var id = String(rp.id || '').trim();
+    if (!/^[A-Za-z0-9._-]{1,80}$/.test(id)) id = nuovoId('r');
+    if (repartiIds[id]) throw errore(400, 'L’archivio contiene due reparti con lo stesso codice.');
+    repartiIds[id] = true;
+    return { id: id, nome: testo(rp.nome, 80, 'nome del reparto') || ('Reparto ' + (i + 1)), centrale: !!rp.centrale, attivo: rp.attivo !== false, ordine: i };
+  });
+  if (!reparti.length) throw errore(400, 'L’archivio non contiene reparti.');
+  var idsUsati = {};
+  var articoli = [];
+  dati.articoli.forEach(function (a) {
+    var v;
+    try { v = validaArticolo(a); } catch (e) { scartati++; return; }
+    var base = v.nome;
+    var n = 2;
+    while (nomiUsati[v.nome.toLowerCase()]) v.nome = base + ' (' + (n++) + ')';
+    nomiUsati[v.nome.toLowerCase()] = true;
+    var id = String(a.id || '').trim();
+    if (!/^[A-Za-z0-9._-]{1,80}$/.test(id) || idsUsati[id]) id = nuovoId('a');
+    idsUsati[id] = true;
+    mappaArticoli[a.id] = id;
+    v.id = id;
+    articoli.push(v);
+  });
+  var imp = null;
+  try { imp = validaImpostazioni(Object.assign({}, dati.impostazioni || {}, { logo: (dati.impostazioni || {}).logo || '' })); } catch (e) {
+    // logo non valido: si importano le altre impostazioni e si lascia quello attuale
+    try { var senzaLogo = Object.assign({}, dati.impostazioni || {}); delete senzaLogo.logo; imp = validaImpostazioni(senzaLogo); } catch (e2) { imp = null; }
+  }
   var r = this.database.scrivi(function (rev) {
     // reparti: quelli dell'archivio prendono il posto dei predefiniti
     var vecchi = self.database.reparti();
-    dati.reparti.forEach(function (rp, i) {
-      var id = testo(rp.id, 80, 'id reparto') || nuovoId('r');
-      var nome = testo(rp.nome, 80, 'nome del reparto') || ('Reparto ' + (i + 1));
-      repartiIds[id] = true;
+    reparti.forEach(function (x) {
       self.db().prepare('INSERT INTO reparti (id, nome, centrale, attivo, ordine, rev) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET nome = excluded.nome, centrale = excluded.centrale, attivo = excluded.attivo, ordine = excluded.ordine, rev = excluded.rev')
-        .run(id, nome, rp.centrale ? 1 : 0, rp.attivo === false ? 0 : 1, i, rev);
+        .run(x.id, x.nome, x.centrale ? 1 : 0, x.attivo ? 1 : 0, x.ordine, rev);
+      // un reparto ricreato con un codice già cancellato non deve sparire dai browser
+      self.db().prepare('DELETE FROM cancellati WHERE tabella = ? AND id = ?').run('reparti', x.id);
     });
-    if (!Object.keys(repartiIds).length) throw errore(400, 'L’archivio non contiene reparti.');
     vecchi.forEach(function (v) {
       if (repartiIds[v.id]) return;
       self.db().prepare('DELETE FROM reparti WHERE id = ?').run(v.id);
       self.db().prepare('INSERT OR REPLACE INTO cancellati (tabella, id, rev) VALUES (?, ?, ?)').run('reparti', v.id, rev);
-      self.togliRepartoDagliUtenti(v.id);
+      tolti.push(v.id);
     });
-    dati.articoli.forEach(function (a) {
-      var v;
-      try { v = validaArticolo(a); } catch (e) { scartati++; return; }
-      var base = v.nome;
-      var n = 2;
-      while (nomiUsati[v.nome.toLowerCase()]) v.nome = base + ' (' + (n++) + ')';
-      nomiUsati[v.nome.toLowerCase()] = true;
-      var id = testo(a.id, 80, 'id articolo') || nuovoId('a');
-      mappaArticoli[a.id] = id;
+    articoli.forEach(function (v) {
+      var id = v.id;
+      self.db().prepare('DELETE FROM cancellati WHERE tabella = ? AND id = ?').run('articoli', id);
       self.db().prepare('INSERT INTO articoli (id, nome, categoria, unita, principio, confezione, codice, prezzo, scorta_minima, note, attivo, versione, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
         .run(id, v.nome, v.categoria, v.unita, v.principio, v.confezione, v.codice, v.prezzo, v.scortaMinima, v.note, v.attivo ? 1 : 0, rev);
     });
@@ -515,13 +611,16 @@ Operazioni.prototype.importaArchivio = function (ctx, dati) {
           .run(String(m.annullato.il || new Date().toISOString()), String(m.annullato.da || ''), String(m.annullato.motivo || ''), id);
       }
     });
-    var imp = dati.impostazioni || {};
-    var st = self.db().prepare('INSERT INTO impostazioni (chiave, valore, rev) VALUES (?, ?, ?) ON CONFLICT(chiave) DO UPDATE SET valore = excluded.valore, rev = excluded.rev');
-    ['struttura', 'sottotitolo', 'societa', 'citta', 'giorniAvvisoScadenza', 'codiceModulo'].forEach(function (k) {
-      if (imp[k] !== undefined && imp[k] !== null && String(imp[k]).length <= 200) st.run(k, JSON.stringify(imp[k]), rev);
-    });
-    if (typeof imp.logo === 'string' && imp.logo.length < 600000 && /^data:image\//.test(imp.logo)) st.run('logo', JSON.stringify(imp.logo), rev);
+    if (imp) {
+      var st = self.db().prepare('INSERT INTO impostazioni (chiave, valore, rev) VALUES (?, ?, ?) ON CONFLICT(chiave) DO UPDATE SET valore = excluded.valore, rev = excluded.rev');
+      Object.keys(imp).forEach(function (k) {
+        if (k === 'logo' && !imp.logo) return; // senza logo nell'archivio resta quello attuale
+        st.run(k, JSON.stringify(imp[k]), rev);
+      });
+    }
   });
+  // gli utenti di reparto si aggiornano solo a importazione riuscita (accessi.db è fuori dalla transazione)
+  if (tolti.length) this.togliRepartoDagliUtenti(tolti);
   var conta = this.database.contaMagazzino();
   this.accessi.evento(ctx, 'archivio.importa-versione-singola', { articoli: conta.articoli, movimenti: conta.movimenti, scartati: scartati });
   this.dopoScrittura(r);

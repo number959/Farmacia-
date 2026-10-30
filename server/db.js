@@ -150,6 +150,10 @@ Database.prototype.apri = function () {
   fs.mkdirSync(this.cartella, { recursive: true });
   this.dati = apriFile(this.fileDati);
   creaSchemaDati(this.dati);
+  // "storia" del magazzino: cambia a ogni avvio e a ogni ripristino. I browser che la trovano diversa
+  // ricaricano tutto invece dei soli cambiamenti: così anche il ripristino di una copia della cartella
+  // dati (per esempio dal backup della macchina virtuale) non mescola due storie diverse.
+  this.storia = require('crypto').randomBytes(8).toString('hex');
   if (!this.accessi) {
     this.accessi = apriFile(this.fileAccessi);
     creaSchemaAccessi(this.accessi);
@@ -253,15 +257,16 @@ Database.prototype.contaMagazzino = function () {
  * Cambiamenti dopo la revisione `da`. Se `da` è 0, precede l'ultimo ripristino (rev_base)
  * o è oltre la revisione attuale, restituisce tutto con completo: true.
  */
-Database.prototype.cambiamenti = function (da) {
+Database.prototype.cambiamenti = function (da, storia) {
   var rev = this.rev();
   var base = Number(this.meta('rev_base') || 0);
   da = Number(da) || 0;
-  var completo = da <= 0 || da < base || da > rev;
+  var completo = da <= 0 || da < base || da > rev || (storia !== undefined && storia !== null && storia !== this.storia);
   var soglia = completo ? -1 : da;
   var db = this.dati;
   var out = {
     rev: rev,
+    storia: this.storia,
     completo: completo,
     reparti: db.prepare('SELECT * FROM reparti WHERE rev > ? ORDER BY ordine, nome').all(soglia).map(repartoDaRiga),
     articoli: db.prepare('SELECT * FROM articoli WHERE rev > ?').all(soglia).map(articoloDaRiga),

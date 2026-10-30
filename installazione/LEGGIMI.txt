@@ -20,12 +20,15 @@ INSTALLAZIONE SUL SERVER
 2. Tasto destro su "Installa servizio.bat" > "Esegui come amministratore".
    Lo script:
    - crea un'attività pianificata "Gestionale Farmacia" che avvia il programma
-     all'accensione del server, anche senza nessuno collegato, e lo riavvia
-     se si ferma;
+     all'accensione del server, anche senza nessuno collegato, e ogni 5 minuti
+     controlla che sia in funzione (se si è fermato lo riavvia);
+   - lascia la cartella accessibile solo ad amministratori e SYSTEM;
    - apre la porta 8080 nel firewall di Windows;
    - avvia il programma e mostra gli indirizzi da usare.
-   Per un'altra porta: in PowerShell come amministratore
-       .\installa-servizio.ps1 -Porta 8443
+   Per un'altra porta: apri il "Prompt dei comandi" come amministratore, vai
+   nella cartella e scrivi
+       cd C:\GestionaleFarmacia
+       "Installa servizio.bat" -Porta 8443
 3. Sul server stesso apri http://localhost:8080/ e crea l'AMMINISTRATORE
    (si può fare solo dal server, per sicurezza).
 4. Entra come amministratore: in "Configura" controlla struttura e reparti,
@@ -58,8 +61,18 @@ UTENTI E RUOLI
 Ogni persona ha il proprio utente: ogni movimento porta il nome di chi l'ha
 registrato e il "Registro attività" conserva accessi e operazioni.
 Le password date dall'amministratore vanno cambiate al primo accesso.
-Dopo 5 password sbagliate l'utente si blocca per 15 minuti; l'amministratore
-può sbloccarlo subito dandogli una nuova password.
+Dopo 5 password sbagliate, quell'utente da quel computer resta bloccato per
+15 minuti (da altri computer può entrare); l'amministratore può sbloccarlo
+subito dandogli una nuova password. Dal server stesso (http://localhost) non
+si viene mai bloccati.
+
+ACCESSO D'EMERGENZA (password dell'amministratore dimenticata): sul server
+apri il "Prompt dei comandi" come amministratore e scrivi
+    cd C:\GestionaleFarmacia
+    GestionaleFarmacia.exe --reimposta-password admin
+(al posto di "admin" il nome utente). Il programma mostra una password
+provvisoria, da cambiare al primo accesso. Funziona anche con il servizio
+in funzione.
 Più persone possono lavorare insieme: le modifiche degli altri compaiono da sole.
 
 
@@ -69,7 +82,8 @@ Tutto sta nella cartella "dati" accanto al programma:
   dati\farmacia.db      magazzino (articoli, reparti, movimenti, impostazioni)
   dati\accessi.db       utenti, sessioni, registro attività
   dati\backup\          copie automatiche di ogni giorno (ultime 30) e copie manuali
-  dati\log\             registro del server
+  dati\log\             registro del server (server-AAAA-MM.log) ed eventuali
+                        errori di avvio (errori-avvio.log)
 
 L'amministratore, da Configura, può creare una copia, scaricarla e ripristinarla.
 Consiglio: includi la cartella C:\GestionaleFarmacia\dati nel backup del server
@@ -80,18 +94,22 @@ AGGIORNAMENTO A UNA NUOVA VERSIONE
 ----------------------------------
 1. "Ferma servizio.bat" (come amministratore).
 2. Sostituisci GestionaleFarmacia.exe con quello nuovo. NON toccare la cartella "dati".
-3. "Avvia servizio.bat".
+3. "Avvia servizio.bat" (oppure aspetta: entro 5 minuti riparte da solo).
+Dopo l'aggiornamento i browser già aperti ricaricano i dati da soli.
 
 
 HTTPS (FACOLTATIVO)
 -------------------
 Di serie il programma usa HTTP, adatto a una rete interna. Per cifrare il
 traffico (consigliato se la rete non è solo della clinica): metti certificato
-e chiave in dati\ e crea dati\configurazione.json come
+e chiave in dati\ e crea dati\configurazione.json (c'è un esempio,
+configurazione-esempio.json, da copiare in dati\ con quel nome) come
     { "https": { "cert": "certificato.pem", "key": "chiave.pem" } }
 oppure
     { "https": { "pfx": "certificato.pfx", "passphrase": "..." } }
 poi riavvia il servizio e usa https://indirizzo-del-server:8080/
+Se il certificato non è valido il programma non parte: il motivo è scritto in
+dati\log\errori-avvio.log.
 
 
 DALLA VERSIONE PER UN SOLO PC
@@ -104,8 +122,11 @@ versione per un solo PC".
 
 PROBLEMI
 --------
+- Il programma non parte o il servizio non risponde: guarda
+  dati\log\errori-avvio.log (per esempio porta già usata o certificato non valido).
 - "La porta 8080 è già usata": il programma è già avviato (anche come servizio),
-  oppure un altro programma usa la porta. Usa -Porta con un altro numero.
+  oppure un altro programma usa la porta. Reinstalla con -Porta e un altro numero
+  (vedi INSTALLAZIONE).
 - Le postazioni non si collegano: controlla che il server risponda su
   http://localhost:8080/ e che la regola "Gestionale Farmacia" del firewall
   esista; se c'è un firewall di rete tra postazioni e server, va aperta la porta.

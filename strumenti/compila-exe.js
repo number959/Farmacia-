@@ -156,10 +156,15 @@ async function inietta(fileExe, blob) {
   await inject(fileExe, 'NODE_SEA_BLOB', blob, { sentinelFuse: FUSIBILE, overwrite: true });
 }
 
+/* File di installazione: i testi vanno con gli a capo di Windows (CRLF), anche se compilati da Linux. */
 function copiaSupporto(cartella) {
   const sup = path.join(RADICE, 'installazione');
-  fs.readdirSync(sup).forEach((n) => fs.copyFileSync(path.join(sup, n), path.join(cartella, n)));
-  fs.copyFileSync(path.join(RADICE, 'vendor', 'exceljs.LICENSE'), path.join(cartella, 'LICENZA-ExcelJS.txt'));
+  const copiaTesto = (da, a) => fs.writeFileSync(a, fs.readFileSync(da, 'utf8').replace(/\r?\n/g, '\r\n'), 'utf8');
+  fs.readdirSync(sup).forEach((n) => {
+    const da = path.join(sup, n);
+    if (/\.(txt|bat|ps1|json)$/i.test(n)) copiaTesto(da, path.join(cartella, n)); else fs.copyFileSync(da, path.join(cartella, n));
+  });
+  copiaTesto(path.join(RADICE, 'vendor', 'exceljs.LICENSE'), path.join(cartella, 'LICENZA-ExcelJS.txt'));
 }
 
 function zip(cartella, fileZip) {

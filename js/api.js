@@ -105,6 +105,9 @@
     var scrittura = metodo !== 'GET' && metodo !== 'HEAD';
     var init = { method: metodo, credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } };
     if (scrittura) init.headers['X-Richiesta'] = '1';
+    // l'utente che questa scheda crede di essere: se in un'altra scheda è entrato un altro utente,
+    // il server risponde 401 invece di registrare a nome dell'altro
+    if (App.utente) init.headers['X-Utente'] = App.utente.id;
     if (corpo !== undefined || metodo === 'POST' || metodo === 'PUT') {
       init.headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(corpo === undefined ? {} : corpo);
@@ -152,13 +155,16 @@
     permessiInLettura = true;
     Api.richiesta('GET', '/api/stato', undefined, { senza401: true, senzaRitentativi: true }).then(function (st) {
       permessiInLettura = false;
-      if (!st || !st.utente || !App.utente || st.utente.id !== App.utente.id) return;
+      if (!App.utente) return;
+      // nel browser è entrato un altro utente (o nessuno): questa scheda deve chiedere di nuovo l'accesso
+      if (!st || !st.utente || st.utente.id !== App.utente.id) { Api.sessioneScaduta(); return; }
       var prima = JSON.stringify([App.utente.ruolo, App.permessi]);
       App.utente = st.utente;
       App.permessi = st.permessi || {};
-      if (JSON.stringify([App.utente.ruolo, App.permessi]) !== prima && App.aggiornaUtente) App.aggiornaUtente();
+      if (JSON.stringify([App.utente.ruolo, App.permessi]) !== prima && App.aggiornaUtente) App.aggiornaUtente(true);
     }, function () { permessiInLettura = false; });
   }
+  Api.aggiornaPermessi = aggiornaPermessi;
 
   /* Scrittura seguita dalla sincronizzazione dei dati: risolve con la risposta del server. */
   Api.scrivi = function (metodo, percorso, corpo) {
@@ -191,6 +197,14 @@
     var S = App.S;
     var cambi = { impostazioni: false, reparti: 0, articoli: 0, movimenti: 0, cancellati: 0, completo: !!completo, qualcosa: false };
     if (d.impostazioni) { S.impostazioni = Object.assign({}, d.impostazioni); cambi.impostazioni = true; }
+    // prima le cancellazioni, poi le righe: una riga ricreata con lo stesso id deve restare
+    (Array.isArray(d.cancellati) ? d.cancellati : []).forEach(function (c) {
+      var t = c && c.tabella;
+      if (!t || !Array.isArray(S[t])) return;
+      var prima = S[t].length;
+      S[t] = S[t].filter(function (x) { return x.id !== c.id; });
+      if (S[t].length !== prima) cambi.cancellati++;
+    });
     ['reparti', 'articoli', 'movimenti'].forEach(function (t) {
       var righe = Array.isArray(d[t]) ? d[t] : [];
       if (completo) {
@@ -207,21 +221,17 @@
       });
       cambi[t] = righe.length;
     });
-    (Array.isArray(d.cancellati) ? d.cancellati : []).forEach(function (c) {
-      var t = c && c.tabella;
-      if (!t || !Array.isArray(S[t])) return;
-      var prima = S[t].length;
-      S[t] = S[t].filter(function (x) { return x.id !== c.id; });
-      if (S[t].length !== prima) cambi.cancellati++;
-    });
     cambi.qualcosa = !!(cambi.impostazioni || cambi.reparti || cambi.articoli || cambi.movimenti || cambi.cancellati);
     return cambi;
   }
 
   function eseguiSincronizzazione(opz) {
     var da = opz.completa || !App.S ? 0 : Api.rev;
-    return Api.richiesta('GET', '/api/dati?da=' + encodeURIComponent(da)).then(function (d) {
+    // "storia": cambia quando il server riparte o ripristina una copia; se è diversa il server manda tutto
+    var q = '/api/dati?da=' + encodeURIComponent(da) + (da > 0 && Api.storia ? '&storia=' + encodeURIComponent(Api.storia) : '');
+    return Api.richiesta('GET', q).then(function (d) {
       d = d || {};
+      if (d.storia) Api.storia = d.storia;
       var rev = Number(d.rev);
       if (da > 0 && !d.completo && isFinite(rev) && rev < Api.rev) {
         // il server è tornato indietro (per esempio dopo il ripristino di una copia): ricarico tutto
@@ -270,7 +280,7 @@
     if (root.Accesso && root.Accesso.visibile()) return; // si riapre dopo l'accesso
     if (typeof root.EventSource !== 'function') { avviaPolling(); return; }
     var s;
-    try { s = new root.EventSource(url('/api/eventi')); } catch (e) { avviaPolling(); return; }
+    try { s = new root.EventSource(url('/api/eventi?utente=' + encodeURIComponent(App.utente.id))); } catch (e) { avviaPolling(); return; }
     sorgente = s;
     s.addEventListener('open', function () {
       if (sorgente !== s) return;
@@ -286,6 +296,11 @@
       var rev = d ? Number(d.rev) : NaN;
       // rev più alta: dati nuovi; rev più bassa: il server è stato ripristinato da una copia
       if (!isFinite(rev) || rev !== Api.rev) Api.sincronizzaPresto();
+    });
+    // l'amministratore ha cambiato ruolo o reparti di questo utente
+    s.addEventListener('permessi', function () {
+      if (sorgente !== s) return;
+      aggiornaPermessi();
     });
     s.addEventListener('error', function () {
       if (sorgente !== s) return;
@@ -320,8 +335,25 @@
   Api.avviaAggiornamenti = function () {
     Api.fermaAggiornamenti();
     aggiornaIndicatore();
-    apriSorgente();
+    if (document.hidden) avviaPolling(); else apriSorgente();
   };
+
+  /*
+   * Il browser tiene al massimo 6 collegamenti per server: con molte schede aperte, ognuna con le sue
+   * notifiche, le altre richieste resterebbero in attesa. Le schede nascoste chiudono le notifiche
+   * e controllano ogni 20 secondi; quando tornano visibili si riaggancia tutto.
+   */
+  document.addEventListener('visibilitychange', function () {
+    if (!App.utente || (root.Accesso && root.Accesso.visibile())) return;
+    if (document.hidden) {
+      if (sorgente) { sorgente.close(); sorgente = null; }
+      avviaPolling();
+    } else {
+      fermaPolling();
+      apriSorgente();
+      Api.sincronizzaPresto();
+    }
+  });
 
   Api.fermaAggiornamenti = function () {
     if (sorgente) { sorgente.close(); sorgente = null; }

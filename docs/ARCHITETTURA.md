@@ -58,13 +58,22 @@ permessi = {
 ## Sicurezza
 
 - Password con `scrypt` (sale casuale per utente), minimo 8 caratteri. Le password date dall'amministratore vanno cambiate al primo accesso.
-- 5 tentativi sbagliati bloccano l'utente per 15 minuti.
+- 5 tentativi sbagliati bloccano per 15 minuti la coppia (utente, computer), non l'utente: da un altro computer, e sempre dal
+  server stesso (`127.0.0.1`/`::1`), l'utente vero entra. 100 errori dallo stesso computer bloccano quel computer.
+  Risposta 429, uguale per utenti esistenti e inesistenti; i nomi utente inesistenti non si registrano.
+- Accesso d'emergenza sul server: `GestionaleFarmacia.exe --reimposta-password <utente>` stampa una password provvisoria.
+- 5 password attuali sbagliate in `POST /api/password` chiudono la sessione.
+- Il client manda `X-Utente: <id>` (e `?utente=<id>` alle notifiche): se nello stesso browser un'altra scheda è entrata
+  con un altro utente, il server risponde 401 invece di registrare a nome dell'altro.
+- Corpo massimo: 16 KB per accesso e primo amministratore, 2 MB per le altre richieste, 50 MB per l'importazione dell'archivio
+  (il permesso si controlla prima di leggere il corpo). Al massimo 500 movimenti per richiesta.
 - Sessione: cookie `gf_sessione` `HttpOnly; SameSite=Strict; Path=/` (`Secure` con HTTPS); sul server si conserva solo l'hash del token.
   Scade dopo 8 ore di inattività e comunque dopo 14 ore.
 - Ogni richiesta che modifica (`POST`, `PUT`, `DELETE`) deve avere l'intestazione `X-Richiesta: 1` (protezione CSRF).
 - Intestazioni: `Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'`,
   `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`. Niente script in linea nell'HTML.
-- Primo avvio: finché non esiste nessun utente, il primo amministratore si crea **solo dal server stesso** (richiesta da 127.0.0.1 / ::1).
+- Primo avvio: finché non esiste nessun utente, il primo amministratore si crea **solo dal server stesso** (richiesta da 127.0.0.1 / ::1
+  e intestazione `Host` uguale a `localhost`, `127.0.0.1` o `[::1]`, contro il DNS rebinding).
 - Registro attività (tabella `eventi`): accessi, accessi falliti, uscite, ogni scrittura con utente, ora, indirizzo IP e dettagli.
 
 ## Formato dei dati (come li vede il client)
@@ -99,15 +108,15 @@ Tutte le risposte sono JSON. Errori: stato HTTP 4xx/5xx con `{ "errore": "messag
 ### Dati e aggiornamenti
 | Metodo e percorso | Note |
 |---|---|
-| `GET /api/dati?da=<rev>` | Restituisce ciò che è cambiato dopo la revisione `da` (0 = tutto): `{ rev, completo, impostazioni, reparti: [], articoli: [], movimenti: [], cancellati: [{ tabella: 'articoli'|'reparti', id }] }`. Ogni riga modificata (anche un movimento annullato) ricompare intera. Con `completo: true` (prima richiesta, oppure dopo il ripristino di una copia) la risposta contiene **tutti** i dati e il client deve sostituire il suo stato invece di unirlo. `impostazioni` c'è solo se sono cambiate. |
-| `GET /api/eventi` | Server-Sent Events: `event: rev` con `data: {"rev": N}` a ogni modifica; commento `: ping` ogni 25 s. |
+| `GET /api/dati?da=<rev>` | Restituisce ciò che è cambiato dopo la revisione `da` (0 = tutto): `{ rev, completo, impostazioni, reparti: [], articoli: [], movimenti: [], cancellati: [{ tabella: 'articoli'|'reparti', id }] }`. Ogni riga modificata (anche un movimento annullato) ricompare intera. Con `completo: true` (prima richiesta, oppure dopo il ripristino di una copia) la risposta contiene **tutti** i dati e il client deve sostituire il suo stato invece di unirlo. `impostazioni` c'è solo se sono cambiate. La risposta contiene anche `storia`, che cambia a ogni avvio del server e a ogni ripristino: il client la rimanda (`&storia=`) e, se è diversa, riceve tutto. |
+| `GET /api/eventi` | Server-Sent Events: `event: rev` con `data: {"rev": N}` a ogni modifica; `event: permessi` quando l'amministratore cambia ruolo o reparti di quell'utente; commento `: ping` ogni 25 s. Le schede nascoste chiudono le notifiche e controllano ogni 20 s (il browser tiene al massimo 6 collegamenti per server). |
 
 ### Movimenti
 | Metodo e percorso | Corpo | Note |
 |---|---|---|
-| `POST /api/movimenti` | `{ movimenti: [ { tipo, data, articoloId, repartoId, repartoDestId?, quantita, lotto?, scadenza?, fornitore?, documento?, causale?, note?, prezzo? } ] }` | Tutti nella stessa transazione. Per `consumo`, `perdita`, `trasferimento` il server ripartisce sui lotti (FEFO, prima `lotto` se indicato) e può creare più righe. `rettifica` ha quantità con segno. Un `carico` con `prezzo` aggiorna il prezzo dell'articolo. Risposta `{ rev, movimenti: [creati] }`. |
+| `POST /api/movimenti` | `{ movimenti: [ { tipo, data, articoloId, repartoId, repartoDestId?, quantita, lotto?, scadenza?, fornitore?, documento?, causale?, note?, prezzo?, teorica? } ] }` | Tutti nella stessa transazione (massimo 500). Per `consumo`, `perdita`, `trasferimento` il server ripartisce sui lotti (FEFO, prima `lotto` se indicato, mai oltre la sua disponibilità; 409 se il lotto scelto non c'è più). `rettifica` ha quantità con segno e `teorica` = giacenza su cui il client ha calcolato la differenza (409 se nel frattempo è cambiata). Un `carico` con `prezzo` aggiorna il prezzo dell'articolo. Risposta `{ rev, movimenti: [creati] }`. |
 | `POST /api/movimenti/:id/annulla` | `{ motivo }` | `{ rev }` |
-| `POST /api/consumo-giorno` | `{ articoloId, repartoId, data, quantita }` | Correzione dal registro mensile: annulla i consumi di quel giorno e registra `quantita` (0 = nessun consumo). `{ rev }` |
+| `POST /api/consumo-giorno` | `{ articoloId, repartoId, data, quantita, prima }` | Correzione dal registro mensile: annulla i consumi di quel giorno e registra `quantita` (0 = nessun consumo). `prima` è il consumo che il client vedeva: se è diverso da quello registrato (un altro utente ha registrato nel frattempo) risponde 409 e non cambia niente. `{ rev }` |
 
 ### Anagrafica
 | Metodo e percorso | Corpo | Note |
@@ -115,7 +124,7 @@ Tutte le risposte sono JSON. Errori: stato HTTP 4xx/5xx con `{ "errore": "messag
 | `POST /api/articoli` | articolo senza `id` | `{ rev, articolo }`; 409 se il nome esiste già |
 | `PUT /api/articoli/:id` | articolo con `versione` | 409 se `versione` non è quella attuale (modificato da un altro) |
 | `DELETE /api/articoli/:id` | | solo se non ha movimenti |
-| `POST /api/articoli/importa` | `{ articoli: [{ nome, categoria, prezzo, scortaMinima, unita, giacenza }], repartoId, data, conGiacenza, origine }` | crea gli articoli nuovi (per nome) e, se `conGiacenza`, un carico per le giacenze > 0. `{ rev, nuovi, carichi }` |
+| `POST /api/articoli/importa` | `{ articoli: [{ nome, categoria, prezzo, scortaMinima, unita, giacenza }], repartoId, data, conGiacenza, origine }` | crea gli articoli nuovi (per nome) e, se `conGiacenza`, un carico per le giacenze > 0, solo per gli articoli senza movimenti in quel reparto (reimportare non raddoppia). `{ rev, nuovi, carichi, saltati }` |
 
 ### Amministrazione
 | Metodo e percorso | Ruolo | Note |

@@ -114,3 +114,42 @@ test('date e scadenze', () => {
   assert.equal(C.giorniAllaScadenza('2026-10', '2026-10-30'), 1);
   assert.equal(C.giorniAllaScadenza('2026-09', '2026-10-30'), -30);
 });
+
+test('un lotto scelto non riceve mai più della sua disponibilità', () => {
+  const s = stato([
+    mov('carico', '2026-10-01', 5, { lotto: 'OLD', scadenza: '2026-12' }),
+    mov('carico', '2026-10-01', 100, { lotto: 'NEW', scadenza: '2029-06' }),
+    mov('consumo', '2026-10-02', 5)
+  ]);
+  const parti = C.allocaUscita(s, 'a1', 'far', '2026-10-03', 5, 'OLD');
+  assert.deepEqual(parti, [{ lotto: 'NEW', scadenza: '2029-06', quantita: 5 }]);
+  assert.equal(C.disponibilitaLotto(s, 'a1', 'far', '2026-10-03', 'OLD'), 0);
+  assert.equal(C.disponibilitaLotto(s, 'a1', 'far', '2026-10-03', 'NEW'), 100);
+});
+
+test('un\'uscita registrata prima del carico non lascia lotti negativi', () => {
+  const s = stato([
+    mov('consumo', '2026-10-05', 5),
+    mov('trasferimento', '2026-10-05', 20, { repartoId: 'far', repartoDestId: 'deg', lotto: 'C1', scadenza: '2027-01' }),
+    mov('consumo', '2026-10-05', 15, { repartoId: 'deg' })
+  ].map((m, i) => i === 0 ? Object.assign(m, { repartoId: 'deg' }) : m));
+  assert.equal(C.giacenza(s, 'a1', 'deg'), 0);
+  assert.deepEqual(C.lotti(s, 'a1', 'deg'), []);
+});
+
+test('decimali: nessun resto da arrotondamento', () => {
+  const s = stato([
+    mov('carico', '2026-10-01', 0.3, { lotto: 'A', scadenza: '2027-01' }),
+    mov('consumo', '2026-10-02', 0.1),
+    mov('consumo', '2026-10-03', 0.2)
+  ]);
+  assert.equal(C.giacenza(s, 'a1', 'far'), 0);
+  assert.deepEqual(C.lotti(s, 'a1', 'far'), []);
+  const r = C.registroMensile(s, { repartoId: 'far', anno: 2026, mese: 10, categoria: 'FARMACI' }).righe[0];
+  assert.equal(r.residui, 0);
+  assert.ok(!Object.is(r.residui, -0));
+  const nov = C.registroMensile(s, { repartoId: 'far', anno: 2026, mese: 11, categoria: 'FARMACI' });
+  assert.equal(nov.righe.length, 0);
+  const s2 = stato([mov('carico', '2026-10-01', 1, { lotto: 'A', scadenza: '2027-01' }), mov('carico', '2026-10-01', 5, { lotto: 'B', scadenza: '2028-01' }), mov('consumo', '2026-10-02', 0.9)]);
+  assert.deepEqual(C.allocaUscita(s2, 'a1', 'far', '2026-10-03', 0.1), [{ lotto: 'A', scadenza: '2027-01', quantita: 0.1 }]);
+});

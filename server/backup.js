@@ -108,6 +108,7 @@ Backup.prototype.pianifica = function () {
     try { self.automatica(); } catch (e) { self.log('Copia automatica non riuscita: ' + e.message); }
   }
   giro();
+  if (this.timer) return;
   this.timer = setInterval(giro, 30 * 60 * 1000);
   if (this.timer.unref) this.timer.unref();
 };

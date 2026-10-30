@@ -1,0 +1,4 @@
+installazione/*.txt text eol=crlf
+installazione/*.bat text eol=crlf
+installazione/*.ps1 text eol=crlf
+installazione/*.json text eol=crlf

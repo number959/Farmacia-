@@ -210,6 +210,92 @@ function oggi() {
     await A.waitForTimeout(600);
     await foto(A, '09-oggi');
 
+    /* --- registro: una casella attraversata con Tab non salva; correzione su dati vecchi rifiutata --- */
+    const giornoOggi = new Date().getDate();
+    await F.goto(base + '#registro');
+    await F.waitForSelector('#r-rep');
+    await F.selectOption('#r-rep', 'r-degenza');
+    await F.selectOption('#r-cat', 'FARMACI');
+    await F.waitForTimeout(500);
+    const nMov0 = await F.evaluate(() => App.S.movimenti.length);
+    const cellaF = F.locator('tr[data-art="' + artId + '"] input[data-giorno="' + giornoOggi + '"]');
+    await cellaF.click();
+    await cellaF.press('Tab');
+    await F.waitForTimeout(800);
+    ok((await F.evaluate(() => App.S.movimenti.length)) === nMov0, 'registro: una casella solo attraversata non registra niente');
+    // il farmacista ha la casella in modifica; intanto il reparto registra un consumo dello stesso giorno
+    await cellaF.click();
+    await R.evaluate(([a, d]) => Api.richiesta('POST', '/api/movimenti', { movimenti: [{ tipo: 'consumo', data: d, articoloId: a, repartoId: 'r-degenza', quantita: 1 }] }), [artId, oggi()]);
+    await F.waitForTimeout(1200);
+    await cellaF.fill('9');
+    await cellaF.press('Enter');
+    await F.waitForTimeout(1500);
+    const consumiOggi = await F.evaluate(([a, d]) => App.S.movimenti.filter((m) => !m.annullato && m.tipo === 'consumo' && m.articoloId === a && m.repartoId === 'r-degenza' && m.data === d).reduce((t, m) => t + m.quantita, 0), [artId, oggi()]);
+    ok(consumiOggi === 6, 'registro: la correzione su dati vecchi è rifiutata e il consumo dell’altro utente resta (' + consumiOggi + ')');
+
+    /* --- consumi: le quantità scritte restano usando la ricerca --- */
+    await R.goto(base + '#consumi');
+    await R.waitForSelector('input.q[data-art]');
+    const primoCampo = R.locator('input.q[data-art]').first();
+    const idCampo = await primoCampo.getAttribute('data-art');
+    await primoCampo.fill('4');
+    await R.fill('#c-cerca', 'zzz');
+    await R.waitForTimeout(200);
+    await R.fill('#c-cerca', '');
+    await R.waitForTimeout(200);
+    ok((await R.inputValue('input.q[data-art="' + idCampo + '"]')) === '4', 'consumi: la quantità scritta resta dopo aver usato la ricerca');
+
+    /* --- cambio di ruolo in tempo reale --- */
+    const idDeg = await R.evaluate(() => App.utente.id);
+    await api(A, 'PUT', '/api/utenti/' + idDeg, { nome: 'Luca Infermiere', ruolo: 'farmacista', reparti: [], attivo: true });
+    const promosso = await attendi(async () => (await voci(R)).includes('carico'), 10000);
+    ok(promosso, 'cambio di ruolo: il menu del reparto si aggiorna da solo (ora ha Carico)');
+    await api(A, 'PUT', '/api/utenti/' + idDeg, { nome: 'Luca Infermiere', ruolo: 'reparto', reparti: ['r-degenza'], attivo: true });
+
+    /* --- due schede nello stesso browser: nella seconda entra un altro utente --- */
+    const scheda2 = await D.context().newPage();
+    scheda2.on('pageerror', (e) => errori.push('consultazione scheda 2: ' + e.message));
+    await scheda2.goto(base + '#oggi');
+    await scheda2.waitForSelector('#app:not([hidden])');
+    await D.click('#utente-btn');
+    await D.click('#utente-esci');
+    await D.waitForSelector('#acc-form');
+    await D.fill('#acc-user', 'farma');
+    await D.fill('#acc-pw', PW);
+    await D.click('#acc-invia');
+    await D.waitForSelector('#app:not([hidden])');
+    const vecchia = await api(scheda2, 'GET', '/api/dati?da=0');
+    ok(!vecchia.ok && vecchia.stato === 401, 'due schede: quella rimasta con l’utente di prima non agisce a nome del nuovo utente');
+    await scheda2.close();
+
+    /* --- telefono: nessuna pagina più larga dello schermo --- */
+    const T = await nuovaPagina('telefono');
+    await T.setViewportSize({ width: 390, height: 800 });
+    await entra(T, 'admin', PW);
+    const larghe = [];
+    for (const pag of ['oggi', 'carico', 'consumi', 'giacenze', 'movimenti', 'registro', 'articoli', 'utenti']) {
+      await T.goto(base + '#' + pag);
+      await T.waitForTimeout(400);
+      const troppo = await T.evaluate(() => {
+        if (document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1) return null;
+        const W = document.documentElement.clientWidth;
+        let el = Array.prototype.find.call(document.querySelectorAll('body *'), (x) => { const r = x.getBoundingClientRect(); return r.right > W + 1 && r.width > 0 && !x.closest('.tabella-contenitore, .registro-contenitore'); });
+        if (!el) {
+          // elemento più a destra fra quelli non dentro un riquadro che scorre
+          let max = 0;
+          document.querySelectorAll('body *').forEach((x) => { const r = x.getBoundingClientRect(); if (r.right > max && !x.closest('.tabella-contenitore, .registro-contenitore')) { max = r.right; el = x; } });
+        }
+        return document.documentElement.scrollWidth + ' ' + (el ? el.tagName + '#' + el.id + '.' + el.className + ' ' + Math.round(el.getBoundingClientRect().right) + ' ' + getComputedStyle(el).position : '?');
+      });
+      if (troppo) larghe.push(pag + ' ' + troppo);
+    }
+    ok(larghe.length === 0, 'telefono: nessuna pagina più larga dello schermo' + (larghe.length ? ' (troppo larghe: ' + larghe.join(', ') + ')' : ''));
+    await T.click('#apri-menu');
+    await T.waitForTimeout(250);
+    await T.locator('#contenuto').click({ position: { x: 370, y: 300 }, force: true });
+    await T.waitForTimeout(250);
+    ok(!(await T.evaluate(() => document.getElementById('app').classList.contains('menu-aperto'))), 'telefono: il menu si chiude toccando la pagina');
+
     /* --- uscita e sessione --- */
     await F.click('#utente-btn');
     await F.click('#utente-esci');

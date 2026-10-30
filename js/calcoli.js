@@ -15,6 +15,12 @@
 
   var SENZA_LOTTO = '';
 
+  // Le quantità hanno al massimo 3 decimali: arrotondo ogni somma per evitare resti come 2,8e-17
+  function r3(x) {
+    var v = Math.round((Number(x) || 0) * 1000) / 1000;
+    return v === 0 ? 0 : v; // niente -0
+  }
+
   function attivi(stato) {
     return stato.movimenti.filter(function (m) { return !m.annullato; });
   }
@@ -54,9 +60,9 @@
 
   /* Giacenza di un articolo in un reparto alla fine del giorno finoA (compreso). */
   function giacenza(stato, articoloId, repartoId, finoA) {
-    return movimentiDi(stato, articoloId, repartoId, finoA).reduce(function (s, m) {
+    return r3(movimentiDi(stato, articoloId, repartoId, finoA).reduce(function (s, m) {
       return s + effetto(m, repartoId);
-    }, 0);
+    }, 0));
   }
 
   /* Tutte le giacenze: { 'articolo|reparto': quantita } (solo le coppie con movimenti). */
@@ -68,7 +74,7 @@
       if (m.tipo === 'trasferimento') reparti.push(m.repartoDestId);
       reparti.forEach(function (r) {
         var k = m.articoloId + '|' + r;
-        out[k] = (out[k] || 0) + effetto(m, r);
+        out[k] = r3((out[k] || 0) + effetto(m, r));
       });
     });
     return out;
@@ -100,8 +106,8 @@
       if (nome && mappa[nome]) {
         var l = mappa[nome];
         var presa = Math.min(q, Math.max(l.quantita, 0));
-        l.quantita -= presa;
-        q -= presa;
+        l.quantita = r3(l.quantita - presa);
+        q = r3(q - presa);
       }
       if (q <= 0) return;
       var candidati = ordine.map(function (k) { return mappa[k]; })
@@ -109,46 +115,64 @@
         .sort(confrontaScadenza);
       for (var i = 0; i < candidati.length && q > 0; i++) {
         var p = Math.min(q, candidati[i].quantita);
-        candidati[i].quantita -= p;
-        q -= p;
+        candidati[i].quantita = r3(candidati[i].quantita - p);
+        q = r3(q - p);
       }
-      if (q > 0) lotto(nome || SENZA_LOTTO, '').quantita -= q;
+      // uscita senza giacenza (registrata prima del carico): resta un debito sul "senza lotto"
+      if (q > 0) { var d = lotto(SENZA_LOTTO, ''); d.quantita = r3(d.quantita - q); }
     }
     movimentiDi(stato, articoloId, repartoId, finoA).forEach(function (m) {
-      var e = effetto(m, repartoId);
-      if (e > 0) lotto(m.lotto, m.scadenza).quantita += e;
-      else if (e < 0) preleva(-e, m.lotto);
+      var e = r3(effetto(m, repartoId));
+      if (e > 0) {
+        // un'entrata copre prima l'eventuale debito, così la somma dei lotti resta uguale alla giacenza
+        var debito = mappa[SENZA_LOTTO];
+        if (debito && debito.quantita < 0) {
+          var copre = Math.min(e, -debito.quantita);
+          debito.quantita = r3(debito.quantita + copre);
+          e = r3(e - copre);
+        }
+        if (e > 0) { var l = lotto(m.lotto, m.scadenza); l.quantita = r3(l.quantita + e); }
+      } else if (e < 0) preleva(-e, m.lotto);
     });
     return ordine.map(function (k) { return mappa[k]; })
-      .filter(function (l) { return Math.abs(l.quantita) > 1e-9; })
+      .filter(function (l) { return l.quantita !== 0; })
       .sort(confrontaScadenza);
   }
 
   /*
    * Ripartisce un'uscita sui lotti disponibili (FEFO) al momento del salvataggio:
-   * restituisce [{ lotto, scadenza, quantita }]. Se un lotto e' indicato lo usa per primo.
+   * restituisce [{ lotto, scadenza, quantita }]. Se un lotto è indicato lo usa per primo,
+   * ma mai oltre la sua disponibilità (il resto va sugli altri lotti, poi su "senza lotto").
    */
   function allocaUscita(stato, articoloId, repartoId, data, quantita, lottoScelto) {
     var disponibili = lotti(stato, articoloId, repartoId, data).filter(function (l) { return l.quantita > 0; });
-    var q = Number(quantita) || 0;
+    var q = r3(quantita);
     var parti = [];
     if (lottoScelto) {
       var scelto = disponibili.filter(function (l) { return l.lotto === lottoScelto; })[0];
-      var presa = scelto ? Math.min(q, scelto.quantita) : q;
-      parti.push({ lotto: lottoScelto, scadenza: scelto ? scelto.scadenza : '', quantita: presa });
-      if (scelto) scelto.quantita -= presa;
-      q -= presa;
+      if (scelto) {
+        var presa = Math.min(q, scelto.quantita);
+        parti.push({ lotto: scelto.lotto, scadenza: scelto.scadenza, quantita: presa });
+        scelto.quantita = r3(scelto.quantita - presa);
+        q = r3(q - presa);
+      }
     }
     for (var i = 0; i < disponibili.length && q > 0; i++) {
       var l = disponibili[i];
       if (l.quantita <= 0) continue;
       var p = Math.min(q, l.quantita);
       var gia = parti.filter(function (x) { return x.lotto === l.lotto; })[0];
-      if (gia) gia.quantita += p; else parti.push({ lotto: l.lotto, scadenza: l.scadenza, quantita: p });
-      q -= p;
+      if (gia) gia.quantita = r3(gia.quantita + p); else parti.push({ lotto: l.lotto, scadenza: l.scadenza, quantita: p });
+      q = r3(q - p);
     }
     if (q > 0) parti.push({ lotto: '', scadenza: '', quantita: q });
     return parti.filter(function (x) { return x.quantita > 0; });
+  }
+
+  /* Disponibilità di un lotto in un reparto a una data (0 se non c'è). */
+  function disponibilitaLotto(stato, articoloId, repartoId, data, nomeLotto) {
+    var l = lotti(stato, articoloId, repartoId, data).filter(function (x) { return x.lotto === nomeLotto; })[0];
+    return l && l.quantita > 0 ? l.quantita : 0;
   }
 
   function giorniNelMese(anno, mese) {
@@ -225,19 +249,19 @@
           var e = effetto(m, repartoId);
           var giorno = Number(m.data.slice(8, 10));
           if (m.tipo === 'consumo' || (m.tipo === 'trasferimento' && e < 0)) {
-            r.consumi[giorno - 1] += -e;
+            r.consumi[giorno - 1] = r3(r.consumi[giorno - 1] - e);
           } else if (m.tipo === 'perdita') {
-            r.perdite += -e;
+            r.perdite = r3(r.perdite - e);
           } else if (e > 0) {
-            r.carichi += e;          // carichi, trasferimenti ricevuti, rettifiche in aumento
+            r.carichi = r3(r.carichi + e);          // carichi, trasferimenti ricevuti, rettifiche in aumento
           } else if (e < 0) {
-            r.perdite += -e;         // rettifiche in diminuzione
+            r.perdite = r3(r.perdite - e);          // rettifiche in diminuzione
           }
         });
-        r.totaleCarico = r.residuiPrec + r.carichi;
-        r.totaleConsumo = r.consumi.reduce(function (s, x) { return s + x; }, 0);
-        r.totaleScarico = r.totaleConsumo + r.perdite;
-        r.residui = r.totaleCarico - r.totaleScarico;
+        r.totaleCarico = r3(r.residuiPrec + r.carichi);
+        r.totaleConsumo = r3(r.consumi.reduce(function (s, x) { return s + x; }, 0));
+        r.totaleScarico = r3(r.totaleConsumo + r.perdite);
+        r.residui = r3(r.totaleCarico - r.totaleScarico);
         r.importoScarico = Math.round(r.totaleScarico * r.prezzo * 100) / 100;
         var restanti = lotti(stato, a.id, repartoId, fine).filter(function (l) { return l.quantita > 0 && l.scadenza; });
         r.scadenza = restanti.length ? restanti[0].scadenza : '';
@@ -259,6 +283,8 @@
 
   var api = {
     effetto: effetto,
+    r3: r3,
+    disponibilitaLotto: disponibilitaLotto,
     giacenza: giacenza,
     tutteLeGiacenze: tutteLeGiacenze,
     lotti: lotti,

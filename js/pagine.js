@@ -423,8 +423,17 @@
       info.textContent = (a.categoria === 'PRESIDI' ? 'Presidio' : 'Farmaco') + (rep ? ' · in ' + App.nomeReparto(rep) + ': ' + App.fmtNum(App.giacenza(a.id, rep)) + (a.unita ? ' ' + a.unita : '') : '');
       var sel = tr.querySelector('.r-lotto-scelta');
       if (sel && sel.getAttribute('data-per') !== a.id) { sel.innerHTML = opzioniLotti(a.id); sel.setAttribute('data-per', a.id); }
+      // prezzo proposto dall'anagrafica: se l'articolo della riga cambia, cambia anche il prezzo
+      // (a meno che l'utente non l'abbia scritto a mano)
       var pr = tr.querySelector('.r-prezzo');
-      if (pr && !pr.value && a.prezzo) pr.value = String(a.prezzo).replace('.', ',');
+      if (pr && pr.getAttribute('data-per') !== a.id) {
+        var proposto = pr.getAttribute('data-proposto');
+        if (!pr.value || pr.value === proposto) {
+          pr.value = a.prezzo ? App.fmtCampo(a.prezzo) : '';
+          pr.setAttribute('data-proposto', pr.value);
+        }
+        pr.setAttribute('data-per', a.id);
+      }
     }
 
     function nuovaRiga(articoloId) {
@@ -620,6 +629,11 @@
     // solo i reparti in cui l'utente può registrare
     var lista = App.repartiScrivibili();
     if (!lista.length) { cont.innerHTML = senzaReparti(); return; }
+    if (par.repartoId && !lista.some(function (r) { return r.id === par.repartoId; })) {
+      // arrivo da Scadenze per un reparto non attivo o non mio: non passo in silenzio a un altro reparto
+      App.avviso('Non puoi registrare perdite in ' + App.nomeReparto(par.repartoId) + ' (reparto non attivo o non tuo).', 'errore');
+      par = {};
+    }
     var rep = repartoTra(lista, par.repartoId, true);
     moduloRighe(cont, {
       titolo: 'Perdite, scaduti e resi',
@@ -650,7 +664,7 @@
       var tr = cont.querySelector('#righe tr');
       var sel = tr.querySelector('.r-lotto-scelta');
       sel.value = par.lotto;
-      tr.querySelector('.r-q').value = App.fmtNum(par.quantita || '');
+      tr.querySelector('.r-q').value = App.fmtCampo(par.quantita || '');
       tr.querySelector('.r-causale').value = 'Scaduto';
     }
   };
@@ -658,13 +672,27 @@
   /* ======================= CONSUMI DEL GIORNO ======================= */
 
   var memoriaConsumi = {};
+  // quantità scritte e non ancora registrate ('reparto|data|articolo' -> testo): restano anche se la tabella
+  // si ridisegna (filtri, ricerca, annulli, "Aggiorna" dopo i movimenti di altri utenti)
+  var scrittiConsumi = {};
+  var contatiInventario = {};
+
+  /* Dopo l'uscita o con un altro utente le scelte di prima (date, filtri, quantità scritte) si dimenticano. */
+  App.dimenticaScelte = function () {
+    memoriaConsumi = {};
+    memoriaRegistro = {};
+    scrittiConsumi = {};
+    contatiInventario = {};
+    if (App.dimenticaAttivita) App.dimenticaAttivita();
+  };
 
   P.consumi = function (cont, par) {
     // solo i reparti in cui l'utente può registrare
     var reparti = App.repartiScrivibili();
     if (!reparti.length) { cont.innerHTML = senzaReparti(); return; }
     var rep = repartoTra(reparti, memoriaConsumi.rep, false);
-    var data = memoriaConsumi.data || App.oggi();
+    // la data scelta vale per la giornata in cui è stata scelta: il giorno dopo si riparte da oggi
+    var data = memoriaConsumi.data && memoriaConsumi.sceltaIl === App.oggi() ? memoriaConsumi.data : App.oggi();
     var cat = memoriaConsumi.cat || '';
     var tutti = !!memoriaConsumi.tutti;
 
@@ -680,9 +708,10 @@
       '</div><div id="c-foglio"></div><div id="c-fatti"></div>';
 
     function stato() {
-      memoriaConsumi = { rep: valore(cont, '#c-rep'), data: valore(cont, '#c-data'), cat: valore(cont, '#c-cat'), tutti: cont.querySelector('#c-tutti').checked };
+      memoriaConsumi = { rep: valore(cont, '#c-rep'), data: valore(cont, '#c-data'), cat: valore(cont, '#c-cat'), tutti: cont.querySelector('#c-tutti').checked, sceltaIl: App.oggi() };
       return memoriaConsumi;
     }
+    function chiave(st, art) { return st.rep + '|' + st.data + '|' + art; }
 
     function consumatiNelGiorno(st) {
       var per = {};
@@ -698,7 +727,7 @@
       var testo = valore(cont, '#c-cerca').trim().toLowerCase();
       var lista = App.articoliAttivi(st.cat).filter(function (a) {
         if (testo && a.nome.toLowerCase().indexOf(testo) < 0) return false;
-        return st.tutti || App.giacenza(a.id, st.rep) > 0 || gia[a.id];
+        return st.tutti || App.giacenza(a.id, st.rep) > 0 || gia[a.id] || scrittiConsumi[chiave(st, a.id)];
       });
       var corpo;
       if (!lista.length) {
@@ -711,19 +740,23 @@
               '<td>' + etichettaCategoria(a.categoria) + '</td>' +
               '<td class="n">' + App.fmtNum(App.giacenza(a.id, st.rep)) + (a.unita ? ' <span class="tenue">' + h(a.unita) + '</span>' : '') + '</td>' +
               '<td class="n">' + (gia[a.id] ? App.fmtNum(gia[a.id]) : '<span class="tenue">—</span>') + '</td>' +
-              '<td class="n"><input class="q" inputmode="decimal" data-art="' + h(a.id) + '" placeholder="0" aria-label="Consumo di ' + h(a.nome) + '"></td></tr>';
+              '<td class="n"><input class="q" inputmode="decimal" data-art="' + h(a.id) + '" placeholder="0" value="' + h(scrittiConsumi[chiave(st, a.id)] || '') + '" aria-label="Consumo di ' + h(a.nome) + '"></td></tr>';
           }).join('') + '</tbody></table></div>';
       }
       cont.querySelector('#c-foglio').innerHTML = scheda('Consumi di ' + h(App.nomeReparto(st.rep)) + ' · ' + App.dataLunga(st.data), corpo,
         '<span class="nota">Scrivi le quantità usate, poi “Registra consumi”. Invio passa alla riga sotto.</span>', true);
       var fatti = movimentiRecenti(function (m) { return m.tipo === 'consumo' && m.repartoId === st.rep && m.data === st.data; }, 200);
       cont.querySelector('#c-fatti').innerHTML = scheda('Consumi già registrati in questo giorno', tabellaMovimenti(fatti, true), '', true);
+      cont.querySelectorAll('#c-foglio input.q').forEach(function (inp) { inp.closest('tr').classList.toggle('compilata', App.numero(inp.value) > 0); });
     }
 
     cont.querySelectorAll('#c-data, #c-rep, #c-cat, #c-tutti').forEach(function (el) { el.addEventListener('change', disegna); });
     cont.querySelector('#c-cerca').addEventListener('input', disegna);
     cont.addEventListener('input', function (e) {
-      if (e.target.classList.contains('q')) e.target.closest('tr').classList.toggle('compilata', App.numero(e.target.value) > 0);
+      if (!e.target.classList.contains('q')) return;
+      e.target.closest('tr').classList.toggle('compilata', App.numero(e.target.value) > 0);
+      var k = chiave(stato(), e.target.getAttribute('data-art'));
+      if (e.target.value.trim()) scrittiConsumi[k] = e.target.value; else delete scrittiConsumi[k];
     });
     cont.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && e.target.classList.contains('q')) {
@@ -743,9 +776,12 @@
       var bottone = this;
       var st = stato();
       var righe = [];
-      cont.querySelectorAll('input.q[data-art]').forEach(function (inp) {
-        var q = App.numero(inp.value);
-        if (q > 0) righe.push({ articoloId: inp.getAttribute('data-art'), quantita: q });
+      // anche le quantità scritte in righe ora nascoste dal filtro
+      Object.keys(scrittiConsumi).forEach(function (k) {
+        var p = k.split('|');
+        if (p[0] !== st.rep || p[1] !== st.data) return;
+        var q = App.numero(scrittiConsumi[k]);
+        if (q > 0 && App.articolo(p[2])) righe.push({ articoloId: p[2], quantita: q });
       });
       if (!righe.length) { App.avviso('Non hai scritto nessuna quantità.', 'errore'); return; }
       var scoperti = righe.filter(function (r) { return r.quantita > App.giacenza(r.articoloId, st.rep); });
@@ -762,6 +798,7 @@
         bottone.disabled = true;
         App.aggiungiMovimenti(movimenti).then(function () {
           bottone.disabled = false;
+          righe.forEach(function (r) { delete scrittiConsumi[chiave(st, r.articoloId)]; });
           App.avviso('Consumi registrati: ' + righe.length + (righe.length === 1 ? ' articolo' : ' articoli'), 'ok');
           disegna();
         }, function (e) {
@@ -772,6 +809,14 @@
       });
     });
 
+    // movimenti di altri utenti: giacenze e "già registrati" si aggiornano, le quantità scritte e il cursore restano
+    App.rinfresca = function () {
+      if (!document.body.contains(cont)) return;
+      var a = document.activeElement;
+      var fuoco = a && cont.contains(a) && a.matches('input.q[data-art]') ? a.getAttribute('data-art') : null;
+      disegna();
+      if (fuoco) { var i = cont.querySelector('input.q[data-art="' + fuoco + '"]'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }
+    };
     disegna();
     var primo = cont.querySelector('input.q');
     if (primo) primo.focus();
@@ -903,7 +948,7 @@
               '<td><a href="#" data-scheda="' + h(l.articolo.id) + '">' + h(l.articolo.nome) + '</a></td>' +
               '<td class="mono">' + h(l.lotto || '—') + '</td><td>' + h(l.reparto.nome) + '</td>' +
               '<td class="n">' + App.fmtNum(l.quantita) + '</td>' +
-              '<td class="azioni">' + (l.giorni !== null && l.giorni < 0 && App.puo('perdita') && App.repartoPermesso(l.reparto.id) ? '<button class="btn piccolo pericolo" type="button" data-perdita="' + h(l.articolo.id) + '|' + h(l.reparto.id) + '|' + h(l.lotto) + '|' + l.quantita + '">Togli dal magazzino</button>' : '') + '</td></tr>';
+              '<td class="azioni">' + (l.giorni !== null && l.giorni < 0 && App.puo('perdita') && App.repartiScrivibili().some(function (r) { return r.id === l.reparto.id; }) ? '<button class="btn piccolo pericolo" type="button" data-perdita="' + h(l.articolo.id) + '|' + h(l.reparto.id) + '|' + h(l.lotto) + '|' + l.quantita + '">Togli dal magazzino</button>' : '') + '</td></tr>';
           }).join('') + '</tbody></table></div>'
           : vuoto('Nessun lotto in questo intervallo', 'I lotti compaiono qui quando nel carico indichi lotto e scadenza.'),
         '<span class="nota">' + lista.length + ' lotti</span>', true);
@@ -1001,24 +1046,40 @@
       var rep = valore(cont, '#i-rep'), cat = valore(cont, '#i-cat'), data = valore(cont, '#i-data');
       var testo = valore(cont, '#i-cerca').trim().toLowerCase();
       var lista = App.articoliAttivi(cat).filter(function (a) { return !testo || a.nome.toLowerCase().indexOf(testo) >= 0; });
+      var chiave = function (a) { return rep + '|' + data + '|' + a; };
       cont.querySelector('#i-tab').innerHTML = scheda('Conta di ' + h(App.nomeReparto(rep)) + ' al ' + App.fmtData(data),
         lista.length ? '<div class="tabella-contenitore"><table class="tabella"><thead><tr><th>Articolo</th><th>Categoria</th><th class="n">Giacenza nel programma</th><th class="n">Quantità contata</th><th class="n">Differenza</th></tr></thead><tbody>' +
           lista.map(function (a) {
             var g = C.giacenza(App.S, a.id, rep, data);
+            var contato = contatiInventario[chiave(a.id)] || '';
             return '<tr><td>' + h(a.nome) + '</td><td>' + etichettaCategoria(a.categoria) + '</td><td class="n">' + App.fmtNum(g) + (a.unita ? ' <span class="tenue">' + h(a.unita) + '</span>' : '') + '</td>' +
-              '<td class="n"><input class="q" inputmode="decimal" data-art="' + h(a.id) + '" data-teorica="' + g + '" placeholder="—"></td><td class="n diff"></td></tr>';
+              '<td class="n"><input class="q" inputmode="decimal" data-art="' + h(a.id) + '" data-teorica="' + g + '" placeholder="—" value="' + h(contato) + '"></td><td class="n diff">' + differenza(contato, g) + '</td></tr>';
           }).join('') + '</tbody></table></div>'
           : vuoto('Nessun articolo', ''),
-        '<span class="nota">Scrivi solo le quantità contate: le righe vuote non cambiano.</span>', true);
+        '<span class="nota">Scrivi solo le quantità contate: le righe vuote non cambiano. Se altri registrano movimenti mentre conti, la giacenza si aggiorna e le quantità scritte restano.</span>', true);
     }
+
+    function differenza(testo, teorica) {
+      if (String(testo).trim() === '') return '';
+      var d = C.r3(App.numero(testo) - teorica);
+      return d ? '<span class="etichetta ' + (d < 0 ? 'pericolo' : 'info') + '">' + (d > 0 ? '+' : '') + App.fmtNum(d) + '</span>' : '<span class="etichetta ok">uguale</span>';
+    }
+    // con altri utenti al lavoro la giacenza teorica si aggiorna, le quantità contate restano
+    App.rinfresca = function () {
+      if (!document.body.contains(cont)) return;
+      var a = document.activeElement;
+      var fuoco = a && cont.contains(a) && a.matches('input.q[data-art]') ? a.getAttribute('data-art') : null;
+      disegna();
+      if (fuoco) { var i = cont.querySelector('input.q[data-art="' + fuoco + '"]'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }
+    };
     cont.querySelectorAll('select, input[type=date]').forEach(function (el) { el.addEventListener('change', disegna); });
     cont.querySelector('#i-cerca').addEventListener('input', disegna);
     cont.addEventListener('input', function (e) {
       if (!e.target.classList.contains('q')) return;
       var td = e.target.closest('tr').querySelector('.diff');
-      if (e.target.value.trim() === '') { td.textContent = ''; return; }
-      var d = App.numero(e.target.value) - Number(e.target.getAttribute('data-teorica'));
-      td.innerHTML = d ? '<span class="etichetta ' + (d < 0 ? 'pericolo' : 'info') + '">' + (d > 0 ? '+' : '') + App.fmtNum(d) + '</span>' : '<span class="etichetta ok">uguale</span>';
+      var k = valore(cont, '#i-rep') + '|' + valore(cont, '#i-data') + '|' + e.target.getAttribute('data-art');
+      if (e.target.value.trim()) contatiInventario[k] = e.target.value; else delete contatiInventario[k];
+      td.innerHTML = differenza(e.target.value, Number(e.target.getAttribute('data-teorica')));
     });
     cont.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && e.target.classList.contains('q')) {
@@ -1033,10 +1094,15 @@
       var bottone = this;
       var rep = valore(cont, '#i-rep'), data = valore(cont, '#i-data');
       var mov = [];
-      cont.querySelectorAll('input.q[data-art]').forEach(function (inp) {
-        if (inp.value.trim() === '') return;
-        var d = Math.round((App.numero(inp.value) - Number(inp.getAttribute('data-teorica'))) * 1000) / 1000;
-        if (d) mov.push({ tipo: 'rettifica', data: data, articoloId: inp.getAttribute('data-art'), repartoId: rep, quantita: d, note: 'Inventario del ' + App.fmtData(data) });
+      var registrate = [];
+      Object.keys(contatiInventario).forEach(function (k) {
+        var p = k.split('|');
+        if (p[0] !== rep || p[1] !== data || !App.articolo(p[2])) return;
+        // la differenza si calcola adesso, sulla giacenza attuale; il server controlla che non sia cambiata
+        var teorica = C.giacenza(App.S, p[2], rep, data);
+        var d = C.r3(App.numero(contatiInventario[k]) - teorica);
+        registrate.push(k);
+        if (d) mov.push({ tipo: 'rettifica', data: data, articoloId: p[2], repartoId: rep, quantita: d, teorica: teorica, note: 'Inventario del ' + App.fmtData(data) });
       });
       if (!mov.length) { App.avviso('Nessuna differenza da registrare.'); return; }
       App.conferma('Registra inventario', 'Registro ' + mov.length + (mov.length === 1 ? ' rettifica' : ' rettifiche') + ' in ' + h(App.nomeReparto(rep)) + ' alla data ' + App.fmtData(data) + '?', 'Registra').then(function (ok) {
@@ -1044,11 +1110,14 @@
         bottone.disabled = true;
         App.aggiungiMovimenti(mov).then(function () {
           bottone.disabled = false;
+          registrate.forEach(function (k) { delete contatiInventario[k]; });
           App.avviso('Inventario registrato', 'ok');
           disegna();
         }, function (e) {
           bottone.disabled = false;
           App.avviso('Inventario non registrato: ' + messaggioErrore(e), 'errore');
+          // giacenza cambiata nel frattempo: aggiorno i dati, le quantità contate restano
+          if (e && e.stato === 409) root.Api.sincronizza().then(disegna, disegna);
         });
       });
     });
@@ -1123,7 +1192,7 @@
           r.consumi.map(function (q, i) {
             var tr = trasferimentiUscita[r.articoloId + '|' + (i + 1)];
             return '<td class="g' + (festivo(i + 1) ? ' festivo' : '') + '"' + (tr ? ' title="Comprende ' + App.fmtNum(tr) + ' trasferiti ad altri reparti"' : '') + '>' +
-              (modificabile ? '<input data-giorno="' + (i + 1) + '" value="' + fmt(q) + '" inputmode="decimal" aria-label="Giorno ' + (i + 1) + '">' : '<span class="sola">' + fmt(q) + '</span>') + '</td>';
+              (modificabile ? '<input data-giorno="' + (i + 1) + '" value="' + App.fmtCampo(q) + '" inputmode="decimal" aria-label="Giorno ' + (i + 1) + '">' : '<span class="sola">' + fmt(q) + '</span>') + '</td>';
           }).join('') +
           '<td class="tot">' + fmt(r.totaleConsumo) + '</td><td>' + fmt(r.perdite) + '</td><td class="tot">' + fmt(r.totaleScarico) + '</td>' +
           '<td>' + (r.scadenza ? C.scadenzaBreve(r.scadenza) : '') + '</td><td class="tot' + (r.residui < 0 ? ' neg' : '') + '">' + App.fmtNum(r.residui) + '</td>' +
@@ -1178,11 +1247,12 @@
       if (!riga) return; // casella di una tabella già ridisegnata
       var vecchio = riga.consumi[giorno - 1];
       var nuovo = App.numero(inp.value);
-      if (nuovo === vecchio) { if (prossimo) spostaFuoco(art, prossimo); return; }
+      // casella non toccata (per esempio solo attraversata con Tab): niente da salvare
+      if (inp.value === inp.defaultValue || nuovo === vecchio) { if (prossimo) spostaFuoco(art, prossimo); return; }
       var trasf = trasferimentiUscita[art + '|' + giorno] || 0;
       if (nuovo < trasf) {
         App.avviso('In questo giorno ci sono ' + App.fmtNum(trasf) + ' trasferiti ad altri reparti: il valore non può essere più basso. Correggi il trasferimento da Movimenti.', 'errore');
-        inp.value = vecchio ? App.fmtNum(vecchio) : '';
+        inp.value = App.fmtCampo(vecchio);
         inp.removeAttribute('data-gestito');
         return;
       }
@@ -1191,13 +1261,17 @@
       // il fuoco passa subito alla casella dopo; il ridisegno arriva quando il server ha registrato
       if (prossimo) spostaFuoco(art, prossimo);
       // nella casella ci sono consumi + trasferimenti in uscita: al server mando solo i consumi
-      App.impostaConsumoGiorno(art, o.repartoId, data, Math.round((nuovo - trasf) * 1000) / 1000).then(function () {
+      var r3 = root.Calcoli.r3;
+      salvataggio = App.impostaConsumoGiorno(art, o.repartoId, data, r3(nuovo - trasf), r3(vecchio - trasf)).then(function () {
         dopoSalvataggio();
       }, function (e) {
         App.avviso('Correzione non registrata: ' + messaggioErrore(e), 'errore');
         dopoSalvataggio();
       });
     }
+
+    // ultimo salvataggio di una casella: stampa ed Excel lo aspettano
+    var salvataggio = Promise.resolve();
 
     // ridisegno con i dati del server; se intanto il registro è stato riaperto (pulsante "Aggiorna"), ridisegno quello nuovo
     function dopoSalvataggio() {
@@ -1252,18 +1326,26 @@
     });
 
     cont.querySelectorAll('#r-rep, #r-mese, #r-cat, #r-tutti').forEach(function (el) { el.addEventListener('change', function () { disegna(); }); });
-    cont.querySelector('#r-stampa').addEventListener('click', function () { window.print(); });
+    // prima di stampare o esportare: salvo la casella in modifica e aspetto che il server l'abbia registrata
+    function completaSalvataggi() {
+      var a = document.activeElement;
+      if (a && cont.contains(a) && a.matches('td.g input')) a.blur();
+      return salvataggio.then(function () { if (document.body.contains(cont)) disegna(); });
+    }
+    cont.querySelector('#r-stampa').addEventListener('click', function () { completaSalvataggi().then(function () { window.print(); }); });
     cont.querySelector('#r-excel').addEventListener('click', function () {
-      var o = opz();
-      if (!registro.righe.length) { App.avviso('Non ci sono righe da esportare.', 'errore'); return; }
       var b = this;
       b.disabled = true;
-      root.ExcelFarmacia.esportaNotaConsumi(registro, {
-        impostazioni: App.S.impostazioni, reparto: App.nomeReparto(o.repartoId), anno: o.anno, mese: o.mese, categoria: o.categoria
-      }).then(function (blob) {
-        var nome = 'Carico_Scarico_' + (o.categoria === 'FARMACI' ? 'FARMACIA' : 'PRESIDI') + '_' + App.nomeReparto(o.repartoId).replace(/[^A-Za-z0-9]+/g, '_') + '_' + o.anno + '-' + String(o.mese).padStart(2, '0') + '.xlsx';
-        App.scarica(blob, nome);
-        App.avviso('Modulo Excel creato: ' + nome, 'ok');
+      completaSalvataggi().then(function () {
+        var o = opz();
+        if (!registro.righe.length) { App.avviso('Non ci sono righe da esportare.', 'errore'); b.disabled = false; return; }
+        return root.ExcelFarmacia.esportaNotaConsumi(registro, {
+          impostazioni: App.S.impostazioni, reparto: App.nomeReparto(o.repartoId), anno: o.anno, mese: o.mese, categoria: o.categoria
+        }).then(function (blob) {
+          var nome = 'Carico_Scarico_' + (o.categoria === 'FARMACI' ? 'FARMACIA' : 'PRESIDI') + '_' + App.nomeReparto(o.repartoId).replace(/[^A-Za-z0-9]+/g, '_') + '_' + o.anno + '-' + String(o.mese).padStart(2, '0') + '.xlsx';
+          App.scarica(blob, nome);
+          App.avviso('Modulo Excel creato: ' + nome, 'ok');
+        });
       }).catch(function (e) {
         console.error(e);
         App.avviso('Esportazione non riuscita: ' + e.message, 'errore');
@@ -1362,8 +1444,9 @@
             '<div class="tabella-contenitore" style="max-height:45vh"><table class="tabella"><thead><tr><th><input type="checkbox" id="imp-tutti" checked aria-label="Tutti"></th><th>Denominazione</th><th>Categoria</th><th class="n">Quantità</th><th class="n">Prezzo</th><th></th></tr></thead><tbody>' +
             lista.map(function (t, i) {
               var esiste = App.articoloPerNome(t.nome);
-              return '<tr><td><input type="checkbox" data-i="' + i + '" checked></td><td>' + h(t.nome) + '</td>' +
-                '<td><select data-cat="' + i + '">' + opzioniCategoria(t.categoria) + '</select></td>' +
+              // gli articoli già presenti non si spuntano: per loro conta la giacenza registrata nel programma
+              return '<tr><td><input type="checkbox" data-i="' + i + '"' + (esiste ? '' : ' checked') + '></td><td>' + h(t.nome) + '</td>' +
+                '<td>' + (esiste ? etichettaCategoria(esiste.categoria) : '<select data-cat="' + i + '">' + opzioniCategoria(t.categoria) + '</select>') + '</td>' +
                 '<td class="n">' + App.fmtNum(t.giacenza) + '</td><td class="n">' + (t.prezzo ? App.fmtEuro(t.prezzo) : '') + '</td>' +
                 '<td>' + (esiste ? '<span class="etichetta info">già presente</span>' : '<span class="etichetta ok">nuovo</span>') + '</td></tr>';
             }).join('') + '</tbody></table></div>',
@@ -1381,7 +1464,8 @@
                 if (!c.checked) return;
                 var i = Number(c.getAttribute('data-i'));
                 var t = lista[i];
-                articoli.push({ nome: t.nome, categoria: valore(m, 'select[data-cat="' + i + '"]'), prezzo: t.prezzo || 0, scortaMinima: t.scortaMinima || 0, unita: t.unita || '', giacenza: t.giacenza || 0 });
+                var esiste = App.articoloPerNome(t.nome);
+                articoli.push({ nome: t.nome, categoria: esiste ? esiste.categoria : valore(m, 'select[data-cat="' + i + '"]'), prezzo: t.prezzo || 0, scortaMinima: t.scortaMinima || 0, unita: t.unita || '', giacenza: t.giacenza || 0 });
               });
               if (!articoli.length) { App.avviso('Spunta almeno un articolo da importare.', 'errore'); return; }
               if (conGiac && !data) { App.avviso('Indica la data della giacenza iniziale.', 'errore'); return; }
@@ -1389,9 +1473,10 @@
               // il server crea gli articoli nuovi (per nome) e, se richiesto, un carico per le giacenze
               root.Api.scrivi('POST', '/api/articoli/importa', { articoli: articoli, repartoId: rep, data: data, conGiacenza: conGiac, origine: file.name }).then(function (r) {
                 var conta = function (x) { return Array.isArray(x) ? x.length : Number(x) || 0; };
-                var nuovi = conta(r.nuovi), carichi = conta(r.carichi);
+                var nuovi = conta(r.nuovi), carichi = conta(r.carichi), saltati = conta(r.saltati);
                 App.chiudiModale();
-                App.avviso('Importati ' + nuovi + (nuovi === 1 ? ' articolo nuovo' : ' articoli nuovi') + (carichi ? ' e ' + carichi + ' giacenze iniziali' : ''), 'ok');
+                App.avviso('Importati ' + nuovi + (nuovi === 1 ? ' articolo nuovo' : ' articoli nuovi') + (carichi ? ' e ' + carichi + ' giacenze iniziali' : '') +
+                  (saltati ? '. ' + saltati + ' articoli avevano già movimenti nel reparto: la loro giacenza non è stata cambiata (usa Inventario).' : ''), 'ok');
                 App.ridisegna();
               }, function (e) {
                 bottone.disabled = false;
