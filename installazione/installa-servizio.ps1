@@ -34,8 +34,12 @@ Start-Sleep -Seconds 1
 # permessi della cartella: solo amministratori e SYSTEM. Il programma gira come SYSTEM: nessun altro utente
 # del server deve poter sostituire l'exe o leggere i database (con gli hash delle password)
 New-Item -ItemType Directory -Force -Path (Join-Path $cartella 'dati') | Out-Null
-& icacls.exe "$cartella" /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C /Q | Out-Null
-if ($LASTEXITCODE -ne 0) { Write-Host 'Attenzione: non sono riuscito a limitare i permessi della cartella (icacls).' -ForegroundColor Yellow }
+# 1) la cartella: niente permessi ereditati da C:\, solo SYSTEM e Administrators (anche per quello che contiene)
+& icacls.exe "$cartella" /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /C /Q | Out-Null
+$esito1 = $LASTEXITCODE
+# 2) file e sottocartelle già presenti: tornano a ereditare dalla cartella (le opzioni (OI)(CI) valgono solo per le cartelle)
+& icacls.exe (Join-Path $cartella '*') /reset /T /C /Q | Out-Null
+if ($esito1 -ne 0 -or $LASTEXITCODE -ne 0) { Write-Host 'Attenzione: non sono riuscito a limitare i permessi della cartella (icacls).' -ForegroundColor Yellow }
 
 $azione = New-ScheduledTaskAction -Execute $exe -Argument "--porta $Porta --servizio" -WorkingDirectory $cartella
 # all'accensione, e poi ogni 5 minuti: se il programma si è fermato riparte (se è già in esecuzione non succede niente)
@@ -77,6 +81,13 @@ if ($ok) {
   Write-Host "Al primo avvio apri ${schema}://localhost:$Porta/ su questo server e crea l'amministratore."
 } else {
   Write-Host "L'attività è installata ma il programma non risponde sulla porta $Porta." -ForegroundColor Yellow
-  Write-Host "Guarda $cartella\dati\log\errori-avvio.log e i file server-*.log nella stessa cartella." -ForegroundColor Yellow
+  $info = Get-ScheduledTaskInfo -TaskName $nome -ErrorAction SilentlyContinue
+  if ($info) { Write-Host ("Esito dell'ultimo avvio dell'attività: 0x{0:X}" -f $info.LastTaskResult) -ForegroundColor Yellow }
+  $log = Join-Path $cartella 'dati\log'
+  Get-ChildItem $log -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host "--- $($_.Name) (ultime righe)"
+    Get-Content $_.FullName -Tail 15
+  }
+  Write-Host "I registri sono in $log" -ForegroundColor Yellow
   exit 2
 }
