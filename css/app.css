@@ -1,0 +1,265 @@
+/* Gestionale Farmacia · Clinica Posillipo
+   Stessa impostazione del Gestionale Agende: menu a sinistra con i tasti rapidi,
+   barra in alto con data, ricerca rapida e stato del salvataggio, pagine a schede. */
+
+:root {
+  --sfondo: #f2f5f7;
+  --superficie: #ffffff;
+  --superficie-2: #f7f9fa;
+  --testo: #1b2a33;
+  --tenue: #5b6b75;
+  --linea: #dbe2e7;
+  --linea-forte: #b9c5cd;
+  --primario: #0e5a6e;
+  --primario-chiaro: #e3f0f3;
+  --primario-testo: #ffffff;
+  --oro: #b08d57;
+  --laterale: #0f2e38;
+  --laterale-testo: #d6e4e9;
+  --laterale-tenue: #8aa6b0;
+  --laterale-attivo: #17495a;
+  --ok: #1f7a46;
+  --ok-chiaro: #e3f3e9;
+  --attenzione: #a86400;
+  --attenzione-chiaro: #fdf1dc;
+  --pericolo: #b42318;
+  --pericolo-chiaro: #fde8e6;
+  --info-chiaro: #e7eefc;
+  --raggio: 10px;
+  --ombra: 0 1px 2px rgba(16, 40, 52, .06), 0 4px 14px rgba(16, 40, 52, .06);
+  --carattere: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono: Consolas, "Cascadia Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; font: 14px/1.45 var(--carattere); color: var(--testo); background: var(--sfondo); }
+button, input, select, textarea { font: inherit; color: inherit; }
+h1, h2, h3 { margin: 0; line-height: 1.2; }
+p { margin: 0; }
+[hidden] { display: none !important; }
+a { color: var(--primario); }
+:focus-visible { outline: 2px solid var(--primario); outline-offset: 2px; }
+
+/* ---------- impianto ---------- */
+.app { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
+.laterale { background: var(--laterale); color: var(--laterale-testo); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.principale { min-width: 0; display: flex; flex-direction: column; }
+
+.marchio { padding: 18px 18px 14px; border-bottom: 1px solid rgba(255,255,255,.08); display: grid; grid-template-columns: 42px 1fr; gap: 10px; align-items: center; }
+.marchio .logo { width: 42px; height: 42px; border-radius: 9px; background: var(--primario); display: grid; place-items: center; overflow: hidden; }
+.marchio .logo img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
+.marchio .nome { font-weight: 700; color: #fff; font-size: 15px; line-height: 1.15; }
+.marchio .sotto { color: var(--oro); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; }
+.marchio .prodotto { grid-column: 1 / -1; font-size: 12px; color: var(--laterale-tenue); margin-top: 2px; }
+
+.menu { padding: 10px 10px 16px; display: grid; gap: 2px; }
+.menu-gruppo { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--laterale-tenue); padding: 12px 10px 4px; }
+.menu a { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; color: var(--laterale-testo); text-decoration: none; }
+.menu a:hover { background: rgba(255,255,255,.06); }
+.menu a.attivo { background: var(--laterale-attivo); color: #fff; box-shadow: inset 3px 0 0 var(--oro); }
+.menu .ico { width: 20px; text-align: center; }
+.menu .voce { flex: 1; }
+.menu kbd { font: 600 11px var(--mono); color: var(--laterale-tenue); border: 1px solid rgba(255,255,255,.18); border-radius: 4px; padding: 0 5px; min-width: 20px; text-align: center; }
+.menu .conta { background: var(--pericolo); color: #fff; font-size: 11px; font-weight: 700; border-radius: 999px; padding: 0 7px; }
+.laterale-piede { margin-top: auto; padding: 12px 18px 16px; font-size: 12px; color: var(--laterale-tenue); border-top: 1px solid rgba(255,255,255,.08); display: grid; gap: 4px; }
+.laterale-piede b { color: var(--laterale-testo); font-weight: 600; }
+
+.barra { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 16px; padding: 12px 24px; background: var(--superficie); border-bottom: 1px solid var(--linea); }
+.barra-titolo { flex: 1; min-width: 0; }
+.barra-titolo h1 { font-size: 20px; }
+.barra-titolo p { color: var(--tenue); font-size: 12.5px; text-transform: capitalize; }
+.btn-menu { display: none; border: 1px solid var(--linea); background: var(--superficie); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.ricerca-rapida { display: flex; align-items: center; gap: 24px; border: 1px solid var(--linea); background: var(--superficie-2); color: var(--tenue); border-radius: 8px; padding: 7px 10px 7px 12px; cursor: pointer; min-width: 260px; justify-content: space-between; }
+.ricerca-rapida:hover { border-color: var(--primario); }
+kbd { font: 600 11px var(--mono); border: 1px solid var(--linea-forte); border-radius: 4px; padding: 1px 5px; background: var(--superficie); color: var(--tenue); }
+.operatore { font-size: 12.5px; color: var(--tenue); white-space: nowrap; }
+.operatore b { color: var(--testo); }
+.salvataggio { font-size: 12px; color: var(--ok); white-space: nowrap; min-width: 84px; text-align: right; }
+.salvataggio.errore { color: var(--pericolo); font-weight: 600; }
+
+.contenuto { padding: 22px 24px 48px; display: grid; gap: 18px; align-content: start; outline: none; }
+
+/* ---------- elementi ---------- */
+.scheda { background: var(--superficie); border: 1px solid var(--linea); border-radius: var(--raggio); box-shadow: var(--ombra); }
+.scheda-testa { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 18px; border-bottom: 1px solid var(--linea); }
+.scheda-testa h2 { font-size: 15.5px; flex: 1; }
+.scheda-testa .nota { color: var(--tenue); font-size: 12.5px; }
+.scheda-corpo { padding: 16px 18px; }
+.scheda-corpo.stretto { padding: 0; }
+.griglia-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 18px; align-items: start; }
+
+.strumenti { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.strumenti .spazio { flex: 1; }
+.campo { display: grid; gap: 4px; }
+.campo > span { font-size: 12px; font-weight: 600; color: var(--tenue); }
+.campo input, .campo select, .campo textarea, .cella-input, input.q { border: 1px solid var(--linea-forte); border-radius: 7px; padding: 7px 9px; background: var(--superficie); min-width: 0; }
+.campo textarea { min-height: 64px; resize: vertical; }
+.campo input:focus, .campo select:focus, .campo textarea:focus, input.q:focus, .cella-input:focus { border-color: var(--primario); outline: 2px solid var(--primario-chiaro); outline-offset: 0; }
+.campo.largo { grid-column: 1 / -1; }
+.modulo { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 14px; }
+.spunta { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
+.spunta input { width: 16px; height: 16px; accent-color: var(--primario); }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--linea-forte); background: var(--superficie); border-radius: 8px; padding: 7px 13px; cursor: pointer; font-weight: 600; white-space: nowrap; text-decoration: none; color: var(--testo); }
+.btn:hover { border-color: var(--primario); }
+.btn.primario { background: var(--primario); border-color: var(--primario); color: var(--primario-testo); }
+.btn.primario:hover { filter: brightness(1.08); }
+.btn.pericolo { color: var(--pericolo); border-color: #e7b7b2; }
+.btn.pericolo.pieno { background: var(--pericolo); color: #fff; border-color: var(--pericolo); }
+.btn.piccolo { padding: 3px 9px; font-size: 12.5px; border-radius: 6px; }
+.btn.fantasma { border-color: transparent; background: transparent; }
+.btn.fantasma:hover { background: var(--superficie-2); border-color: var(--linea); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.tabella-contenitore { overflow-x: auto; }
+table.tabella { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.tabella th, .tabella td { padding: 8px 12px; border-bottom: 1px solid var(--linea); text-align: left; vertical-align: middle; }
+.tabella th { font-size: 12px; font-weight: 600; color: var(--tenue); background: var(--superficie-2); position: sticky; top: 0; z-index: 1; white-space: nowrap; }
+.tabella td.n, .tabella th.n { text-align: right; font-variant-numeric: tabular-nums; }
+.tabella tr.cliccabile { cursor: pointer; }
+.tabella tr.cliccabile:hover td { background: var(--primario-chiaro); }
+.tabella tr.annullato td { color: var(--tenue); text-decoration: line-through; }
+.tabella tr.annullato td.azioni { text-decoration: none; }
+.tabella td.azioni { text-align: right; white-space: nowrap; }
+.tabella tfoot td { font-weight: 700; background: var(--superficie-2); }
+.tabella td.neg { color: var(--pericolo); font-weight: 700; }
+.vuoto { padding: 28px 18px; text-align: center; color: var(--tenue); }
+.vuoto b { display: block; color: var(--testo); margin-bottom: 4px; font-size: 15px; }
+
+.etichetta { display: inline-block; font-size: 11.5px; font-weight: 700; border-radius: 999px; padding: 1px 9px; white-space: nowrap; background: var(--superficie-2); color: var(--tenue); border: 1px solid var(--linea); }
+.etichetta.ok { background: var(--ok-chiaro); color: var(--ok); border-color: transparent; }
+.etichetta.attenzione { background: var(--attenzione-chiaro); color: var(--attenzione); border-color: transparent; }
+.etichetta.pericolo { background: var(--pericolo-chiaro); color: var(--pericolo); border-color: transparent; }
+.etichetta.info { background: var(--info-chiaro); color: #2a4f9a; border-color: transparent; }
+.etichetta.farmaci { background: var(--primario-chiaro); color: var(--primario); border-color: transparent; }
+.etichetta.presidi { background: #f3ece1; color: #7b5b2a; border-color: transparent; }
+.tipo-carico { color: var(--ok); }
+.tipo-consumo { color: var(--primario); }
+.tipo-trasferimento { color: #5a4bb0; }
+.tipo-perdita { color: var(--pericolo); }
+.tipo-rettifica { color: var(--attenzione); }
+
+.indicatori { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
+.indicatore { background: var(--superficie); border: 1px solid var(--linea); border-radius: var(--raggio); padding: 14px 16px; box-shadow: var(--ombra); display: grid; gap: 2px; text-decoration: none; color: inherit; }
+a.indicatore:hover { border-color: var(--primario); }
+.indicatore .valore { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.indicatore .titolo { color: var(--tenue); font-size: 12.5px; font-weight: 600; }
+.indicatore.pericolo .valore { color: var(--pericolo); }
+.indicatore.attenzione .valore { color: var(--attenzione); }
+.indicatore.ok .valore { color: var(--ok); }
+
+.azioni-rapide { display: flex; flex-wrap: wrap; gap: 10px; }
+.azioni-rapide .btn { padding: 10px 16px; }
+.azioni-rapide kbd { margin-left: 4px; }
+
+.banda { border-radius: var(--raggio); padding: 12px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; border: 1px solid transparent; }
+.banda p { flex: 1; min-width: 240px; }
+.banda.attenzione { background: var(--attenzione-chiaro); border-color: #f0d6a8; }
+.banda.info { background: var(--info-chiaro); border-color: #c9d7f5; }
+.banda.pericolo { background: var(--pericolo-chiaro); border-color: #f3c3bd; }
+
+.elenco-semplice { list-style: none; margin: 0; padding: 0; }
+.elenco-semplice li { display: flex; gap: 10px; align-items: baseline; padding: 9px 18px; border-bottom: 1px solid var(--linea); }
+.elenco-semplice li:last-child { border-bottom: 0; }
+.elenco-semplice .chi { flex: 1; min-width: 0; }
+.elenco-semplice .tenue { color: var(--tenue); font-size: 12.5px; }
+
+/* righe del modulo di carico / trasferimento */
+.righe { width: 100%; border-collapse: collapse; }
+.righe th { font-size: 12px; color: var(--tenue); text-align: left; font-weight: 600; padding: 0 6px 6px; }
+.righe td { padding: 4px 6px; vertical-align: top; }
+.righe input, .righe select { width: 100%; border: 1px solid var(--linea-forte); border-radius: 7px; padding: 6px 8px; background: var(--superficie); }
+.righe .info-riga { font-size: 12px; color: var(--tenue); padding-top: 3px; }
+input.q { width: 92px; text-align: right; font-variant-numeric: tabular-nums; }
+.tabella input.q { padding: 5px 8px; }
+.tabella tr.compilata td { background: #f1f8f3; }
+
+/* ---------- registro mensile (nota consumi) ---------- */
+.registro-contenitore { overflow: auto; max-height: calc(100vh - 260px); }
+table.registro { border-collapse: separate; border-spacing: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.registro th, .registro td { border-right: 1px solid var(--linea); border-bottom: 1px solid var(--linea); padding: 4px 6px; text-align: right; white-space: nowrap; background: var(--superficie); }
+.registro thead th { position: sticky; top: 0; z-index: 2; background: var(--superficie-2); font-size: 11.5px; color: var(--tenue); text-align: center; }
+.registro thead tr:nth-child(2) th { top: 26px; }
+.registro thead tr:nth-child(3) th { top: 52px; font-weight: 400; font-size: 10.5px; }
+.registro .den { position: sticky; left: 0; z-index: 1; text-align: left; min-width: 230px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.registro thead .den { z-index: 3; }
+.registro td.g { min-width: 30px; padding: 0; text-align: center; }
+.registro td.g input { width: 34px; border: 0; background: transparent; text-align: center; padding: 5px 2px; font: inherit; }
+.registro td.g input:focus { background: var(--primario-chiaro); outline: 2px solid var(--primario); }
+.registro td.g.festivo, .registro th.festivo { background: #f6f3ee; }
+.registro td.tot { font-weight: 700; background: var(--superficie-2); }
+.registro td.neg { color: var(--pericolo); }
+.registro tbody tr:hover td { background: #f3f8fa; }
+.registro tfoot td { font-weight: 700; background: var(--superficie-2); position: sticky; bottom: 0; }
+
+.stampa-testa, .stampa-piede { display: none; }
+
+/* ---------- finestre ---------- */
+.velo { position: fixed; inset: 0; background: rgba(12, 30, 38, .45); z-index: 50; }
+.modale { position: fixed; z-index: 60; left: 50%; top: 6vh; transform: translateX(-50%); width: min(640px, calc(100vw - 24px)); max-height: 88vh; display: flex; flex-direction: column; background: var(--superficie); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+.modale.largo { width: min(980px, calc(100vw - 24px)); }
+.modale-testa { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--linea); }
+.modale-testa h2 { flex: 1; font-size: 17px; }
+.modale-corpo { padding: 18px 20px; overflow-y: auto; display: grid; gap: 14px; }
+.modale-piede { display: flex; gap: 10px; justify-content: flex-end; padding: 12px 20px; border-top: 1px solid var(--linea); background: var(--superficie-2); border-radius: 0 0 12px 12px; flex-wrap: wrap; }
+.modale-piede .spazio { flex: 1; }
+
+.ricerca { position: fixed; z-index: 70; left: 50%; top: 10vh; transform: translateX(-50%); width: min(620px, calc(100vw - 24px)); background: var(--superficie); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.3); overflow: hidden; }
+.ricerca input { width: 100%; border: 0; border-bottom: 1px solid var(--linea); padding: 16px 18px; font-size: 16px; outline: none; }
+.ricerca ul { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow-y: auto; }
+.ricerca li { padding: 9px 12px; border-radius: 8px; cursor: pointer; display: flex; gap: 10px; align-items: center; }
+.ricerca li .chi { flex: 1; min-width: 0; }
+.ricerca li .tenue { color: var(--tenue); font-size: 12.5px; }
+.ricerca li.scelto { background: var(--primario-chiaro); }
+.ricerca-aiuto { padding: 8px 18px; font-size: 12px; color: var(--tenue); border-top: 1px solid var(--linea); background: var(--superficie-2); }
+
+.avvisi { position: fixed; right: 18px; bottom: 18px; z-index: 80; display: grid; gap: 8px; }
+.avviso { background: #12313d; color: #fff; padding: 10px 16px; border-radius: 9px; box-shadow: 0 8px 24px rgba(0,0,0,.2); max-width: 380px; animation: entra .18s ease-out; }
+.avviso.errore { background: var(--pericolo); }
+.avviso.ok { background: var(--ok); }
+@keyframes entra { from { transform: translateY(8px); opacity: 0; } }
+
+.guida { display: grid; gap: 14px; max-width: 860px; }
+.guida h3 { font-size: 15px; margin-top: 6px; }
+.guida p, .guida li { max-width: 75ch; }
+.guida ul, .guida ol { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.tenue { color: var(--tenue); }
+.piccolo { font-size: 12.5px; }
+.destra { text-align: right; }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+
+/* ---------- schermi stretti ---------- */
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+  .laterale { position: fixed; z-index: 40; left: 0; top: 0; width: 260px; transform: translateX(-100%); transition: transform .2s; }
+  .app.menu-aperto .laterale { transform: none; box-shadow: 0 0 40px rgba(0,0,0,.3); }
+  .btn-menu { display: inline-block; }
+  .ricerca-rapida { min-width: 0; }
+  .ricerca-rapida kbd, .operatore, .barra-titolo p { display: none; }
+  .barra { padding: 10px 16px; gap: 10px; }
+  .contenuto { padding: 16px 16px 40px; }
+  .griglia-2 { grid-template-columns: 1fr; }
+}
+
+/* ---------- stampa ---------- */
+@media print {
+  @page { size: A4 landscape; margin: 8mm; }
+  body { background: #fff; font-size: 11px; }
+  .laterale, .barra, .strumenti, .no-stampa, .avvisi, .btn { display: none !important; }
+  .app { display: block; }
+  .contenuto { padding: 0; }
+  .scheda { border: 0; box-shadow: none; }
+  .scheda-testa { padding: 0 0 6px; }
+  .registro-contenitore, .tabella-contenitore { overflow: visible; max-height: none; }
+  .registro th, .registro td { padding: 2px 3px; border-color: #999; position: static !important; }
+  table.registro { font-size: 9px; width: 100%; }
+  .registro .den { min-width: 0; max-width: none; white-space: normal; }
+  .registro td.g input { width: 100%; padding: 0; }
+  .stampa-testa { display: grid; grid-template-columns: 1fr 2fr 1fr; align-items: end; margin-bottom: 8px; font-size: 11px; }
+  .stampa-testa .tit { text-align: center; font-weight: 700; font-size: 12px; }
+  .stampa-testa .cat { text-align: right; }
+  .stampa-testa .cat b { border: 1px solid #000; padding: 2px 14px; }
+  .stampa-piede { display: flex; justify-content: space-between; margin-top: 18px; font-size: 10.5px; }
+  .tabella th { position: static; }
+}
