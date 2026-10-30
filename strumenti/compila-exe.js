@@ -92,6 +92,11 @@ function preparaBlob() {
   });
   const assets = {};
   fileInterfaccia().forEach((rel) => { assets[rel] = path.join(RADICE, rel); });
+  // videoguide (cartella guide/): incorporate nell'exe come il resto dell'interfaccia
+  const cartellaGuide = path.join(RADICE, 'guide');
+  if (fs.existsSync(cartellaGuide)) {
+    fs.readdirSync(cartellaGuide).filter((n) => /^[a-z0-9-]+\.(mp4|webm|vtt|jpg|png)$/.test(n)).forEach((n) => { assets['guide/' + n] = path.join(cartellaGuide, n); });
+  }
   console.log('Interfaccia incorporata: ' + Object.keys(assets).join(', '));
   const conf = {
     main: path.join(BUILD, 'sea', 'server.js'),

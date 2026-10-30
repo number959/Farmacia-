@@ -316,3 +316,6 @@ table.registro { border-collapse: separate; border-spacing: 0; font-size: 12.5px
   .stampa-piede { display: flex; justify-content: space-between; margin-top: 18px; font-size: 10.5px; }
   .tabella th { position: static; }
 }
+.guidami { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--linea); background: var(--superficie); border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--primario); white-space: nowrap; }
+.guidami:hover { border-color: var(--primario); background: var(--primario-chiaro); }
+@media (max-width: 900px) { .guidami span { display: none; } }

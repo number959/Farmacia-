@@ -458,6 +458,7 @@
     }
     App.paginaCorrente = pagina;
     App.rinfresca = null;
+    App.gestoreScansione = null; // ogni pagina che usa il lettore di codici a barre lo reimposta (js/scanner.js)
     App.nascondiBanda();
     var voce = App.MENU.filter(function (v) { return v.id === pagina; })[0];
     document.getElementById('titolo-pagina').textContent = voce ? voce.voce : '';

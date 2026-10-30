@@ -22,6 +22,10 @@ var TIPI_MIME = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
+  '.jpg': 'image/jpeg',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.vtt': 'text/vtt; charset=utf-8',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 };
 
@@ -62,6 +66,7 @@ function percorsoStatico(url) {
   var rel = p.replace(/^\/+/, '');
   if (rel === 'index.html') return rel;
   if (/^(css|js|vendor)\/[A-Za-z0-9._-]+\.(js|css)$/.test(rel)) return rel;
+  if (/^guide\/[a-z0-9-]+\.(mp4|webm|vtt|jpg|png)$/.test(rel)) return rel; // videoguide
   return null;
 }
 
@@ -487,10 +492,31 @@ Server.prototype.gestisciStatico = function (req, res) {
     res.writeHead(304, { ETag: voce.etag, 'Cache-Control': 'no-cache' });
     return res.end();
   }
+  // i video si chiedono a pezzi (Range): serve per spostarsi avanti e indietro nel lettore
+  var intervallo = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''));
+  if (intervallo && (intervallo[1] || intervallo[2])) {
+    var tot = voce.dati.length;
+    var da = intervallo[1] ? Number(intervallo[1]) : Math.max(0, tot - Number(intervallo[2]));
+    var a = intervallo[1] && intervallo[2] ? Math.min(Number(intervallo[2]), tot - 1) : tot - 1;
+    if (da >= tot || da > a) {
+      res.writeHead(416, { 'Content-Range': 'bytes */' + tot });
+      return res.end();
+    }
+    res.writeHead(206, {
+      'Content-Type': TIPI_MIME[path.extname(rel)] || 'application/octet-stream',
+      'Content-Length': a - da + 1,
+      'Content-Range': 'bytes ' + da + '-' + a + '/' + tot,
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-cache',
+      ETag: voce.etag
+    });
+    return res.end(req.method === 'HEAD' ? undefined : voce.dati.subarray(da, a + 1));
+  }
   res.writeHead(200, {
     'Content-Type': TIPI_MIME[path.extname(rel)] || 'application/octet-stream',
     'Content-Length': voce.dati.length,
     'Cache-Control': 'no-cache',
+    'Accept-Ranges': 'bytes',
     ETag: voce.etag
   });
   res.end(req.method === 'HEAD' ? undefined : voce.dati);
