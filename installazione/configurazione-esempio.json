@@ -1,0 +1,9 @@
+{
+  "porta": 8080,
+  "host": "0.0.0.0",
+  "https_esempio": {
+    "nota": "Per usare HTTPS rinomina questa voce in \"https\" e metti i file del certificato nella cartella dati.",
+    "cert": "certificato.pem",
+    "key": "chiave.pem"
+  }
+}

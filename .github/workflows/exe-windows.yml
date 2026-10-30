@@ -1,0 +1,65 @@
+# Compila GestionaleFarmacia.exe su Windows, lo prova e lo rende scaricabile (Actions > esecuzione > Artifacts).
+name: Exe Windows
+
+on:
+  push:
+    paths:
+      - 'server/**'
+      - 'js/**'
+      - 'css/**'
+      - 'index.html'
+      - 'vendor/**'
+      - 'strumenti/**'
+      - 'installazione/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/exe-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.0'
+
+      - name: Dipendenze
+        run: npm ci
+
+      - name: Prove sui sorgenti
+        run: npm test
+
+      - name: Compila l'exe
+        run: node strumenti/compila-exe.js
+
+      - name: Prove sull'exe compilato
+        shell: pwsh
+        run: |
+          $env:GF_ESEGUIBILE = Join-Path $PWD 'dist\GestionaleFarmacia\GestionaleFarmacia.exe'
+          node --test --test-timeout=120000 tests/server.test.js
+
+      - name: Prova dell'installazione come servizio
+        shell: pwsh
+        run: |
+          Copy-Item -Recurse dist\GestionaleFarmacia C:\GestionaleFarmacia
+          & C:\GestionaleFarmacia\installa-servizio.ps1 -Porta 8080
+          $stato = Invoke-RestMethod http://localhost:8080/api/stato
+          if ($stato.versione -ne '2.0.0') { throw "Il servizio non risponde come previsto" }
+          Get-ScheduledTask -TaskName 'Gestionale Farmacia' | Format-List TaskName, State
+          Get-ChildItem C:\GestionaleFarmacia\dati
+          & C:\GestionaleFarmacia\disinstalla-servizio.ps1
+          if (Get-ScheduledTask -TaskName 'Gestionale Farmacia' -ErrorAction SilentlyContinue) { throw "Attività non rimossa" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GestionaleFarmacia-win-x64
+          path: dist/GestionaleFarmacia/
+          if-no-files-found: error

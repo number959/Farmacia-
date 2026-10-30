@@ -1,0 +1,112 @@
+GESTIONALE FARMACIA - CLINICA POSILLIPO (LONGEVITY INSTITUTE)
+Versione server multiutente
+==============================================================
+
+Il programma è un solo file, GestionaleFarmacia.exe. Si installa sul server
+virtuale; le postazioni della clinica lo usano dal browser (Edge o Chrome),
+senza installare niente.
+
+
+REQUISITI
+---------
+- Server Windows a 64 bit (Windows Server 2016 o successivi, oppure Windows 10/11).
+- Una porta TCP libera (predefinita 8080) raggiungibile dalle postazioni.
+
+
+INSTALLAZIONE SUL SERVER
+------------------------
+1. Copia la cartella "GestionaleFarmacia" in C:\GestionaleFarmacia
+   (non in "Programmi": il programma scrive i dati nella sottocartella "dati").
+2. Tasto destro su "Installa servizio.bat" > "Esegui come amministratore".
+   Lo script:
+   - crea un'attività pianificata "Gestionale Farmacia" che avvia il programma
+     all'accensione del server, anche senza nessuno collegato, e lo riavvia
+     se si ferma;
+   - apre la porta 8080 nel firewall di Windows;
+   - avvia il programma e mostra gli indirizzi da usare.
+   Per un'altra porta: in PowerShell come amministratore
+       .\installa-servizio.ps1 -Porta 8443
+3. Sul server stesso apri http://localhost:8080/ e crea l'AMMINISTRATORE
+   (si può fare solo dal server, per sicurezza).
+4. Entra come amministratore: in "Configura" controlla struttura e reparti,
+   in "Utenti" crea gli utenti delle persone che useranno il programma.
+
+Per provarlo senza installare: doppio clic su GestionaleFarmacia.exe. Si apre
+una finestra con gli indirizzi; chiudendola il programma si ferma.
+
+Windows potrebbe mostrare "Windows ha protetto il PC" perché il file non ha
+una firma digitale: "Ulteriori informazioni" > "Esegui comunque". Se l'antivirus
+lo blocca, aggiungi un'eccezione per C:\GestionaleFarmacia\GestionaleFarmacia.exe.
+
+
+DALLE POSTAZIONI
+----------------
+Apri con Edge o Chrome l'indirizzo del server, per esempio
+    http://192.168.1.20:8080/
+(l'indirizzo esatto lo mostra l'installazione). Conviene salvarlo nei
+preferiti o creare un collegamento sul desktop.
+
+
+UTENTI E RUOLI
+--------------
+- Amministratore: tutto, compresi utenti, impostazioni, reparti e copie di sicurezza.
+- Farmacista: carichi, trasferimenti, consumi, perdite, inventario, articoli,
+  correzioni del registro mensile, annullo di qualsiasi movimento, registro attività.
+- Reparto: consumi e perdite solo dei propri reparti; consulta tutto il resto.
+- Consultazione: solo lettura, stampe ed Excel (per esempio la direzione).
+
+Ogni persona ha il proprio utente: ogni movimento porta il nome di chi l'ha
+registrato e il "Registro attività" conserva accessi e operazioni.
+Le password date dall'amministratore vanno cambiate al primo accesso.
+Dopo 5 password sbagliate l'utente si blocca per 15 minuti; l'amministratore
+può sbloccarlo subito dandogli una nuova password.
+Più persone possono lavorare insieme: le modifiche degli altri compaiono da sole.
+
+
+DATI E COPIE DI SICUREZZA
+-------------------------
+Tutto sta nella cartella "dati" accanto al programma:
+  dati\farmacia.db      magazzino (articoli, reparti, movimenti, impostazioni)
+  dati\accessi.db       utenti, sessioni, registro attività
+  dati\backup\          copie automatiche di ogni giorno (ultime 30) e copie manuali
+  dati\log\             registro del server
+
+L'amministratore, da Configura, può creare una copia, scaricarla e ripristinarla.
+Consiglio: includi la cartella C:\GestionaleFarmacia\dati nel backup del server
+virtuale, oppure copia ogni tanto dati\backup su un altro disco.
+
+
+AGGIORNAMENTO A UNA NUOVA VERSIONE
+----------------------------------
+1. "Ferma servizio.bat" (come amministratore).
+2. Sostituisci GestionaleFarmacia.exe con quello nuovo. NON toccare la cartella "dati".
+3. "Avvia servizio.bat".
+
+
+HTTPS (FACOLTATIVO)
+-------------------
+Di serie il programma usa HTTP, adatto a una rete interna. Per cifrare il
+traffico (consigliato se la rete non è solo della clinica): metti certificato
+e chiave in dati\ e crea dati\configurazione.json come
+    { "https": { "cert": "certificato.pem", "key": "chiave.pem" } }
+oppure
+    { "https": { "pfx": "certificato.pfx", "passphrase": "..." } }
+poi riavvia il servizio e usa https://indirizzo-del-server:8080/
+
+
+DALLA VERSIONE PER UN SOLO PC
+-----------------------------
+Se usavate la versione che salvava i dati nel browser: su quel PC, in
+Configura, "Salva una copia (.json)". Poi, con il server nuovo ancora vuoto,
+entra come amministratore e in Configura usa "Importa l'archivio della
+versione per un solo PC".
+
+
+PROBLEMI
+--------
+- "La porta 8080 è già usata": il programma è già avviato (anche come servizio),
+  oppure un altro programma usa la porta. Usa -Porta con un altro numero.
+- Le postazioni non si collegano: controlla che il server risponda su
+  http://localhost:8080/ e che la regola "Gestionale Farmacia" del firewall
+  esista; se c'è un firewall di rete tra postazioni e server, va aperta la porta.
+- Registro del server: dati\log\server-AAAA-MM.log

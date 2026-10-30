@@ -1,12 +1,10 @@
 /*
  * Dati di prova, inventati, per imparare a usare il programma:
  * articoli tipici, tre mesi di carichi, trasferimenti, consumi e qualche perdita.
+ * Li usa il server (POST /api/demo); funzione pura, senza interfaccia.
  */
 (function (root) {
   'use strict';
-
-  var App = root.App;
-  var C = root.Calcoli;
 
   var FARMACI = [
     ['PARACETAMOLO 1000 mg/100 ml fl ev', 'fl', 1.2, 60, 'Paracetamolo'],
@@ -50,12 +48,15 @@
   function data(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
   function mese(d, piu) { var x = new Date(d.getFullYear(), d.getMonth() + piu, 1); return x.getFullYear() + '-' + pad(x.getMonth() + 1); }
 
-  App.creaDatiDemo = function () {
+  /*
+   * opz: { centrale: id del reparto Farmacia, reparti: [id degli altri reparti], oggi: Date }
+   * Restituisce { articoli, movimenti } nel formato del client.
+   */
+  function crea(C, opz) {
     var rnd = casuale(959);
-    var S = root.Archivio.statoVuoto();
-    S.impostazioni.operatore = 'Prova';
-    var far = S.reparti[0].id;
-    var reparti = S.reparti.slice(1).map(function (r) { return r.id; });
+    var S = { articoli: [], movimenti: [] };
+    var far = opz.centrale;
+    var reparti = opz.reparti.slice();
 
     FARMACI.forEach(function (f, i) {
       S.articoli.push({ id: 'demo-f' + i, nome: f[0], categoria: 'FARMACI', unita: f[1], prezzo: f[2], scortaMinima: f[3], principio: f[4], attivo: true });
@@ -64,7 +65,7 @@
       S.articoli.push({ id: 'demo-p' + i, nome: p[0], categoria: 'PRESIDI', unita: p[1], prezzo: p[2], scortaMinima: p[3], attivo: true });
     });
 
-    var oggi = new Date();
+    var oggi = opz.oggi || new Date();
     var inizio = new Date(oggi.getFullYear(), oggi.getMonth() - 2, 1);
     var seq = 0;
     function mov(m) {
@@ -124,21 +125,10 @@
     var art = S.articoli[3];
     mov({ tipo: 'perdita', data: data(new Date(oggi.getFullYear(), oggi.getMonth() - 1, 20)), articoloId: art.id, repartoId: far, quantita: 2, lotto: '', scadenza: '', causale: 'Rotto o danneggiato', note: 'Flaconi caduti' });
     return S;
-  };
+  }
 
-  App.caricaDemo = function () {
-    var vuoto = !App.S.articoli.length && !App.S.movimenti.length;
-    var procedi = vuoto ? Promise.resolve(true)
-      : App.conferma('Dati di prova', 'I dati di prova sostituiscono l’archivio attuale (' + App.S.articoli.length + ' articoli, ' + App.S.movimenti.length + ' movimenti). Prima scarico una copia dei dati attuali. Procedo?', 'Carica dati di prova', true);
-    procedi.then(function (ok) {
-      if (!ok) return;
-      if (!vuoto) App.scarica(new Blob([JSON.stringify(App.S, null, 1)], { type: 'application/json' }), 'archivio-farmacia-prima-della-prova_' + App.oggi() + '.json');
-      App.S = App.creaDatiDemo();
-      App.salva().then(function () {
-        App.disegnaMarchio();
-        App.avviso('Dati di prova caricati: ' + App.S.articoli.length + ' articoli e ' + App.S.movimenti.length + ' movimenti', 'ok');
-        App.vai('oggi');
-      });
-    });
-  };
+
+  var api = { crea: crea };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.DemoFarmacia = api;
 })(this);
