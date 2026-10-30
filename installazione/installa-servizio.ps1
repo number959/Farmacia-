@@ -46,7 +46,7 @@ $ok = $false
 for ($i = 0; $i -lt 30 -and -not $ok; $i++) {
   Start-Sleep -Seconds 1
   try {
-    Invoke-WebRequest -Uri "http://localhost:$Porta/api/stato" -UseBasicParsing -TimeoutSec 2 | Out-Null
+    Invoke-WebRequest -Uri "http://127.0.0.1:$Porta/api/stato" -UseBasicParsing -TimeoutSec 5 | Out-Null
     $ok = $true
   } catch { }
 }

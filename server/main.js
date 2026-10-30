@@ -1,7 +1,7 @@
 /*
  * Gestionale Farmacia · Clinica Posillipo — server multiutente.
  *
- *   GestionaleFarmacia.exe [--porta 8080] [--host 0.0.0.0] [--dati <cartella>]
+ *   GestionaleFarmacia.exe [--porta 8080] [--host <indirizzo>] [--dati <cartella>]
  *   node server/main.js     (durante lo sviluppo)
  */
 'use strict';
@@ -85,7 +85,7 @@ function avvia() {
   try { process.stdout.on('error', function () {}); process.stderr.on('error', function () {}); } catch (e) { /* nessuna console */ }
   var arg = argomenti(process.argv.slice(2));
   if (arg.help || arg.aiuto) {
-    stampa('Gestionale Farmacia ' + VERSIONE + '\n\n  --porta <n>       porta HTTP (predefinita 8080)\n  --host <ind>      indirizzo di ascolto (predefinito 0.0.0.0, tutta la rete)\n  --dati <cartella> cartella dei dati (predefinita: "dati" accanto al programma)\n');
+    stampa('Gestionale Farmacia ' + VERSIONE + '\n\n  --porta <n>       porta HTTP (predefinita 8080)\n  --host <ind>      indirizzo di ascolto (predefinito: tutta la rete, IPv4 e IPv6)\n  --dati <cartella> cartella dei dati (predefinita: "dati" accanto al programma)\n');
     return;
   }
   var cartellaDati = path.resolve(String(arg.dati || process.env.GESTIONALE_FARMACIA_DATI || path.join(cartellaProgramma(), 'dati')));
@@ -101,7 +101,9 @@ function avvia() {
     }
   }
   var porta = Number(arg.porta || conf.porta || 8080);
-  var host = String(arg.host || conf.host || '0.0.0.0');
+  // senza --host ascolta su IPv4 e IPv6: su Windows "localhost" prova prima ::1 e con solo IPv4 ogni collegamento
+  // da localhost aspetterebbe un paio di secondi prima di ripiegare su 127.0.0.1
+  var host = arg.host || conf.host ? String(arg.host || conf.host) : null;
 
   function log(msg) {
     var riga = new Date().toISOString().replace('T', ' ').slice(0, 19) + '  ' + msg;
@@ -141,12 +143,20 @@ function avvia() {
   srv.headersTimeout = 70000;
 
   srv.on('error', function (e) {
+    if (!host && (e.code === 'EAFNOSUPPORT' || e.code === 'EADDRNOTAVAIL') && !srv.soloIpv4) {
+      // IPv6 disattivato sul server: solo IPv4
+      srv.soloIpv4 = true;
+      return srv.listen(porta, '0.0.0.0', avviato);
+    }
     if (e.code === 'EADDRINUSE') return fatale('La porta ' + porta + ' è già usata da un altro programma (forse il Gestionale è già avviato).\nChiudilo, oppure avvia con --porta e un altro numero.');
     if (e.code === 'EACCES') return fatale('Non ho il permesso di usare la porta ' + porta + '. Usa un numero sopra 1024 o avvia come amministratore.');
     fatale('Errore del server: ' + e.message);
   });
 
-  srv.listen(porta, host, function () {
+  if (host) srv.listen(porta, host, avviato);
+  else srv.listen({ port: porta, host: '::', ipv6Only: false }, avviato);
+
+  function avviato() {
     var schema = opzHttps ? 'https' : 'http';
     log('Gestionale Farmacia ' + VERSIONE + ' avviato. Dati in ' + cartellaDati);
     stampa('');
@@ -160,7 +170,7 @@ function avvia() {
     stampa('  Per fermare il programma chiudi questa finestra o premi Ctrl+C.');
     stampa('');
     backup.pianifica();
-  });
+  }
 
   var chiusura = false;
   function chiudi() {
