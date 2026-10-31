@@ -3,6 +3,8 @@
  * (anteprima/server-finto.js), dati e utenti di prova. Si apre come pagina web statica, per esempio pubblicata come
  * Artifact o aperta con un server web qualsiasi. Non serve per il programma vero.
  *   node strumenti/genera-anteprima.js
+ * Crea anche dist/anteprima/pagina-artifact.html: la stessa pagina senza doctype, <html>, <head> e <body> (la pagina
+ * pubblicata come Artifact viene avvolta da sola); gli altri file si pubblicano accanto con gli stessi percorsi.
  */
 'use strict';
 const fs = require('fs');
@@ -31,4 +33,9 @@ if (fs.existsSync(guide)) {
   fs.mkdirSync(path.join(OUT, 'guide'), { recursive: true });
   fs.readdirSync(guide).filter((n) => /\.(mp4|vtt|jpg|png)$/.test(n)).forEach((n) => fs.copyFileSync(path.join(guide, n), path.join(OUT, 'guide', n)));
 }
+// versione "frammento" per la pubblicazione come Artifact: titolo, fogli di stile e contenuto del body
+const testa = /<head>([\s\S]*?)<\/head>/.exec(html)[1];
+const corpo = /<body>([\s\S]*?)<\/body>/.exec(html)[1];
+const stili = testa.match(/<link rel="stylesheet"[^>]*>/g).join('\n');
+fs.writeFileSync(path.join(OUT, 'pagina-artifact.html'), '<title>Gestionale Farmacia Posillipo</title>\n' + stili + '\n' + corpo.trim() + '\n');
 console.log('Anteprima in ' + path.relative(RADICE, OUT) + ' (' + (file.size + 1) + ' file più le videoguide)');

@@ -1,0 +1,29 @@
+WEBVTT
+
+1
+00:00:03.114 --> 00:00:10.845
+Articoli (tasto A) è l’anagrafica: cerca per nome, principio attivo o codice.
+
+2
+00:00:10.845 --> 00:00:17.545
+Tocca un articolo per aprire la sua scheda: giacenze, lotti e ultimi movimenti.
+
+3
+00:00:17.545 --> 00:00:24.618
+Per un articolo nuovo premi Nuovo articolo e scrivi la denominazione come sul modulo.
+
+4
+00:00:24.618 --> 00:00:33.574
+Poi categoria, unità di misura, principio attivo e confezione.
+
+5
+00:00:33.574 --> 00:00:42.074
+Pezzi per confezione e codici a barre servono al lettore; prezzo e scorta minima al controllo del magazzino.
+
+6
+00:00:42.074 --> 00:00:47.540
+Premi Salva: l’articolo si può caricare e scaricare subito.
+
+7
+00:00:47.540 --> 00:00:55.825
+Importa da Excel legge un elenco o i vecchi moduli Nota consumi compilati, senza doppioni.

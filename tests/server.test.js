@@ -564,3 +564,133 @@ test('accesso d\'emergenza da riga di comando, anche con il server in funzione',
   const sconosciuto = await eseguiProgramma(['--dati', S.dati, '--reimposta-password', 'nessuno'], 20000);
   assert.equal(sconosciuto.codice, 1);
 });
+
+/* ---------- versione 2.1: codici a barre degli articoli ---------- */
+
+test('codici a barre: campi dell\'articolo, unicità, associazione di un codice letto', async () => {
+  const S5 = await avviaServer();
+  try {
+    const a = new Client(S5.base);
+    await a.post('/api/setup', { username: 'admin', nome: 'Admin Codici', password: PW });
+    const GTIN = '08012345678907';
+    // nuovo articolo con codici e pezzi per confezione; le chiavi si normalizzano
+    const p1 = await a.post('/api/articoli', { nome: 'TACHIPIRINA 500 mg cpr', categoria: 'FARMACI', unita: 'cpr', barcode: ['aic:012345676', 'GTIN:8012345678907', 'aic:012345676'], pezziConfezione: 20 });
+    assert.equal(p1.stato, 200, JSON.stringify(p1.json));
+    const art1 = p1.json.articolo;
+    assert.deepEqual(art1.barcode, ['aic:012345676', 'gtin:' + GTIN]);
+    assert.equal(art1.pezziConfezione, 20);
+    // senza codici: elenco vuoto e 1 pezzo per confezione
+    const p2 = await a.post('/api/articoli', { nome: 'GARZE 10x10', categoria: 'PRESIDI' });
+    assert.equal(p2.stato, 200);
+    const art2 = p2.json.articolo;
+    assert.deepEqual(art2.barcode, []);
+    assert.equal(art2.pezziConfezione, 1);
+    // dati non validi
+    assert.equal((await a.post('/api/articoli', { nome: 'X1', categoria: 'FARMACI', barcode: ['aic:012345677'] })).stato, 400);
+    assert.equal((await a.post('/api/articoli', { nome: 'X2', categoria: 'FARMACI', barcode: 'aic:012345676' })).stato, 400);
+    assert.equal((await a.post('/api/articoli', { nome: 'X3', categoria: 'FARMACI', pezziConfezione: 0 })).stato, 400);
+    // un codice appartiene a un solo articolo: 409 con il nome dell'articolo che l'ha già
+    const doppio = await a.post('/api/articoli', { nome: 'ALTRO PARACETAMOLO', categoria: 'FARMACI', barcode: ['aic:012345676'] });
+    assert.equal(doppio.stato, 409);
+    assert.match(doppio.json.errore, /TACHIPIRINA 500 mg cpr/);
+    const mod = await a.put('/api/articoli/' + art2.id, Object.assign({}, art2, { barcode: ['gtin:' + GTIN] }));
+    assert.equal(mod.stato, 409);
+    assert.match(mod.json.errore, /TACHIPIRINA/);
+    // modifica senza i campi nuovi (client vecchio): codici e pezzi restano
+    const senza = Object.assign({}, art1, { scortaMinima: 5 });
+    delete senza.barcode;
+    delete senza.pezziConfezione;
+    const m2 = await a.put('/api/articoli/' + art1.id, senza);
+    assert.equal(m2.stato, 200, JSON.stringify(m2.json));
+    assert.deepEqual(m2.json.articolo.barcode, art1.barcode);
+    assert.equal(m2.json.articolo.pezziConfezione, 20);
+    // modifica che toglie un codice
+    const m3 = await a.put('/api/articoli/' + art1.id, Object.assign({}, m2.json.articolo, { barcode: ['aic:012345676'], pezziConfezione: 10 }));
+    assert.equal(m3.stato, 200);
+    assert.deepEqual(m3.json.articolo.barcode, ['aic:012345676']);
+    assert.equal(m3.json.articolo.pezziConfezione, 10);
+
+    // POST /api/articoli/:id/barcode: associa un codice letto
+    const as1 = await a.post('/api/articoli/' + art2.id + '/barcode', { chiave: 'gtin:' + GTIN });
+    assert.equal(as1.stato, 200, JSON.stringify(as1.json));
+    assert.deepEqual(as1.json.articolo.barcode, ['gtin:' + GTIN]);
+    assert.ok(as1.json.rev > 0);
+    const versione = as1.json.articolo.versione;
+    // idempotente: lo stesso codice di nuovo non cambia niente
+    const as2 = await a.post('/api/articoli/' + art2.id + '/barcode', { chiave: 'gtin:' + GTIN });
+    assert.equal(as2.stato, 200);
+    assert.equal(as2.json.articolo.versione, versione);
+    assert.deepEqual(as2.json.articolo.barcode, ['gtin:' + GTIN]);
+    // codice di un altro articolo: 409 con il nome; chiave non valida: 400; articolo inesistente: 404
+    const as3 = await a.post('/api/articoli/' + art2.id + '/barcode', { chiave: 'aic:012345676' });
+    assert.equal(as3.stato, 409);
+    assert.match(as3.json.errore, /TACHIPIRINA/);
+    assert.equal((await a.post('/api/articoli/' + art2.id + '/barcode', { chiave: 'gtin:8012345678908' })).stato, 400);
+    assert.equal((await a.post('/api/articoli/' + art2.id + '/barcode', {})).stato, 400);
+    assert.equal((await a.post('/api/articoli/inesistente/barcode', { chiave: 'cod:ABC' })).stato, 404);
+    // la versione è cambiata: chi aveva aperto l'articolo prima riceve un conflitto
+    assert.equal((await a.put('/api/articoli/' + art2.id, Object.assign({}, art2, { note: 'x' }))).stato, 409);
+    // permesso "articoli": un utente di reparto non può associare codici
+    assert.equal((await a.post('/api/utenti', { username: 'rep', nome: 'Reparto', ruolo: 'reparto', reparti: ['r-degenza'], password: 'Provvisoria1' })).stato, 200);
+    const rep = new Client(S5.base);
+    await rep.accedi('rep', 'Provvisoria1');
+    assert.equal((await rep.post('/api/password', { attuale: 'Provvisoria1', nuova: PW })).stato, 200);
+    assert.equal((await rep.post('/api/articoli/' + art2.id + '/barcode', { chiave: 'cod:XYZ' })).stato, 403);
+    // i dati per i browser hanno i campi nuovi; il registro attività ha l'associazione
+    const d = (await rep.get('/api/dati?da=0')).json;
+    const g = d.articoli.find((x) => x.id === art2.id);
+    assert.deepEqual(g.barcode, ['gtin:' + GTIN]);
+    assert.equal(g.pezziConfezione, 1);
+    const ev = (await a.get('/api/attivita?azione=articoli.barcode')).json.eventi;
+    assert.ok(ev.some((e) => e.azione === 'articoli.barcode'), JSON.stringify(ev));
+    // i dati di prova si caricano solo con l'archivio vuoto: qui basta che le importazioni da Excel non tocchino i codici
+    const imp = await a.post('/api/articoli/importa', { articoli: [{ nome: 'GARZE 10x10', categoria: 'PRESIDI', giacenza: 0 }, { nome: 'NUOVO IMPORTATO', categoria: 'PRESIDI' }], conGiacenza: false });
+    assert.equal(imp.stato, 200, JSON.stringify(imp.json));
+    const d2 = (await a.get('/api/dati?da=0')).json;
+    assert.deepEqual(d2.articoli.find((x) => x.nome === 'GARZE 10x10').barcode, ['gtin:' + GTIN]);
+    assert.deepEqual(d2.articoli.find((x) => x.nome === 'NUOVO IMPORTATO').barcode, []);
+  } finally {
+    await S5.ferma();
+  }
+});
+
+test('codici a barre: un database della versione precedente si aggiorna all\'apertura', async () => {
+  const S6 = await avviaServer();
+  const { DatabaseSync } = require('node:sqlite');
+  let dati;
+  try {
+    const a = new Client(S6.base);
+    await a.post('/api/setup', { username: 'admin', nome: 'Admin', password: PW });
+    assert.equal((await a.post('/api/demo')).stato, 200);
+    dati = S6.dati;
+  } finally {
+    await S6.ferma();
+  }
+  // riporto il database com'era nella versione 2.0: senza le colonne nuove e con user_version 1
+  const db = new DatabaseSync(path.join(dati, 'farmacia.db'));
+  db.exec('ALTER TABLE articoli DROP COLUMN barcode; ALTER TABLE articoli DROP COLUMN pezzi_confezione; PRAGMA user_version = 1;');
+  db.close();
+  const porta = await portaLibera();
+  const proc = spawn(ESEGUIBILE || process.execPath, (ESEGUIBILE ? [] : [path.join(__dirname, '..', 'server', 'main.js')]).concat(['--porta', String(porta), '--dati', dati]), { stdio: 'ignore' });
+  try {
+    const base = 'http://127.0.0.1:' + porta;
+    for (let i = 0; i < (ESEGUIBILE ? 600 : 100); i++) {
+      try { if ((await fetch(base + '/api/stato')).ok) break; } catch (e) { /* non ancora pronto */ }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const a = new Client(base);
+    await a.accedi('admin', PW);
+    const d = (await a.get('/api/dati?da=0')).json;
+    assert.ok(d.articoli.length > 5);
+    assert.ok(d.articoli.every((x) => Array.isArray(x.barcode) && x.barcode.length === 0 && x.pezziConfezione === 1));
+    const art = d.articoli[0];
+    const r = await a.post('/api/articoli/' + art.id + '/barcode', { chiave: 'aic:012345676' });
+    assert.equal(r.stato, 200, JSON.stringify(r.json));
+    assert.deepEqual(r.json.articolo.barcode, ['aic:012345676']);
+  } finally {
+    await new Promise((ok) => { proc.once('exit', ok); proc.kill('SIGTERM'); });
+  }
+  const db2 = new DatabaseSync(path.join(dati, 'farmacia.db'), { readOnly: true });
+  assert.equal(db2.prepare('PRAGMA user_version').get().user_version, 2);
+  db2.close();
+});

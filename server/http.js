@@ -235,6 +235,7 @@ Server.prototype.definisciRotte = function () {
   this.rotta('POST', '/api/articoli', {}, function (ctx) { return op.creaArticolo(ctx, ctx.corpo); });
   this.rotta('POST', '/api/articoli/importa', {}, function (ctx) { return op.importaArticoli(ctx, ctx.corpo); });
   this.rotta('PUT', '/api/articoli/:id', {}, function (ctx) { return op.modificaArticolo(ctx, ctx.par.id, ctx.corpo); });
+  this.rotta('POST', '/api/articoli/:id/barcode', { permesso: 'articoli' }, function (ctx) { return op.associaCodice(ctx, ctx.par.id, ctx.corpo.chiave); });
   this.rotta('DELETE', '/api/articoli/:id', {}, function (ctx) { return op.eliminaArticolo(ctx, ctx.par.id); });
 
   this.rotta('PUT', '/api/impostazioni', {}, function (ctx) { return op.salvaImpostazioni(ctx, ctx.corpo); });

@@ -236,6 +236,7 @@ table.registro { border-collapse: separate; border-spacing: 0; font-size: 12.5px
 @keyframes entra { from { transform: translateY(8px); opacity: 0; } }
 
 .guida { display: grid; gap: 14px; max-width: 860px; }
+.guida > * { min-width: 0; }
 
 /* ---------- utenti e attività ---------- */
 .spunte-reparti { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 6px 0; }
@@ -293,6 +294,19 @@ table.registro { border-collapse: separate; border-spacing: 0; font-size: 12.5px
   .barra { padding: 10px 16px; gap: 10px; }
   .contenuto { padding: 16px 16px 40px; }
   .griglia-2 { grid-template-columns: 1fr; }
+  /* le schede non si allargano oltre lo schermo per colpa di una tabella: la tabella scorre dentro la scheda */
+  .griglia-2 > * { min-width: 0; }
+}
+
+/* telefono: la barra va su due righe (menu, titolo, Guidami, utente · ricerca e collegamento), così il titolo resta leggibile */
+@media (max-width: 600px) {
+  .barra { flex-wrap: wrap; row-gap: 8px; }
+  .btn-menu { order: 0; }
+  .barra-titolo { order: 1; flex: 1 1 0; }
+  .guidami { order: 2; }
+  .utente-menu { order: 3; }
+  .ricerca-rapida { order: 4; flex: 1 1 200px; }
+  .collegamento { order: 5; flex: 0 0 auto; }
 }
 
 /* ---------- stampa ---------- */

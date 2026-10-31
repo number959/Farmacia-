@@ -13,7 +13,7 @@
   var box = document.createElement('div');
   box.className = 'anteprima-banda';
   box.innerHTML =
-    '<button type="button" class="anteprima-testa" aria-expanded="false">🧪 <b>Anteprima</b> · dati di prova <span class="anteprima-freccia">▾</span></button>' +
+    '<button type="button" class="anteprima-testa" aria-expanded="false">🧪 <b>Anteprima</b> · utenti e prove <span class="anteprima-freccia">▾</span></button>' +
     '<div class="anteprima-corpo" hidden>' +
     '<p>Questa è una prova del Gestionale Farmacia: funziona tutto, ma i dati restano in questa pagina e spariscono ricaricandola.</p>' +
     '<p><b>Entra con</b> uno di questi utenti, password <code>' + h(A.PASSWORD) + '</code>:</p>' +
@@ -31,11 +31,18 @@
   document.body.appendChild(box);
 
   // nella pagina pubblicata i download diretti sono bloccati: i file Excel passano dalla funzione "downloads"
-  if (window.App && window.claude && typeof window.claude.use === 'function') {
+  // (la chiedo al momento del primo download: window.claude può arrivare dopo il caricamento della pagina)
+  var download = null;
+  function funzioneDownload() {
+    if (download) return download;
+    if (!window.claude || typeof window.claude.use !== 'function') return Promise.resolve(null);
+    download = window.claude.use('downloads').catch(function () { return null; });
+    return download;
+  }
+  if (window.App) {
     var scaricaNormale = App.scarica;
-    var download = window.claude.use('downloads').catch(function () { return null; });
     App.scarica = function (blob, nome) {
-      download.then(function (d) {
+      funzioneDownload().then(function (d) {
         if (!d) return scaricaNormale(blob, nome);
         return d.save({ filename: nome, data: blob }).catch(function (e) {
           if (e && e.code === 'declined') return;
@@ -43,6 +50,14 @@
         });
       });
     };
+    // nella pagina pubblicata la stampa non si apre: lo dico invece di non fare niente
+    var dentroUnaCornice = false;
+    try { dentroUnaCornice = window.self !== window.top; } catch (e) { dentroUnaCornice = true; }
+    if (window.claude || dentroUnaCornice) {
+      window.print = function () {
+        if (App.avviso) App.avviso('Nell’anteprima la stampa non è disponibile: nel programma installato il pulsante apre la stampa del browser.', 'ok');
+      };
+    }
   }
 
   var testa = box.querySelector('.anteprima-testa');
@@ -53,8 +68,8 @@
     box.classList.toggle('aperta', si);
   }
   testa.addEventListener('click', function () { apri(corpo.hidden); });
-  // all'inizio aperta, così si vedono subito gli utenti di prova
-  apri(true);
+  // all'inizio aperta, così si vedono subito gli utenti di prova; sul telefono chiusa, per non coprire il modulo di accesso
+  apri(!window.matchMedia || window.matchMedia('(min-width: 700px)').matches);
 
   box.addEventListener('click', function (e) {
     var u = e.target.closest('[data-utente]');
@@ -82,7 +97,7 @@
     if (c) {
       if (!window.App || !App.utente) { if (window.App && App.avviso) App.avviso('Prima entra con un utente.'); return; }
       var codice = A.codiciDiProva[Number(c.getAttribute('data-codice'))].codice;
-      if (window.Scanner && typeof window.Scanner.leggi === 'function') window.Scanner.leggi(codice);
+      if (window.Scanner && typeof window.Scanner.elabora === 'function') window.Scanner.elabora(codice, 'lettore');
       else if (window.App && App.avviso) App.avviso('Il lettore non è disponibile in questa versione.', 'errore');
     }
   });

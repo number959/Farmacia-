@@ -1,5 +1,5 @@
 /* ANTEPRIMA: riquadro fisso con utenti e prove */
-.anteprima-banda { position: fixed; left: 12px; bottom: 12px; z-index: 90; max-width: min(380px, calc(100vw - 24px)); background: #fffbea; color: #3d3200; border: 1px solid #e6cf6b; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.18); font-size: 13px; }
+.anteprima-banda { position: fixed; left: 12px; bottom: 12px; z-index: 79; max-width: min(380px, calc(100vw - 24px)); background: #fffbea; color: #3d3200; border: 1px solid #e6cf6b; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.18); font-size: 13px; }
 .anteprima-banda.aperta { max-height: calc(100vh - 24px); overflow-y: auto; }
 .anteprima-testa { width: 100%; text-align: left; background: transparent; border: 0; padding: 9px 14px; font: inherit; color: inherit; cursor: pointer; }
 .anteprima-corpo { padding: 0 14px 12px; display: grid; gap: 6px; }
@@ -9,4 +9,11 @@
 .anteprima-corpo button:hover { border-color: #b08d00; }
 .anteprima-corpo code { font-weight: 700; }
 .anteprima-nota { color: #6b5d1f; font-size: 12px; }
+/* sopra la schermata di accesso (75), sotto gli avvisi (80) e il giro di Guidami (90) */
+/* sul telefono si fa da parte mentre ci sono l'invito al giro, una finestra o la ricerca */
+@media (max-width: 700px) {
+  body:has(.tour-invito) .anteprima-banda,
+  body:has(#modale:not([hidden])) .anteprima-banda,
+  body:has(#ricerca:not([hidden])) .anteprima-banda { visibility: hidden; }
+}
 @media print { .anteprima-banda { display: none; } }

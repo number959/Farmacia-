@@ -12,6 +12,10 @@ con il proprio utente, i ruoli decidono cosa può fare, più persone lavorano in
 L'impostazione è quella del Gestionale Agende: menu a sinistra con un tasto rapido per ogni pagina, pagina **Oggi** con
 quello che c'è da fare, ricerca rapida (Ctrl K), stampe ed Excel, copie di sicurezza automatiche, dati che restano in clinica.
 
+**Novità della versione 2.1:** lettore di **codici a barre** (USB, Bluetooth o fotocamera) per caricare e scaricare
+leggendo le confezioni, **Guidami** (una guida che ti mostra sullo schermo, passo per passo, cosa fare nella pagina aperta),
+**videoguide** con i passi scritti nella pagina Guida, e un'**anteprima** che gira tutta nel browser con dati di prova.
+
 ## Installazione sul server
 
 Istruzioni complete in [`installazione/LEGGIMI.txt`](installazione/LEGGIMI.txt) (lo stesso file è nello zip da consegnare).
@@ -52,7 +56,42 @@ scadono dopo 8 ore di inattività, protezione CSRF, registro attività di access
 | Utenti | U | Utenti e ruoli (amministratore) |
 | Attività | V | Registro di accessi e operazioni |
 | Configura | F | Struttura, reparti, copie di sicurezza |
-| Guida | H | Istruzioni |
+| Guida | H | Videoguide, passi scritti e istruzioni |
+
+## Lettore di codici a barre
+
+Funziona con i lettori **USB o Bluetooth** che si comportano da tastiera (tutti quelli comuni): non serve configurare niente.
+Il programma riconosce la lettura anche se il cursore è in un altro campo e non la confonde con chi scrive a mano. Su
+telefono e tablet c'è anche il pulsante **📷 Fotocamera** (Chrome o Edge, con l'indirizzo in **HTTPS**: vedi LEGGIMI).
+
+Codici riconosciuti: **Data Matrix GS1** delle confezioni dei farmaci e dei dispositivi medici (GTIN, lotto e scadenza),
+**Code 32 / AIC** dei farmaci italiani, **EAN-13 / EAN-8 / UPC**, e qualsiasi altro codice interno.
+
+| Pagina | Cosa fa una lettura |
+|---|---|
+| Carico | aggiunge la riga dell'articolo; lotto e scadenza arrivano dal Data Matrix. Si legge per confezione (i pezzi per confezione sono nell'anagrafica) o per unità |
+| Consumi del giorno | aggiunge 1 al consumo dell'articolo nel reparto |
+| Trasferimenti, Perdite | aggiunge la riga e sceglie il lotto letto, se è disponibile nel reparto di partenza |
+| Inventario | aggiunge 1 alla quantità contata |
+| Altre pagine | apre la scheda dell'articolo |
+
+Un codice mai visto si associa una volta all'articolo giusto (o a un articolo nuovo) da chi può modificare l'anagrafica; da
+lì in poi viene riconosciuto da tutte le postazioni. In Articoli si vedono, si aggiungono e si tolgono i codici di ogni articolo.
+
+## Guidami e videoguide
+
+- **🧭 Guidami** (in alto, su ogni pagina): evidenzia sullo schermo, uno alla volta, gli elementi della pagina aperta e spiega
+  cosa fare. Non registra niente e non preme pulsanti al posto tuo. Al primo accesso di ogni utente propone un giro di un minuto.
+- **Guida** (tasto H): 14 videoguide brevi (carico, lettore di codici a barre, consumi, trasferimenti, perdite, giacenze e
+  scadenze, movimenti, inventario, nota consumi, articoli, utenti, copie di sicurezza, password, primo accesso) con
+  sottotitoli e passi scritti cliccabili; ogni guida ha anche il suo "Guidami". Sotto ci sono le spiegazioni di sempre
+  (colonne del registro, lotti e scadenze, correzioni, ruoli, tasti rapidi). La pagina mostra solo le guide utili al ruolo.
+
+## Anteprima
+
+`npm run anteprima` prepara `dist/anteprima/`: la stessa interfaccia con un server simulato dentro il browser, quattro utenti
+di prova (password `prova`), un "collega" che registra consumi per vedere gli aggiornamenti in tempo reale e codici a barre
+di prova da "leggere" con un clic. Si apre come pagina web statica; i dati spariscono ricaricando la pagina.
 
 ## Nota consumi e modulo Excel
 
@@ -75,8 +114,13 @@ server/operazioni.js     movimenti (con ripartizione sui lotti), articoli, repar
 server/backup.js         copie automatiche giornaliere, copie manuali, ripristino
 server/db.js             database SQLite (node:sqlite): farmacia.db (magazzino) e accessi.db (utenti e attività)
 index.html, css/, js/    interfaccia (servita dal server); js/calcoli.js è condiviso con il server
+js/barcode.js            analisi dei codici a barre (GS1, AIC, EAN), condiviso con il server
+js/scanner.js            lettore (tastiera, campo di lettura, fotocamera) e codici sconosciuti
+js/tour.js, js/guide.js  Guidami e pagina Guida con le videoguide (guide/: video, copertine, sottotitoli)
 installazione/           script per l'avvio automatico su Windows e LEGGIMI.txt
+anteprima/               server simulato nel browser per l'anteprima
 strumenti/compila-exe.js compilazione dell'exe
+strumenti/genera-videoguide.js  registra le videoguide (Playwright + ffmpeg) con il programma vero
 docs/ARCHITETTURA.md     architettura, ruoli e contratto dell'API
 ```
 
@@ -94,6 +138,10 @@ npm test                # prove: calcoli, modulo Excel, API del server
 npm run exe             # dist/GestionaleFarmacia/GestionaleFarmacia.exe e lo zip da consegnare
 npm run exe:linux       # eseguibile Linux con lo stesso contenuto, per le prove
 GF_ESEGUIBILE=dist/gestionale-farmacia-linux node --test tests/server.test.js   # prove sull'eseguibile compilato
+node strumenti/prova-interfaccia.js   # prova nel browser con più utenti insieme
+node strumenti/prova-tour.js          # tutti i giri di Guidami, per ogni ruolo, su computer e telefono
+node strumenti/genera-videoguide.js   # rigenera le videoguide (serve ffmpeg; --solo carico,lettore per alcune)
+npm run anteprima                     # dist/anteprima/
 ```
 
 L'exe è Node.js 22 in versione *single executable application*: il server (unito con esbuild) e i file dell'interfaccia

@@ -1,1 +1,146 @@
-/* in preparazione */
+/* Guida sullo schermo ("Guidami"): riquadro luminoso sull'elemento, resto della pagina scurito,
+   fumetto con titolo, testo e pulsanti; elenco dei giri sotto il pulsante Guidami; invito al primo accesso.
+   Colori e pulsanti sono quelli di css/app.css (--primario, --superficie, .btn…). */
+
+/* ---------- contenitore del giro: sopra finestre (60), ricerca (70), accesso (75) e avvisi (80) ---------- */
+.tour { position: fixed; inset: 0; z-index: 90; pointer-events: none; opacity: 0; transition: opacity .2s ease; }
+.tour.visibile { opacity: 1; }
+.tour.esce { opacity: 0; transition-duration: .16s; }
+
+/* trasparente: ferma i clic sulla pagina mentre il giro è aperto (la rotella fa ancora scorrere la pagina) */
+.tour-blocco { position: absolute; inset: 0; pointer-events: auto; cursor: default; }
+
+/* ---------- riquadro luminoso: l'ombra enorme scurisce tutto il resto ---------- */
+.tour-luce {
+  position: fixed; left: 50%; top: 50%; width: 0; height: 0; border-radius: 12px; pointer-events: none;
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, .96),
+    0 0 0 6px rgba(14, 90, 110, .42),
+    0 0 30px 10px rgba(124, 206, 226, .5),
+    0 0 0 200vmax rgba(10, 28, 36, .58);
+}
+.tour-luce.muove { transition: left .34s cubic-bezier(.2, .8, .2, 1), top .34s cubic-bezier(.2, .8, .2, 1),
+  width .34s cubic-bezier(.2, .8, .2, 1), height .34s cubic-bezier(.2, .8, .2, 1), border-radius .34s, box-shadow .34s; }
+/* respiro leggero intorno all'elemento */
+.tour-luce::after {
+  content: ""; position: absolute; inset: -2px; border-radius: inherit;
+  animation: tour-respiro 2.4s ease-in-out infinite;
+}
+@keyframes tour-respiro {
+  0% { box-shadow: 0 0 0 0 rgba(150, 220, 236, .55); }
+  70% { box-shadow: 0 0 0 12px rgba(150, 220, 236, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(150, 220, 236, 0); }
+}
+/* passo senza elemento: solo la pagina scurita, il fumetto al centro */
+.tour-luce.vuota { box-shadow: 0 0 0 200vmax rgba(10, 28, 36, .58); }
+.tour-luce.vuota::after { display: none; }
+
+/* ---------- fumetto ---------- */
+.tour-fumetto {
+  position: fixed; left: 0; top: 0; width: 344px; max-width: calc(100vw - 20px); max-height: calc(100vh - 20px);
+  pointer-events: auto; display: grid; gap: 8px; padding: 14px 16px 12px;
+  background: var(--superficie); color: var(--testo); border-radius: 14px;
+  box-shadow: 0 22px 60px rgba(4, 18, 26, .38), 0 3px 10px rgba(4, 18, 26, .14);
+  transition: opacity .15s;
+}
+.tour-fumetto.entra { animation: tour-entra .26s cubic-bezier(.2, .8, .2, 1); }
+.tour-fumetto[data-lato="sotto"] { --tour-da: 0, -6px; }
+.tour-fumetto[data-lato="sopra"] { --tour-da: 0, 6px; }
+.tour-fumetto[data-lato="destra"] { --tour-da: -6px, 0; }
+.tour-fumetto[data-lato="sinistra"] { --tour-da: 6px, 0; }
+@keyframes tour-entra { from { opacity: 0; transform: translate(var(--tour-da, 0, 8px)) scale(.985); } }
+.tour-fumetto.in-attesa { opacity: .72; }
+.tour-fumetto.in-attesa .tour-piede .btn:not([data-tour="esci"]) { pointer-events: none; }
+.tour-fumetto.in-attesa .tour-avanzamento span { animation: tour-attesa 1s ease-in-out infinite alternate; }
+@keyframes tour-attesa { from { opacity: 1; } to { opacity: .35; } }
+
+.tour-freccia { position: absolute; width: 14px; height: 14px; background: var(--superficie); transform: rotate(45deg); border-radius: 3px; }
+.tour-fumetto[data-lato="sotto"] .tour-freccia { top: -6px; box-shadow: -2px -2px 3px rgba(4, 18, 26, .05); }
+.tour-fumetto[data-lato="sopra"] .tour-freccia { bottom: -6px; box-shadow: 2px 2px 3px rgba(4, 18, 26, .08); }
+.tour-fumetto[data-lato="destra"] .tour-freccia { left: -6px; box-shadow: -2px 2px 3px rgba(4, 18, 26, .06); }
+.tour-fumetto[data-lato="sinistra"] .tour-freccia { right: -6px; box-shadow: 2px -2px 3px rgba(4, 18, 26, .06); }
+.tour-fumetto[data-lato="centro"] .tour-freccia,
+.tour-fumetto[data-lato="fondo"] .tour-freccia,
+.tour-fumetto[data-lato="cima"] .tour-freccia { display: none; }
+
+.tour-testa { display: flex; align-items: baseline; gap: 10px; font-size: 11.5px; }
+.tour-giro { flex: 1; min-width: 0; color: var(--oro); font-weight: 700; letter-spacing: .05em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tour-conta { color: var(--tenue); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tour-avanzamento { height: 3px; border-radius: 3px; background: var(--primario-chiaro); overflow: hidden; }
+.tour-avanzamento span { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--primario), #2f8ea8); transition: width .3s ease; }
+.tour-fumetto h3 { font-size: 16.5px; line-height: 1.25; margin-top: 2px; }
+.tour-testo { font-size: 13.5px; line-height: 1.5; color: #2d3e48; overflow-y: auto; }
+.tour-testo b { color: var(--testo); }
+.tour-testo kbd, .tour-tasti kbd { font-size: 10.5px; padding: 0 5px; }
+.tour-piede { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.tour-piede .spazio { flex: 1; }
+.tour-piede .btn.piccolo { padding: 5px 12px; font-size: 13px; border-radius: 7px; }
+.tour-piede .btn.fantasma { color: var(--tenue); padding-left: 6px; padding-right: 6px; }
+.tour-piede .btn.fantasma:hover { color: var(--testo); }
+.tour-tasti { font-size: 11.5px; color: var(--tenue); text-align: center; border-top: 1px solid var(--linea); padding-top: 8px; margin-top: 2px; }
+
+/* punto invisibile usato per spostare la vista del telefono (js/tour.js, avvicinaVista) */
+.tour-sonda { position: absolute; width: 1px; height: 1px; pointer-events: none; visibility: hidden; }
+
+/* ---------- elenco dei giri (pulsante Guidami su una pagina senza giro) ---------- */
+.tour-elenco {
+  position: fixed; z-index: 85; display: flex; flex-direction: column; background: var(--superficie);
+  border: 1px solid var(--linea); border-radius: 12px; box-shadow: 0 18px 48px rgba(16, 40, 52, .24);
+  animation: tour-entra .2s ease-out; --tour-da: 0, -6px;
+}
+.tour-elenco .tour-freccia { top: -7px; border-left: 1px solid var(--linea); border-top: 1px solid var(--linea); border-radius: 3px 0 0 0; }
+.tour-elenco-testa { display: grid; gap: 2px; padding: 14px 16px 10px; border-bottom: 1px solid var(--linea); }
+.tour-elenco-testa b { font-size: 14.5px; }
+.tour-elenco-testa span { font-size: 12.5px; color: var(--tenue); }
+.tour-elenco ul { list-style: none; margin: 0; padding: 6px; overflow-y: auto; min-height: 0; }
+.tour-elenco li button {
+  width: 100%; display: flex; gap: 10px; align-items: flex-start; text-align: left; border: 0; background: transparent;
+  padding: 8px 10px; border-radius: 8px; cursor: pointer;
+}
+.tour-elenco li button:hover, .tour-elenco li button:focus-visible { background: var(--primario-chiaro); outline: none; }
+.tour-elenco li button.qui { box-shadow: inset 3px 0 0 var(--oro); }
+.tour-elenco .ico { width: 22px; text-align: center; font-size: 16px; line-height: 1.3; }
+.tour-elenco .testi { display: grid; gap: 1px; min-width: 0; }
+.tour-elenco .testi b { font-size: 13.5px; }
+.tour-elenco .testi small { font-size: 12px; color: var(--tenue); line-height: 1.35; }
+.tour-elenco-piede { padding: 8px 16px 12px; border-top: 1px solid var(--linea); font-size: 12px; color: var(--tenue); }
+
+/* ---------- invito al primo accesso: discreto, in basso, non copre la barra né gli avvisi ---------- */
+.tour-invito {
+  position: fixed; z-index: 45; left: calc(248px + 24px); bottom: 20px; width: min(460px, calc(100vw - 248px - 48px));
+  display: grid; grid-template-columns: 38px 1fr; gap: 12px; align-items: start;
+  padding: 14px 16px; background: var(--superficie); border: 1px solid var(--linea); border-left: 4px solid var(--primario);
+  border-radius: 12px; box-shadow: 0 16px 44px rgba(16, 40, 52, .22);
+  animation: tour-invito-entra .35s cubic-bezier(.2, .8, .2, 1);
+}
+.tour-invito.esce { opacity: 0; transform: translateY(8px); transition: opacity .15s, transform .15s; }
+@keyframes tour-invito-entra { from { opacity: 0; transform: translateY(14px); } }
+.tour-invito-ico { width: 38px; height: 38px; border-radius: 10px; background: var(--primario-chiaro); display: grid; place-items: center; font-size: 19px; }
+.tour-invito-corpo { display: grid; gap: 4px; min-width: 0; }
+.tour-invito-corpo b { font-size: 14.5px; }
+.tour-invito-corpo p { font-size: 12.5px; color: var(--tenue); }
+.tour-invito-azioni { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.tour-invito-azioni .btn.fantasma { color: var(--tenue); }
+
+/* ---------- schermi stretti ---------- */
+@media (max-width: 900px) {
+  .tour-invito { left: 12px; right: 12px; bottom: 12px; width: auto; max-width: 460px; }
+}
+@media (max-width: 600px) {
+  /* la larghezza la calcola js/tour.js sulla parte visibile dello schermo */
+  .tour-fumetto { padding: 13px 14px 11px; }
+  .tour-fumetto h3 { font-size: 16px; }
+  .tour-tasti { display: none; }
+  .tour-invito { grid-template-columns: 1fr; gap: 8px; }
+  .tour-invito-ico { display: none; }
+}
+
+/* ---------- chi preferisce meno movimento ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .tour, .tour-fumetto, .tour-luce.muove, .tour-avanzamento span { transition: none; }
+  .tour-luce::after, .tour-fumetto.entra, .tour-elenco, .tour-invito, .tour-fumetto.in-attesa .tour-avanzamento span { animation: none; }
+}
+
+@media print {
+  .tour, .tour-elenco, .tour-invito { display: none !important; }
+}

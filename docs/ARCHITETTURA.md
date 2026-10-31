@@ -149,3 +149,94 @@ Tutte le risposte sono JSON. Errori: stato HTTP 4xx/5xx con `{ "errore": "messag
 `npm run exe` (vedi `strumenti/compila-exe.js`): impacchetta server e interfaccia in un blob SEA, lo inietta in `node.exe`
 per Windows x64 (stessa versione di Node usata per prepararlo), imposta icona e informazioni di versione e produce
 `dist/GestionaleFarmacia.exe`. Con `--linux` produce anche `dist/gestionale-farmacia-linux` per le prove automatiche.
+
+## Codici a barre (versione 2.1)
+
+### Articoli
+L'articolo ha due campi in più:
+
+```js
+articolo = { …, barcode: ['aic:012345676', 'gtin:08012345678907', 'cod:INTERNO77'], pezziConfezione: 1 }
+```
+
+- `barcode`: chiavi normalizzate dei codici a barre (anche vuoto, al massimo 50). Una chiave appartiene a **un solo articolo**.
+- `pezziConfezione`: quante unità (cpr, fl, pz…) ci sono in una confezione letta; numero > 0, predefinito 1.
+
+Database: `PRAGMA user_version` 2 di `farmacia.db`, colonne `articoli.barcode TEXT NOT NULL DEFAULT '[]'` (array JSON)
+e `articoli.pezzi_confezione REAL NOT NULL DEFAULT 1`. I database della versione 2.0 (e le copie di sicurezza vecchie che si
+ripristinano) si aggiornano da soli all'apertura (`aggiornaSchemaDati` in `server/db.js`). L'unicità si controlla nella
+transazione con `json_each(articoli.barcode)`.
+
+| Metodo e percorso | Corpo | Note |
+|---|---|---|
+| `POST /api/articoli`, `PUT /api/articoli/:id` | anche `barcode`, `pezziConfezione` | le chiavi si normalizzano (`Barcode.normalizzaChiave`); chiave non valida 400; chiave di un altro articolo 409 con il nome di quell'articolo. In `PUT` i campi mancanti restano come sono (client vecchi, importazioni). |
+| `POST /api/articoli/:id/barcode` | `{ chiave }` | permesso `articoli`. Aggiunge un codice letto all'articolo: `{ rev, articolo }`. Idempotente se il codice è già suo (nessuna scrittura), 409 se è di un altro articolo, 400 se la chiave non è valida, 404 se l'articolo non c'è. Registro attività `articoli.barcode`. |
+
+Importazione da Excel, archivio della versione per un solo PC e dati di prova creano articoli con `barcode: []`.
+
+### Analisi dei codici (`js/barcode.js`, condiviso con il server)
+`Barcode.analizza(testo)` → `{ grezzo, tipo: 'gs1'|'aic'|'ean'|'altro', chiavi, gtin, aic, lotto, scadenza: 'AAAA-MM'|'', seriale }`.
+
+- Toglie il prefisso AIM (`]d2`, `]C1`, `]E0`, `]Q3`, `]e0`…) e un GS iniziale (FNC1).
+- **GS1** (Data Matrix dei farmaci, UDI, GS1-128): AI `01` GTIN, `17` scadenza AAMMGG (giorno `00` = fine mese, secolo con la
+  regola GS1), `10` lotto, `21` seriale; `11` e gli altri AI noti si leggono e si ignorano. Forme accettate: con il separatore
+  GS (`\x1D`, oppure `<GS>`/`{GS}` scritti come testo), con le parentesi `(01)…(17)…`, senza separatori quando i campi variabili
+  sono in fondo (se un campo variabile finisce con `17`/`11` + data valida, la data si stacca). Chiave `gtin:` (nessuna chiave
+  se manca il GTIN, per esempio un SSCC o un lotto da solo).
+- **AIC (Code 32)**: `A` + 9 cifre, 9 cifre, oppure le 6 lettere/cifre in base 32 (`0123456789BCDFGHJKLMNPQRSTUVWXYZ`) di un
+  lettore impostato su Code 39; cifra di controllo obbligatoria. Chiave `aic:` + 9 cifre.
+- **EAN-13, EAN-8, UPC-A, GTIN-14** con cifra di controllo valida → `gtin:` + 14 cifre.
+- Tutto il resto: `tipo: 'altro'`, chiave `cod:` + testo maiuscolo senza spazi né caratteri di controllo (massimo 60).
+
+`Barcode.descrivi(chiave)` dà il testo da mostrare (`AIC 012345676`, `EAN 8012345678907`, `INTERNO77`).
+
+### Interfaccia (`js/scanner.js`, `window.Scanner`)
+- **Lettori USB/Bluetooth** (emulazione tastiera): un ascoltatore `keydown` sulla finestra (fase di cattura) riconosce le
+  raffiche: almeno 4 caratteri, nessun intervallo oltre 60 ms, media ≤ 35 ms, chiuse da Invio o Tab entro 150 ms. Nei campi di
+  testo i caratteri passano e, se era una lettura, il campo torna al valore e alla selezione di prima della raffica (con un
+  evento `input`); fuori dai campi (pagina, pulsanti, elenchi a discesa) i tasti si trattengono finché non si capisce se è una
+  lettura, poi si ripassano alla pagina (tasti rapidi) o si applicano all'elenco come la scelta per iniziali del browser.
+  L'Invio di una lettura non arriva alla pagina. I campi password, gli eventi `repeat` e la composizione (IME) non si
+  considerano mai. Il separatore GS arriva come `Ctrl+]` (solo dentro una raffica già iniziata).
+  Conseguenza per le prove automatiche: con Playwright `keyboard.type(testo)` senza `delay` seguito da Invio è una lettura;
+  per scrivere come una persona usare `fill()` o `delay` ≥ 60 ms.
+- **Barra di lettura**: `Scanner.barra({ pagina, predefinito })` → `.barra-scanner` con `#scanner-campo` (scritto a mano + Invio),
+  `#scanner-modo` (`unita` = 1, `confezione` = `pezziConfezione`; scelta ricordata per pagina in `localStorage`
+  `gf-scanner-modo:<pagina>`), `#scanner-fotocamera` (solo con `window.BarcodeDetector` in un contesto sicuro), aiuto e ultima
+  lettura (`.scanner-ultima`). `Scanner.collega(cont)` collega gli eventi. Pagine con la barra: Carico (predefinito
+  `confezione`), Consumi, Trasferimenti, Perdite, Inventario (predefinito `unita`).
+- **Instradamento** (`Scanner.elabora(testo, origine)`): 1) una finestra che sta leggendo (`Scanner.cattura(fn, el)`, attiva
+  finché `el` è nella pagina: il modulo dell'articolo); 2) la ricerca rapida aperta si chiude; 3) con una finestra aperta da una
+  lettura (classe `da-lettura`: scheda, codice sconosciuto) la nuova lettura la sostituisce, con un'altra finestra aperta compare
+  "Chiudi prima la finestra aperta"; 4) articolo trovato → `App.gestoreScansione(info, articolo, passo)` della pagina (che può
+  restituire `false` = non applicata, o il testo dell'avviso), altrimenti si apre la scheda dell'articolo; articolo non attivo
+  → avviso; 5) codice sconosciuto → finestra "Codice non riconosciuto" (chi ha il permesso `articoli` sceglie l'articolo per
+  nome, `POST /api/articoli/:id/barcode`, oppure crea un articolo nuovo con il codice già messo; poi la lettura riparte).
+- **Fotocamera** (`Scanner.apriFotocamera({ alLeggere, continua })`): finestra propria sopra le altre (`.scanner-fotocamera`),
+  fotocamera posteriore, formati `data_matrix`, `ean_13`, `ean_8`, `code_39`, `code_128`, `upc_a`, `qr_code` (quelli
+  supportati); alla prima lettura si chiude, con "Lettura continua" resta aperta e lo stesso codice si conta di nuovo solo dopo
+  che è uscito dall'inquadratura. La fotocamera si spegne alla chiusura, con Esc, al cambio di pagina e con la scheda nascosta.
+- Segnali: `Scanner.suono('ok'|'sconosciuto'|'errore')` (WebAudio) e avviso "Letto: NOME (+10)".
+
+## Guidami e videoguide (versione 2.1)
+
+- `js/tour.js` (`window.Tour`): giri guidati sulla pagina. Ogni giro è un elenco di passi `{ pagina?, el, titolo, testo,
+  posizione?, facoltativo?, se?, insieme?, risali?, riparo? }` con i selettori veri delle pagine; il pulsante `#guidami` avvia
+  il giro della pagina aperta. Il giro non scrive dati e non preme pulsanti: blocca i clic sulla pagina finché è aperto, chiede
+  conferma prima di cambiare pagina se ci sono righe non registrate, si chiude da solo al cambio pagina o alla scadenza della
+  sessione. L'invito al primo accesso si ricorda nel browser (`gf-giro-invito:<id utente>`).
+  `strumenti/prova-tour.js` percorre tutti i giri per ogni ruolo, su computer e telefono, e controlla che non parta nessuna scrittura.
+- `js/guide.js` (`window.Guide`): sostituisce la pagina Guida. `Guide.ELENCO` elenca le guide (id, permesso, giro, passi);
+  i passi sono anche le didascalie dei video. I file stanno in `guide/<id>.mp4|jpg|vtt`, serviti dal server anche a intervalli
+  (Range) e incorporati nell'exe. Una guida senza video (404) mostra solo i passi scritti e Guidami.
+- `strumenti/genera-videoguide.js` rigenera i video: avvia il server vero con dati di prova, registra ogni scenario con
+  Playwright (1280×720, didascalie e puntatore finto), poi ffmpeg (H.264, `+faststart`, al massimo 2 MB) e scrive copertina e
+  sottotitoli. Quando una pagina cambia aspetto si rigenera la sua guida con `--solo <id>`.
+
+## Anteprima
+
+`strumenti/genera-anteprima.js` crea `dist/anteprima/`: l'interfaccia vera con `anteprima/server-finto.js`, che risponde a
+`fetch('api/…')` ed `EventSource('api/eventi')` dentro il browser (stesse regole di permessi e ripartizione sui lotti, tramite
+`js/calcoli.js`), e `anteprima/banda.js` (utenti di prova, collega che registra, codici a barre di prova). `pagina-artifact.html`
+è la stessa pagina senza `<html>`/`<head>`/`<body>`, per pubblicarla come Artifact; lì i download passano dalla funzione
+`downloads` e la fotocamera è spenta. Non fa parte del programma installato.

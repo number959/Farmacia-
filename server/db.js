@@ -24,7 +24,7 @@ var DatabaseSync = require('node:sqlite').DatabaseSync;
 var path = require('path');
 var fs = require('fs');
 
-var VERSIONE_SCHEMA_DATI = 1;
+var VERSIONE_SCHEMA_DATI = 2; // 2: codici a barre e pezzi per confezione degli articoli
 var VERSIONE_SCHEMA_ACCESSI = 1;
 
 var IMPOSTAZIONI_PREDEFINITE = {
@@ -55,7 +55,13 @@ function versioneSchema(db) {
 }
 
 function creaSchemaDati(db) {
-  if (versioneSchema(db) >= VERSIONE_SCHEMA_DATI) return;
+  var versione = versioneSchema(db);
+  if (versione >= VERSIONE_SCHEMA_DATI) return;
+  if (versione < 1) creaSchemaDatiV1(db);
+  aggiornaSchemaDati(db);
+}
+
+function creaSchemaDatiV1(db) {
   db.exec([
     'CREATE TABLE IF NOT EXISTS meta (chiave TEXT PRIMARY KEY, valore TEXT NOT NULL);',
     'CREATE TABLE IF NOT EXISTS impostazioni (chiave TEXT PRIMARY KEY, valore TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0);',
@@ -90,7 +96,28 @@ function creaSchemaDati(db) {
   Object.keys(IMPOSTAZIONI_PREDEFINITE).forEach(function (k) { imp.run(k, JSON.stringify(IMPOSTAZIONI_PREDEFINITE[k])); });
   var rep = db.prepare('INSERT OR IGNORE INTO reparti (id, nome, centrale, attivo, ordine, rev) VALUES (?, ?, ?, 1, ?, 1)');
   REPARTI_PREDEFINITI.forEach(function (r, i) { rep.run(r.id, r.nome, r.centrale ? 1 : 0, i); });
-  db.exec('PRAGMA user_version = ' + VERSIONE_SCHEMA_DATI);
+  db.exec('PRAGMA user_version = 1');
+}
+
+/*
+ * Aggiornamenti dello schema del magazzino, uno dopo l'altro. Valgono per i database nuovi, per quelli
+ * della versione precedente (all'apertura) e per le copie di sicurezza vecchie che si ripristinano.
+ */
+function aggiornaSchemaDati(db) {
+  if (versioneSchema(db) < 2) {
+    // versione 2: codici a barre (array JSON di chiavi normalizzate, vedi js/barcode.js) e pezzi per confezione
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      var colonne = db.prepare('PRAGMA table_info(articoli)').all().map(function (c) { return c.name; });
+      if (colonne.indexOf('barcode') < 0) db.exec("ALTER TABLE articoli ADD COLUMN barcode TEXT NOT NULL DEFAULT '[]'");
+      if (colonne.indexOf('pezzi_confezione') < 0) db.exec('ALTER TABLE articoli ADD COLUMN pezzi_confezione REAL NOT NULL DEFAULT 1');
+      db.exec('PRAGMA user_version = 2');
+      db.exec('COMMIT');
+    } catch (e) {
+      try { db.exec('ROLLBACK'); } catch (e2) { /* già chiusa */ }
+      throw e;
+    }
+  }
 }
 
 function creaSchemaAccessi(db) {
@@ -115,10 +142,18 @@ function creaSchemaAccessi(db) {
 
 /* ---------- conversione righe <-> oggetti del client ---------- */
 
+function codiciDaTesto(testo) {
+  try {
+    var l = JSON.parse(testo || '[]');
+    return Array.isArray(l) ? l.filter(function (k) { return typeof k === 'string'; }) : [];
+  } catch (e) { return []; }
+}
+
 function articoloDaRiga(r) {
   return {
     id: r.id, nome: r.nome, categoria: r.categoria, unita: r.unita, principio: r.principio, confezione: r.confezione,
-    codice: r.codice, prezzo: r.prezzo, scortaMinima: r.scorta_minima, note: r.note, attivo: !!r.attivo, versione: r.versione
+    codice: r.codice, prezzo: r.prezzo, scortaMinima: r.scorta_minima, note: r.note, attivo: !!r.attivo, versione: r.versione,
+    barcode: codiciDaTesto(r.barcode), pezziConfezione: r.pezzi_confezione > 0 ? r.pezzi_confezione : 1
   };
 }
 
@@ -234,6 +269,13 @@ Database.prototype.articolo = function (id) {
 
 Database.prototype.articoloPerNome = function (nome) {
   var r = this.dati.prepare('SELECT * FROM articoli WHERE nome = ? COLLATE NOCASE').get(String(nome).trim());
+  return r ? articoloDaRiga(r) : null;
+};
+
+/* Articolo che ha già il codice a barre `chiave` (escluso eventualmente `tranneId`), oppure null. */
+Database.prototype.articoloConCodice = function (chiave, tranneId) {
+  var r = this.dati.prepare('SELECT a.* FROM articoli a, json_each(a.barcode) j WHERE j.value = ? AND a.id <> ? LIMIT 1')
+    .get(String(chiave), String(tranneId || ''));
   return r ? articoloDaRiga(r) : null;
 };
 

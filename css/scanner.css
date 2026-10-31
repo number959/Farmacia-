@@ -1,1 +1,73 @@
-/* in preparazione */
+/* Lettore di codici a barre: barra di lettura, righe evidenziate, finestra "Codice non riconosciuto",
+   codici nel modulo dell'articolo, finestra della fotocamera. Stessa grafica di css/app.css. */
+
+/* ---------- barra di lettura in cima alle pagine dove si registra ---------- */
+.barra-scanner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px; background: var(--superficie); border: 1px solid var(--linea); border-left: 4px solid var(--primario); border-radius: var(--raggio); box-shadow: var(--ombra); }
+.barra-scanner .scanner-ico { color: var(--primario); flex: none; }
+.scanner-campo { flex: 1 1 240px; min-width: 0; display: flex; }
+.scanner-campo input { flex: 1; min-width: 0; border: 1px solid var(--linea-forte); border-radius: 7px; padding: 8px 10px; background: var(--superficie-2); font-family: var(--mono); font-size: 14px; }
+.scanner-campo input:focus { border-color: var(--primario); outline: 2px solid var(--primario-chiaro); outline-offset: 0; background: var(--superficie); }
+.scanner-modo { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--tenue); font-weight: 600; min-width: 0; }
+.scanner-modo select { border: 1px solid var(--linea-forte); border-radius: 7px; padding: 6px 8px; background: var(--superficie); color: var(--testo); font-weight: 400; min-width: 0; }
+.scanner-aiuto { flex: 1 1 100%; font-size: 12px; color: var(--tenue); }
+.scanner-ultima { flex: 1 1 100%; font-size: 12.5px; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.scanner-ultima:empty { display: none; }
+.scanner-ultima.ok { color: var(--ok); }
+.scanner-ultima.errore { color: var(--pericolo); }
+.scanner-nascosto { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* riga appena toccata da una lettura */
+@keyframes scanner-lampo { 0%, 35% { background: #d7efe0; } 100% { background: transparent; } }
+tr.scanner-evidenziata > td { animation: scanner-lampo 1.6s ease-out; }
+
+/* ---------- finestra "Codice non riconosciuto" ---------- */
+.scanner-letto { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 0; padding: 10px 14px; background: var(--superficie-2); border: 1px solid var(--linea); border-radius: 8px; }
+.scanner-letto div { min-width: 0; }
+.scanner-letto dt { font-size: 11.5px; font-weight: 600; color: var(--tenue); text-transform: uppercase; letter-spacing: .04em; }
+.scanner-letto dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+.scanner-scelte { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 40vh; overflow-y: auto; }
+.scanner-scelta { width: 100%; display: grid; gap: 1px; text-align: left; border: 1px solid var(--linea); background: var(--superficie); border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+.scanner-scelta:hover, .scanner-scelta:focus-visible { border-color: var(--primario); background: var(--primario-chiaro); }
+.scanner-scelta:disabled { opacity: .6; cursor: progress; }
+
+/* ---------- codici a barre nel modulo dell'articolo ---------- */
+.codici-articolo { display: flex; flex-wrap: wrap; gap: 6px; min-height: 8px; }
+.codice-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--linea-forte); background: var(--superficie-2); border-radius: 999px; padding: 2px 4px 2px 10px; font-size: 12.5px; max-width: 100%; }
+.codice-chip .mono { overflow-wrap: anywhere; }
+.codice-chip button { border: 0; background: transparent; cursor: pointer; border-radius: 999px; width: 22px; height: 22px; line-height: 1; font-size: 15px; color: var(--tenue); flex: none; }
+.codice-chip button:hover { background: var(--pericolo-chiaro); color: var(--pericolo); }
+.codice-chip.nuovo { border-color: var(--ok); background: var(--ok-chiaro); }
+/* sul telefono la riga (campo + "Aggiungi leggendo" + fotocamera) va a capo invece di allargare la finestra */
+.campo-codici { min-width: 0; }
+.riga-codici { flex-wrap: wrap; }
+.riga-codici input { flex: 1 1 180px; width: 0; }
+@keyframes scanner-attesa { 50% { outline-color: var(--primario); } }
+.campo-riga input.scanner-in-attesa { border-color: var(--primario); outline: 2px solid var(--primario-chiaro); outline-offset: 0; animation: scanner-attesa 1.2s ease-in-out infinite; }
+
+/* ---------- fotocamera ---------- */
+.scanner-fotocamera { position: fixed; inset: 0; z-index: 72; background: rgba(12, 30, 38, .6); display: grid; place-items: center; padding: 12px; }
+.scanner-foto-scheda { width: min(560px, 100%); max-height: 100%; overflow-y: auto; background: var(--superficie); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.35); display: grid; }
+.scanner-foto-testa { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--linea); }
+.scanner-foto-testa h2 { flex: 1; font-size: 16px; }
+.scanner-foto-video { position: relative; background: #000; aspect-ratio: 4 / 3; max-height: 62vh; overflow: hidden; }
+.scanner-foto-video video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.scanner-mirino { position: absolute; left: 14%; right: 14%; top: 24%; bottom: 24%; border: 3px solid rgba(255,255,255,.9); border-radius: 12px; box-shadow: 0 0 0 9999px rgba(0,0,0,.25); pointer-events: none; }
+.scanner-foto-stato { padding: 10px 16px 0; font-size: 13px; color: var(--tenue); overflow-wrap: anywhere; }
+.scanner-foto-stato.errore { color: var(--pericolo); font-weight: 600; }
+.scanner-foto-piede { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 16px; }
+.scanner-foto-piede .spazio { flex: 1; }
+.scanner-foto-piede .btn { margin-left: auto; }
+
+@media (max-width: 900px) {
+  .barra-scanner { padding: 8px 10px; }
+  .barra-scanner .scanner-ico { display: none; }
+  .scanner-campo { flex-basis: 100%; }
+  #scanner-fotocamera span { display: none; }
+}
+@media (max-width: 600px) {
+  .scanner-aiuto { display: none; }
+}
+
+@media print {
+  .barra-scanner, .scanner-fotocamera { display: none !important; }
+}

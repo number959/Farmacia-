@@ -1,5 +1,5 @@
 GESTIONALE FARMACIA - CLINICA POSILLIPO (LONGEVITY INSTITUTE)
-Versione server multiutente
+Versione server multiutente 2.1
 ==============================================================
 
 Il programma è un solo file, GestionaleFarmacia.exe. Si installa sul server
@@ -98,10 +98,33 @@ AGGIORNAMENTO A UNA NUOVA VERSIONE
 Dopo l'aggiornamento i browser già aperti ricaricano i dati da soli.
 
 
+LETTORE DI CODICI A BARRE
+-------------------------
+Va bene qualsiasi lettore USB o Bluetooth che "scrive come una tastiera"
+(sono quasi tutti): si collega alla postazione e si usa subito, senza
+configurare niente. Meglio se legge anche i codici 2D (Data Matrix): sulle
+confezioni dei farmaci il Data Matrix contiene anche LOTTO e SCADENZA, che
+nel Carico si compilano da soli.
+Nelle pagine dove si registra (Carico, Consumi, Trasferimenti, Perdite,
+Inventario) c'è la barra "Lettore": basta leggere la confezione. Un codice mai
+visto si associa una volta all'articolo giusto, poi lo riconoscono tutti.
+Fotocamera di telefono e tablet: il pulsante "Fotocamera" compare solo con
+Chrome o Edge e con l'indirizzo in HTTPS (vedi sotto), perché i browser
+permettono la fotocamera solo sulle pagine protette.
+
+
+GUIDE
+-----
+Il pulsante "Guidami" in alto mostra sullo schermo, passo per passo, cosa fare
+nella pagina aperta. Nella pagina Guida ci sono le videoguide con i passi
+scritti. Al primo accesso ogni utente riceve l'invito a un giro di un minuto.
+
+
 HTTPS (FACOLTATIVO)
 -------------------
 Di serie il programma usa HTTP, adatto a una rete interna. Per cifrare il
-traffico (consigliato se la rete non è solo della clinica): metti certificato
+traffico (consigliato se la rete non è solo della clinica, e necessario per
+leggere i codici con la fotocamera di telefoni e tablet): metti certificato
 e chiave in dati\ e crea dati\configurazione.json (c'è un esempio,
 configurazione-esempio.json, da copiare in dati\ con quel nome) come
     { "https": { "cert": "certificato.pem", "key": "chiave.pem" } }

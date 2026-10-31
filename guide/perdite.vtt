@@ -1,0 +1,25 @@
+WEBVTT
+
+1
+00:00:03.130 --> 00:00:09.522
+Le confezioni scadute le trovi in Scadenze (tasto Z): scegli Solo scaduti.
+
+2
+00:00:09.522 --> 00:00:14.487
+Accanto al lotto scaduto premi Togli dal magazzino.
+
+3
+00:00:14.487 --> 00:00:21.752
+Si apre Perdite e scaduti con articolo, lotto, quantità e causale Scaduto già compilati.
+
+4
+00:00:21.752 --> 00:00:29.880
+Per un altro motivo scegli la causale: rotto, smarrito, reso al fornitore. Se serve aggiungi una nota.
+
+5
+00:00:29.880 --> 00:00:36.768
+Premi Registra perdita: nella nota consumi del mese finisce nella colonna Perdite.
+
+6
+00:00:36.768 --> 00:00:44.563
+La perdita compare tra le ultime perdite e il lotto scaduto non è più in giacenza.

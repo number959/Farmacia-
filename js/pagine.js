@@ -78,6 +78,29 @@
 
   function valore(cont, sel) { var el = cont.querySelector(sel); return el ? el.value : ''; }
 
+  /* ---------- lettore di codici a barre (js/barcode.js, js/scanner.js) ---------- */
+
+  // barra di lettura in cima alle pagine dove si registra; predefinito: quanto vale una lettura ('unita' | 'confezione')
+  function barraLettore(predefinito) {
+    return root.Scanner ? root.Scanner.barra({ pagina: App.paginaCorrente, predefinito: predefinito }) : '';
+  }
+  function collegaLettore(cont) { if (root.Scanner) root.Scanner.collega(cont); }
+  function evidenziaLettura(el) { if (root.Scanner) root.Scanner.evidenzia(el); }
+  function suonoLettura(tipo) { if (root.Scanner) root.Scanner.suono(tipo); }
+
+  function descriviCodici(lista) {
+    return (lista || []).map(function (k) { return root.Barcode ? root.Barcode.descrivi(k) : k; });
+  }
+
+  /* Un filtro della pagina (categoria, ricerca) nasconde l'articolo appena letto: lo tolgo. */
+  function mostraArticoloNeiFiltri(cont, selCategoria, selCerca, a) {
+    var cat = cont.querySelector(selCategoria);
+    if (cat && cat.value && cat.value !== a.categoria) cat.value = '';
+    var cerca = cont.querySelector(selCerca);
+    var t = cerca ? cerca.value.trim().toLowerCase() : '';
+    if (t && a.nome.toLowerCase().indexOf(t) < 0) cerca.value = '';
+  }
+
   function riferimento(m) {
     var parti = [];
     if (m.tipo === 'trasferimento') parti.push('→ ' + App.nomeReparto(m.repartoDestId));
@@ -165,7 +188,9 @@
       a.principio ? 'Principio attivo: <b>' + h(a.principio) + '</b>' : '',
       a.confezione ? 'Confezione: <b>' + h(a.confezione) + '</b>' : '',
       a.codice ? 'Codice: <b class="mono">' + h(a.codice) + '</b>' : '',
+      a.barcode && a.barcode.length ? 'Codici a barre: <b class="mono">' + descriviCodici(a.barcode).map(h).join(', ') + '</b>' : '',
       a.unita ? 'Unità: <b>' + h(a.unita) + '</b>' : '',
+      a.pezziConfezione && a.pezziConfezione !== 1 ? 'Pezzi per confezione: <b>' + App.fmtNum(a.pezziConfezione) + '</b>' : '',
       'Prezzo unitario: <b>' + App.fmtEuro(a.prezzo) + '</b>',
       a.scortaMinima ? 'Scorta minima (' + h(App.repartoCentrale().nome) + '): <b>' + App.fmtNum(a.scortaMinima) + '</b>' : ''
     ].filter(Boolean).join(' · ');
@@ -199,11 +224,20 @@
 
   /* ======================= anagrafica articolo ======================= */
 
-  App.formArticolo = function (id, dopo) {
+  /*
+   * Modulo dell'articolo (nuovo o da modificare). dopo(id): chiamata dopo il salvataggio.
+   * iniziali: valori proposti per un articolo nuovo (per esempio { barcode: [chiave], codice } dal codice non riconosciuto).
+   */
+  App.formArticolo = function (id, dopo, iniziali) {
     if (!App.puo('articoli')) return;
-    var a = id ? App.articolo(id) : { categoria: 'FARMACI', attivo: true };
+    var a = id ? App.articolo(id) : Object.assign({ categoria: 'FARMACI', attivo: true }, iniziali || {});
     if (!a) { App.avviso('L’articolo non c’è più: forse l’ha eliminato un altro utente.', 'errore'); return; }
     var unita = ['cpr', 'cps', 'fl', 'f', 'bustine', 'ml', 'flacone', 'tubo', 'conf', 'pz', 'paia', 'rotolo', 'sacca'];
+    var B = root.Barcode;
+    var codici = (a.barcode || []).slice();
+    var boxCodici = null;
+    var fotocamera = !!(root.Scanner && root.Scanner.fotocameraDisponibile());
+    var AIUTO_CODICE = 'Leggi il codice con il lettore, oppure scrivilo e premi Invio';
     App.apriModale({
       titolo: id ? 'Modifica articolo' : 'Nuovo articolo',
       corpo: '<div class="modulo">' +
@@ -214,6 +248,14 @@
         '<label class="campo"><span>Principio attivo</span><input id="fa-principio" value="' + h(a.principio || '') + '"></label>' +
         '<label class="campo"><span>Confezione / formato</span><input id="fa-confezione" value="' + h(a.confezione || '') + '" placeholder="Es. 10 fl da 100 ml"></label>' +
         '<label class="campo"><span>Codice (AIC / minsan / interno)</span><input id="fa-codice" value="' + h(a.codice || '') + '"></label>' +
+        '<label class="campo" title="Quante unità (cpr, fl, pz…) ci sono in una confezione: con il lettore su “1 confezione” ogni lettura vale tanto così">' +
+        '<span>Pezzi per confezione</span><input id="fa-pezzi" inputmode="decimal" value="' + h(App.fmtCampo(a.pezziConfezione || 1)) + '"></label>' +
+        '<div class="campo largo campo-codici"><span>Codici a barre</span><div class="codici-articolo" id="fa-codici"></div>' +
+        '<div class="campo-riga riga-codici"><input id="fa-codice-letto" autocomplete="off" spellcheck="false" placeholder="' + AIUTO_CODICE + '" aria-label="Nuovo codice a barre">' +
+        '<button class="btn" type="button" id="fa-leggi">Aggiungi leggendo</button>' +
+        (fotocamera ? '<button class="btn" type="button" id="fa-foto" title="Leggi con la fotocamera" aria-label="Leggi con la fotocamera">📷</button>' : '') + '</div>' +
+        '<small class="tenue">Con questa finestra aperta ogni codice letto con il lettore si aggiunge all’articolo. Un codice appartiene a un solo articolo. ' +
+        '“Pezzi per confezione”: quante unità ci sono in una confezione; con il lettore su “1 confezione” ogni lettura vale tanto così.</small></div>' +
         '<label class="campo"><span>Prezzo unitario €</span><input id="fa-prezzo" inputmode="decimal" value="' + (a.prezzo ? String(a.prezzo).replace('.', ',') : '') + '"></label>' +
         '<label class="campo"><span>Scorta minima in ' + h(App.repartoCentrale().nome) + '</span><input id="fa-scorta" inputmode="decimal" value="' + (a.scortaMinima || '') + '"></label>' +
         '<label class="campo largo"><span>Note</span><textarea id="fa-note">' + h(a.note || '') + '</textarea></label>' +
@@ -221,12 +263,74 @@
         '</div>',
       piede: (id ? '<button class="btn pericolo" type="button" id="fa-elimina">Elimina</button><span class="spazio"></span>' : '') +
         '<button class="btn" type="button" data-chiudi>Annulla</button><button class="btn primario" type="button" id="fa-salva">Salva</button>',
+      allaChiusura: function () { if (root.Scanner && boxCodici) root.Scanner.rilascia(boxCodici); },
       dopo: function (m) {
+        // ---- codici a barre: elenco (si toglie con ×), lettura con il lettore, a mano o con la fotocamera ----
+        boxCodici = m.querySelector('#fa-codici');
+        var campoCodice = m.querySelector('#fa-codice-letto');
+        function disegnaCodici(nuovo) {
+          boxCodici.innerHTML = codici.length ? codici.map(function (k, i) {
+            var d = h(B.descrivi(k));
+            return '<span class="codice-chip' + (k === nuovo ? ' nuovo' : '') + '"><span class="mono">' + d + '</span>' +
+              '<button type="button" data-togli-codice="' + i + '" title="Togli il codice" aria-label="Togli il codice ' + d + '">×</button></span>';
+          }).join('') : '<span class="tenue piccolo">Nessun codice: aggiungine uno per riconoscere l’articolo con il lettore.</span>';
+        }
+        // true se il codice è stato aggiunto (o c'era già)
+        function aggiungiCodice(info) {
+          var k = info && info.chiavi && info.chiavi[0];
+          if (!k) { suonoLettura('errore'); App.avviso('Il codice letto non identifica un prodotto: leggi il codice a barre della confezione.', 'errore'); return false; }
+          if (codici.indexOf(k) >= 0) { App.avviso('Il codice ' + B.descrivi(k) + ' è già nell’elenco.'); return true; }
+          var altro = App.S.articoli.filter(function (x) { return x.id !== id && (x.barcode || []).indexOf(k) >= 0; })[0];
+          if (altro) { suonoLettura('errore'); App.avviso('Il codice ' + B.descrivi(k) + ' è già associato all’articolo «' + altro.nome + '».', 'errore'); return false; }
+          codici.push(k);
+          var cod = m.querySelector('#fa-codice');
+          if (info.aic && !cod.value.trim()) cod.value = info.aic;
+          disegnaCodici(k);
+          suonoLettura('ok');
+          campoCodice.classList.remove('scanner-in-attesa');
+          campoCodice.placeholder = AIUTO_CODICE;
+          return true;
+        }
+        disegnaCodici();
+        boxCodici.addEventListener('click', function (e) {
+          var b = e.target.closest('[data-togli-codice]');
+          if (!b) return;
+          codici.splice(Number(b.getAttribute('data-togli-codice')), 1);
+          disegnaCodici();
+        });
+        campoCodice.addEventListener('keydown', function (e) {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          var t = campoCodice.value.trim();
+          campoCodice.value = '';
+          if (t) aggiungiCodice(B.analizza(t));
+        });
+        m.querySelector('#fa-leggi').addEventListener('click', function () {
+          campoCodice.classList.add('scanner-in-attesa');
+          campoCodice.placeholder = 'Leggi ora il codice con il lettore…';
+          campoCodice.focus();
+        });
+        var bFoto = m.querySelector('#fa-foto');
+        if (bFoto) bFoto.addEventListener('click', function () {
+          root.Scanner.apriFotocamera({ alLeggere: function (t) { aggiungiCodice(B.analizza(t)); } });
+        });
+        // con il modulo aperto le letture del lettore (in qualsiasi campo) vanno nell'elenco dei codici
+        if (root.Scanner) root.Scanner.cattura(aggiungiCodice, boxCodici);
+
         m.querySelector('#fa-salva').addEventListener('click', function () {
           var nome = valore(m, '#fa-nome').trim();
           if (!nome) { App.avviso('Scrivi la denominazione.', 'errore'); return; }
           var doppio = App.articoloPerNome(nome);
           if (doppio && doppio.id !== id) { App.avviso('Esiste già un articolo con questo nome.', 'errore'); return; }
+          // codice scritto nel campo ma non ancora aggiunto con Invio
+          var scritto = campoCodice.value.trim();
+          if (scritto) {
+            campoCodice.value = '';
+            if (!aggiungiCodice(B.analizza(scritto))) return;
+          }
+          var testoPezzi = valore(m, '#fa-pezzi').trim();
+          var pezzi = testoPezzi ? App.numero(testoPezzi) : 1;
+          if (!(pezzi > 0)) { App.avviso('Pezzi per confezione: scrivi un numero maggiore di zero.', 'errore'); return; }
           var dati = {
             nome: nome,
             categoria: valore(m, '#fa-cat'),
@@ -237,7 +341,9 @@
             prezzo: App.numero(valore(m, '#fa-prezzo')),
             scortaMinima: App.numero(valore(m, '#fa-scorta')),
             note: valore(m, '#fa-note').trim(),
-            attivo: m.querySelector('#fa-attivo').checked
+            attivo: m.querySelector('#fa-attivo').checked,
+            barcode: codici.slice(),
+            pezziConfezione: pezzi
           };
           var bottone = this;
           bottone.disabled = true;
@@ -381,7 +487,8 @@
 
   /*
    * cfg: { tipo, titolo, testata(html), colonne: ['lotto'|'scadenza'|'prezzo'|'lotto-scelta'|'causale'|'note'],
-   *        repartoOrigine(cont), leggiTestata(cont), recenti(filtro) }
+   *        repartoOrigine(cont), leggiTestata(cont), recenti(filtro),
+   *        lettore: 'unita'|'confezione' (barra del lettore di codici a barre e quanto vale una lettura) }
    */
   function moduloRighe(cont, cfg, parametri) {
     datalistArticoli();
@@ -394,7 +501,7 @@
       (col.indexOf('causale') >= 0 ? '<th>Causale</th>' : '') +
       (col.indexOf('note') >= 0 ? '<th>Note</th>' : '') + '<th></th>';
 
-    cont.innerHTML = scheda(cfg.titolo,
+    cont.innerHTML = (cfg.lettore ? barraLettore(cfg.lettore) : '') + scheda(cfg.titolo,
       '<div class="modulo">' + cfg.testata + '</div>' +
       '<div class="tabella-contenitore" style="margin-top:16px"><table class="righe"><thead><tr>' + intest + '</tr></thead><tbody id="righe"></tbody></table></div>' +
       '<div class="strumenti" style="margin-top:12px"><button class="btn" type="button" id="riga-piu">+ Aggiungi riga</button>' +
@@ -495,6 +602,56 @@
     nuovaRiga();
     if (parametri.articoloId) tbody.querySelector('.r-q').focus();
 
+    /*
+     * Lettore di codici a barre: aggiunge una riga con l'articolo (quantità = una lettura), con lotto e scadenza
+     * del codice GS1; se c'è già una riga con lo stesso articolo e lo stesso lotto ne aumenta la quantità.
+     * Trasferimenti e perdite: se il lotto del codice è disponibile nel reparto di partenza lo sceglie nella riga.
+     */
+    function rigaVuota() {
+      return Array.prototype.filter.call(tbody.querySelectorAll('tr'), function (tr) {
+        return !tr.querySelector('.r-art').value.trim() && !tr.querySelector('.r-q').value.trim();
+      })[0] || null;
+    }
+    if (cfg.lettore) {
+      collegaLettore(cont);
+      App.gestoreScansione = function (info, a, passo) {
+        var conLotto = col.indexOf('lotto') >= 0;
+        var conScelta = col.indexOf('lotto-scelta') >= 0;
+        var lottoCodice = info.lotto || '';
+        var lottoScelto = '';
+        var nota = '';
+        if (conScelta && lottoCodice) {
+          var rep = cfg.repartoOrigine(cont);
+          var disponibile = C.lotti(App.S, a.id, rep).some(function (x) { return x.quantita > 0 && x.lotto === lottoCodice; });
+          if (disponibile) lottoScelto = lottoCodice;
+          else nota = ' · il lotto ' + lottoCodice + ' non è in ' + App.nomeReparto(rep) + ': uso quello che scade prima';
+        }
+        var tr = Array.prototype.filter.call(tbody.querySelectorAll('tr'), function (r) {
+          var x = App.articoloPerNome(r.querySelector('.r-art').value);
+          if (!x || x.id !== a.id) return false;
+          if (conLotto) return r.querySelector('.r-lotto').value.trim() === lottoCodice;
+          if (conScelta) return r.querySelector('.r-lotto-scelta').value === lottoScelto;
+          return true;
+        })[0];
+        if (!tr) {
+          tr = rigaVuota() || nuovaRiga();
+          tr.querySelector('.r-art').value = a.nome;
+          aggiornaInfo(tr);
+          if (conLotto) tr.querySelector('.r-lotto').value = lottoCodice;
+          if (conScelta) tr.querySelector('.r-lotto-scelta').value = lottoScelto;
+          // resta sempre una riga vuota in fondo per scrivere a mano
+          if (!rigaVuota()) nuovaRiga();
+        }
+        var scad = tr.querySelector('.r-scad');
+        if (scad && info.scadenza && !scad.value) scad.value = info.scadenza;
+        var q = tr.querySelector('.r-q');
+        q.value = App.fmtCampo(C.r3(App.numero(q.value) + passo));
+        evidenziaLettura(tr);
+        return 'Letto: ' + a.nome + ' (+' + App.fmtNum(passo) + ')' + (conLotto && lottoCodice ? ' · lotto ' + lottoCodice : '') +
+          (lottoScelto ? ' · lotto ' + lottoScelto : '') + nota;
+      };
+    }
+
     function leggiRighe() {
       var righe = [];
       var errori = [];
@@ -570,6 +727,7 @@
         '<label class="campo"><span>Fornitore</span><input id="t-forn" list="dl-fornitori" placeholder="Es. grossista, deposito…">' + datalistFornitori() + '</label>' +
         '<label class="campo"><span>Documento (DDT / fattura n.)</span><input id="t-doc"></label>',
       colonne: ['lotto', 'scadenza', 'prezzo'],
+      lettore: 'confezione',
       repartoOrigine: function (c) { return valore(c, '#t-rep'); },
       leggiTestata: function (c) {
         var t = { data: valore(c, '#t-data'), repartoId: valore(c, '#t-rep'), fornitore: valore(c, '#t-forn').trim(), documento: valore(c, '#t-doc').trim() };
@@ -603,6 +761,7 @@
         '<label class="campo"><span>A</span><select id="t-a">' + opzioniReparti(altri[0] && altri[0].id) + '</select></label>' +
         '<label class="campo"><span>Note (richiesta n., chi ritira…)</span><input id="t-note"></label>',
       colonne: ['lotto-scelta'],
+      lettore: 'unita',
       controllaGiacenza: true,
       repartoOrigine: function (c) { return valore(c, '#t-da'); },
       leggiTestata: function (c) {
@@ -643,6 +802,7 @@
         '<label class="campo"><span>Data</span><input type="date" id="t-data" value="' + App.oggi() + '"></label>' +
         '<label class="campo"><span>Reparto</span><select id="t-rep" class="cambia-origine">' + opzioniReparti(rep, false, lista) + '</select></label>',
       colonne: ['lotto-scelta', 'causale', 'note'],
+      lettore: 'unita',
       controllaGiacenza: true,
       repartoOrigine: function (c) { return valore(c, '#t-rep'); },
       leggiTestata: function (c) {
@@ -696,7 +856,7 @@
     var cat = memoriaConsumi.cat || '';
     var tutti = !!memoriaConsumi.tutti;
 
-    cont.innerHTML =
+    cont.innerHTML = barraLettore('unita') +
       '<div class="strumenti">' +
       '<label class="campo"><span>Data</span><input type="date" id="c-data" value="' + data + '"></label>' +
       '<label class="campo"><span>Reparto</span><select id="c-rep">' + opzioniReparti(rep, false, reparti) + '</select></label>' +
@@ -816,6 +976,20 @@
       var fuoco = a && cont.contains(a) && a.matches('input.q[data-art]') ? a.getAttribute('data-art') : null;
       disegna();
       if (fuoco) { var i = cont.querySelector('input.q[data-art="' + fuoco + '"]'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }
+    };
+
+    // lettore di codici a barre: la quantità scritta dell'articolo aumenta di una lettura (la riga compare anche
+    // se l'articolo non ha giacenza nel reparto), poi la riga si evidenzia e si porta in vista
+    collegaLettore(cont);
+    var rinfrescaConsumi = App.rinfresca;
+    App.gestoreScansione = function (info, a, passo) {
+      mostraArticoloNeiFiltri(cont, '#c-cat', '#c-cerca', a);
+      var k = chiave(stato(), a.id);
+      scrittiConsumi[k] = App.fmtCampo(C.r3(App.numero(scrittiConsumi[k] || '') + passo));
+      rinfrescaConsumi();
+      var inp = cont.querySelector('input.q[data-art="' + a.id + '"]');
+      if (inp) evidenziaLettura(inp.closest('tr'));
+      return 'Letto: ' + a.nome + ' (+' + App.fmtNum(passo) + ') · da registrare: ' + App.fmtNum(App.numero(scrittiConsumi[k])) + (a.unita ? ' ' + a.unita : '');
     };
     disegna();
     var primo = cont.querySelector('input.q');
@@ -1032,7 +1206,7 @@
   /* ======================= INVENTARIO ======================= */
 
   P.inventario = function (cont) {
-    cont.innerHTML =
+    cont.innerHTML = barraLettore('unita') +
       '<div class="strumenti">' +
       '<label class="campo"><span>Data dell’inventario</span><input type="date" id="i-data" value="' + App.oggi() + '"></label>' +
       '<label class="campo"><span>Reparto</span><select id="i-rep">' + opzioniReparti(App.repartoCentrale() && App.repartoCentrale().id) + '</select></label>' +
@@ -1071,6 +1245,18 @@
       var fuoco = a && cont.contains(a) && a.matches('input.q[data-art]') ? a.getAttribute('data-art') : null;
       disegna();
       if (fuoco) { var i = cont.querySelector('input.q[data-art="' + fuoco + '"]'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }
+    };
+    // lettore di codici a barre: ogni lettura aumenta la quantità contata dell'articolo
+    collegaLettore(cont);
+    var rinfrescaInventario = App.rinfresca;
+    App.gestoreScansione = function (info, a, passo) {
+      mostraArticoloNeiFiltri(cont, '#i-cat', '#i-cerca', a);
+      var k = valore(cont, '#i-rep') + '|' + valore(cont, '#i-data') + '|' + a.id;
+      contatiInventario[k] = App.fmtCampo(C.r3(App.numero(contatiInventario[k] || '') + passo));
+      rinfrescaInventario();
+      var inp = cont.querySelector('input.q[data-art="' + a.id + '"]');
+      if (inp) evidenziaLettura(inp.closest('tr'));
+      return 'Letto: ' + a.nome + ' (+' + App.fmtNum(passo) + ') · contati: ' + App.fmtNum(App.numero(contatiInventario[k])) + (a.unita ? ' ' + a.unita : '');
     };
     cont.querySelectorAll('select, input[type=date]').forEach(function (el) { el.addEventListener('change', disegna); });
     cont.querySelector('#i-cerca').addEventListener('input', disegna);
@@ -1378,7 +1564,7 @@
       var lista = App.S.articoli.filter(function (a) {
         if (cat && a.categoria !== cat) return false;
         if (!non && a.attivo === false) return false;
-        return !testo || (a.nome + ' ' + (a.principio || '') + ' ' + (a.codice || '')).toLowerCase().indexOf(testo) >= 0;
+        return !testo || (a.nome + ' ' + (a.principio || '') + ' ' + (a.codice || '') + ' ' + descriviCodici(a.barcode).join(' ')).toLowerCase().indexOf(testo) >= 0;
       }).sort(function (x, y) { return x.nome.localeCompare(y.nome, 'it'); });
       cont.querySelector('#a-tab').innerHTML = scheda('Anagrafica articoli',
         lista.length ? '<div class="tabella-contenitore"><table class="tabella"><thead><tr><th>Denominazione</th><th>Categoria</th><th>Principio attivo</th><th>Confezione</th><th>Unità</th><th class="n">Prezzo</th><th class="n">Scorta min.</th><th class="n">Giacenza totale</th><th></th></tr></thead><tbody>' +
@@ -1408,10 +1594,11 @@
       cont.querySelector('#a-importa').addEventListener('click', importaDaExcel);
     }
     cont.querySelector('#a-excel').addEventListener('click', function () {
-      var col = ['Denominazione', 'Categoria', 'Principio attivo', 'Confezione', 'Codice', 'Unità', 'Prezzo', 'Scorta minima', 'Giacenza totale', 'Attivo', 'Note']
-        .map(function (t, i) { return { titolo: t, larghezza: [42, 11, 22, 20, 14, 8, 10, 13, 15, 8, 30][i] }; });
+      var col = ['Denominazione', 'Categoria', 'Principio attivo', 'Confezione', 'Codice', 'Unità', 'Prezzo', 'Scorta minima', 'Giacenza totale', 'Attivo', 'Note', 'Pezzi per confezione', 'Codici a barre']
+        .map(function (t, i) { return { titolo: t, larghezza: [42, 11, 22, 20, 14, 8, 10, 13, 15, 8, 30, 12, 34][i] }; });
       var righe = App.S.articoli.slice().sort(function (x, y) { return x.nome.localeCompare(y.nome, 'it'); }).map(function (a) {
-        return [a.nome, a.categoria, a.principio || '', a.confezione || '', a.codice || '', a.unita || '', a.prezzo || 0, a.scortaMinima || 0, App.giacenzaTotale(a.id), a.attivo === false ? 'No' : 'Sì', a.note || ''];
+        return [a.nome, a.categoria, a.principio || '', a.confezione || '', a.codice || '', a.unita || '', a.prezzo || 0, a.scortaMinima || 0, App.giacenzaTotale(a.id), a.attivo === false ? 'No' : 'Sì', a.note || '',
+          a.pezziConfezione || 1, descriviCodici(a.barcode).join(', ')];
       });
       root.ExcelFarmacia.esportaElenco('Articoli', col, righe).then(function (b) { App.scarica(b, 'Articoli_' + App.oggi() + '.xlsx'); });
     });

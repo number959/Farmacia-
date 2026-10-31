@@ -1,1 +1,82 @@
-/* in preparazione */
+/* Pagina Guida: schede delle videoguide, finestra del video con i passi, istruzioni scritte a sezioni.
+   Stessa grafica di css/app.css (variabili, .scheda, .btn, .etichetta). */
+
+/* ---------- strumenti ---------- */
+.guide-cerca { flex: 1 1 280px; max-width: 460px; }
+.guide-intro { color: var(--tenue); margin-bottom: 14px; max-width: 80ch; }
+
+/* ---------- schede delle guide ---------- */
+.guide-griglia { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.guide-scheda { display: flex; flex-direction: column; min-width: 0; background: var(--superficie); border: 1px solid var(--linea); border-radius: var(--raggio); overflow: hidden; transition: border-color .15s, box-shadow .15s; }
+.guide-scheda:hover { border-color: var(--linea-forte); box-shadow: var(--ombra); }
+.guide-scheda.guide-evidenziata { border-color: var(--primario); box-shadow: 0 0 0 3px var(--primario-chiaro); }
+
+.guide-copertina { position: relative; aspect-ratio: 16 / 9; display: grid; place-items: center; overflow: hidden;
+  background: linear-gradient(135deg, var(--primario-chiaro) 0%, #f3ece1 100%); border-bottom: 1px solid var(--linea); }
+.guide-copertina img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.guide-copertina .guide-ico { font-size: 46px; line-height: 1; }
+.guide-copertina.con-immagine .guide-ico { visibility: hidden; }
+.con-video .guide-copertina { cursor: pointer; }
+.guide-play { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px 0 0 -27px; border-radius: 50%;
+  display: grid; place-items: center; padding-left: 4px; font-size: 20px; color: #fff; background: rgba(15, 46, 56, .82);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .25); transition: transform .15s, background .15s; }
+.con-video .guide-copertina:hover .guide-play { transform: scale(1.08); background: var(--primario); }
+.guide-durata { position: absolute; right: 8px; bottom: 8px; padding: 1px 7px; border-radius: 5px; background: rgba(0, 0, 0, .74);
+  color: #fff; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.guide-corpo { flex: 1; display: grid; gap: 8px; align-content: start; padding: 14px 16px 16px; min-width: 0; }
+.guide-corpo h3 { font-size: 15.5px; }
+.guide-descr { color: var(--tenue); font-size: 13px; }
+.guide-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12.5px; }
+.guide-meta:empty { display: none; }
+.guide-azioni { display: flex; flex-wrap: wrap; gap: 8px; }
+.guide-azioni:empty { display: none; }
+.guide-passi summary, .guide-sezione summary { cursor: pointer; font-weight: 600; color: var(--primario); }
+.guide-passi summary { font-size: 13px; padding: 2px 0; }
+.guide-passi ol { margin: 8px 0 2px; padding-left: 20px; display: grid; gap: 5px; font-size: 13px; }
+
+/* ---------- istruzioni scritte ---------- */
+.guide-scritte .scheda-corpo { display: grid; gap: 0; }
+.guide-scritte-intro { margin-bottom: 8px; }
+.guide-sezione { border-top: 1px solid var(--linea); }
+.guide-sezione summary { padding: 11px 2px; font-size: 14.5px; list-style-position: inside; }
+.guide-sezione summary:hover { color: var(--testo); }
+.guide-sezione > .guida { padding: 0 2px 16px 18px; }
+
+/* ---------- finestra del video ---------- */
+.modale.guide-modale { width: min(1180px, calc(100vw - 24px)); top: 4vh; max-height: 92vh; }
+.guide-lettore { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 290px); gap: 18px; align-items: start; }
+.guide-video { position: relative; min-width: 0; }
+.guide-video video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #0f2e38; border-radius: 8px; }
+.guide-errore-video { margin-top: 8px; color: var(--pericolo); font-weight: 600; }
+.guide-lettore-passi { display: grid; gap: 8px; min-width: 0; }
+.guide-lettore-passi h3 { font-size: 13px; color: var(--tenue); text-transform: uppercase; letter-spacing: .06em; }
+.guide-passi-video { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: min(56vh, 470px); overflow-y: auto; position: relative; }
+.guide-passi-video button { width: 100%; display: grid; grid-template-columns: 38px 1fr; gap: 6px; align-items: baseline; text-align: left;
+  border: 1px solid transparent; background: transparent; border-radius: 8px; padding: 7px 8px; cursor: pointer; font-size: 13px; line-height: 1.4; }
+.guide-passi-video button:hover { background: var(--superficie-2); border-color: var(--linea); }
+.guide-passi-video button:disabled { cursor: default; }
+.guide-passi-video button:disabled:hover { background: transparent; border-color: transparent; }
+.guide-tempo { font: 600 12px var(--mono); color: var(--tenue); }
+.guide-passi-video li.attivo button { background: var(--primario-chiaro); border-color: #bcd9e0; }
+.guide-passi-video li.attivo .guide-tempo { color: var(--primario); }
+
+/* ---------- schermi stretti ---------- */
+@media (max-width: 900px) {
+  .guide-lettore { grid-template-columns: 1fr; }
+  .guide-passi-video { max-height: none; overflow: visible; }
+  .modale.guide-modale { top: 2vh; max-height: 96vh; }
+}
+@media (max-width: 520px) {
+  .guide-cerca { max-width: none; }
+  .guide-griglia { grid-template-columns: 1fr; }
+  .guide-corpo { padding: 12px 14px 14px; }
+}
+
+/* ---------- stampa: restano le istruzioni scritte e i passi ---------- */
+@media print {
+  .guide-strumenti, .guide-copertina, .guide-azioni, .guide-intro { display: none !important; }
+  .guide-griglia { display: block; }
+  .guide-scheda { border: 0; break-inside: avoid; margin-bottom: 10px; }
+  .guide-sezione, .guide-passi { display: block; }
+}

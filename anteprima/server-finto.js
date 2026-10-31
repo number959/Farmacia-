@@ -55,7 +55,7 @@
   (function caricaDatiDiProva() {
     var demo = root.DemoFarmacia.crea(C, { centrale: 'r-farmacia', reparti: ['r-degenza', 'r-sala', 'r-ambulatori'], oggi: new Date() });
     // qualche codice a barre di prova, per provare il lettore (vedi la banda dell'anteprima)
-    var codici = { 'demo-f0': ['aic:012745093'], 'demo-f3': ['gtin:08001234567893'], 'demo-p1': ['gtin:04015630982912'] };
+    var codici = { 'demo-f0': ['aic:012745093'], 'demo-f3': ['gtin:08001234567897'], 'demo-p1': ['gtin:04015630982912'] };
     S.articoli = demo.articoli.map(function (a) {
       return Object.assign({ unita: '', principio: '', confezione: '', codice: '', note: '', attivo: true, versione: 1, barcode: codici[a.id] || [], pezziConfezione: a.categoria === 'PRESIDI' ? 10 : 5 }, a);
     });
@@ -531,6 +531,9 @@
 
   /* ---------- un collega che lavora (per vedere gli aggiornamenti in tempo reale) ---------- */
 
+  // nella pagina pubblicata la fotocamera non è permessa: niente pulsante "Fotocamera" (nel programma vero c'è)
+  try { root.BarcodeDetector = undefined; } catch (e) { /* proprietà non scrivibile: resta com'è */ }
+
   root.Anteprima = {
     PASSWORD: PASSWORD,
     UTENTI: UTENTI.map(function (u) { return { username: u.username, nome: u.nome, ruolo: u.ruolo }; }),
@@ -548,7 +551,7 @@
     },
     codiciDiProva: [
       { codice: 'A012745093', descrizione: 'Code 32 (AIC) di ' + ((articolo('demo-f0') || {}).nome || '') },
-      { codice: '\u001d0108001234567893172812311025A01X', descrizione: 'Data Matrix (GTIN, scadenza, lotto) di ' + ((articolo('demo-f3') || {}).nome || '') },
+      { codice: '\u001d0108001234567897172812311025A01X', descrizione: 'Data Matrix (GTIN, scadenza, lotto) di ' + ((articolo('demo-f3') || {}).nome || '') },
       { codice: '4015630982912', descrizione: 'EAN-13 di ' + ((articolo('demo-p1') || {}).nome || '') }
     ]
   };

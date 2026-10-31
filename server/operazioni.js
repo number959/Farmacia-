@@ -5,6 +5,7 @@
 'use strict';
 
 var Calcoli = require('../js/calcoli.js');
+var Barcode = require('../js/barcode.js');
 var DemoFarmacia = require('../js/demo.js');
 var A = require('./accessi.js');
 var errore = A.errore;
@@ -14,6 +15,7 @@ var TIPI = ['carico', 'consumo', 'trasferimento', 'perdita', 'rettifica'];
 var USCITE = ['consumo', 'perdita', 'trasferimento'];
 var PERMESSO_TIPO = { carico: 'carico', consumo: 'consumo', trasferimento: 'trasferimento', perdita: 'perdita', rettifica: 'rettifica' };
 var CATEGORIE = ['FARMACI', 'PRESIDI'];
+var MAX_CODICI = 50; // codici a barre per articolo
 
 /* ---------- validazione ---------- */
 
@@ -258,6 +260,31 @@ Operazioni.prototype.consumoGiorno = function (ctx, dati) {
 
 /* ---------- articoli ---------- */
 
+function mancante(v) { return v === undefined || v === null || v === ''; }
+
+/* Codici a barre dell'articolo: chiavi normalizzate (js/barcode.js), senza doppioni. undefined = non indicati. */
+function validaCodici(lista) {
+  if (lista === undefined || lista === null) return undefined;
+  if (!Array.isArray(lista)) throw errore(400, 'Codici a barre non validi.');
+  var out = [];
+  lista.forEach(function (k) {
+    var n = Barcode.normalizzaChiave(k);
+    if (!n) throw errore(400, 'Codice a barre non valido: ' + String(k).slice(0, 80) + '.');
+    if (out.indexOf(n) < 0) out.push(n);
+  });
+  if (out.length > MAX_CODICI) throw errore(400, 'Troppi codici a barre per un articolo (massimo ' + MAX_CODICI + ').');
+  return out;
+}
+
+/* Pezzi (unità) in una confezione letta con il lettore: numero maggiore di zero. undefined = non indicati. */
+function validaPezzi(v) {
+  if (mancante(v)) return undefined;
+  var n = numero(v, 'pezzi per confezione');
+  if (!(n > 0)) throw errore(400, 'I pezzi per confezione devono essere più di zero.');
+  if (n > 100000) throw errore(400, 'I pezzi per confezione sono troppi (massimo 100000).');
+  return n;
+}
+
 function validaArticolo(dati) {
   if (!dati || typeof dati !== 'object') throw errore(400, 'Articolo non valido.');
   var nome = testo(dati.nome, 200, 'denominazione');
@@ -270,21 +297,35 @@ function validaArticolo(dati) {
     confezione: testo(dati.confezione, 200, 'confezione'), codice: testo(dati.codice, 60, 'codice'),
     prezzo: numero(dati.prezzo, 'prezzo', { min: 0, facoltativo: true }),
     scortaMinima: numero(dati.scortaMinima, 'scorta minima', { min: 0, facoltativo: true }),
-    note: testo(dati.note, 1000, 'note'), attivo: dati.attivo !== false
+    note: testo(dati.note, 1000, 'note'), attivo: dati.attivo !== false,
+    barcode: validaCodici(dati.barcode),
+    pezziConfezione: validaPezzi(dati.pezziConfezione)
   };
 }
+
+/* Un codice a barre appartiene a un solo articolo: 409 con il nome dell'articolo che l'ha già. */
+Operazioni.prototype.controllaCodici = function (codici, articoloId) {
+  var self = this;
+  (codici || []).forEach(function (k) {
+    var altro = self.database.articoloConCodice(k, articoloId);
+    if (altro) throw errore(409, 'Il codice ' + Barcode.descrivi(k) + ' è già associato all’articolo «' + altro.nome + '».');
+  });
+};
 
 Operazioni.prototype.creaArticolo = function (ctx, dati) {
   this.richiedi(ctx, 'articoli');
   var a = validaArticolo(dati);
   if (this.database.articoloPerNome(a.nome)) throw errore(409, 'Esiste già un articolo con questo nome.');
+  if (a.barcode === undefined) a.barcode = [];
+  if (a.pezziConfezione === undefined) a.pezziConfezione = 1;
   var self = this;
   var id = nuovoId('a');
   var r = this.database.scrivi(function (rev) {
-    self.db().prepare('INSERT INTO articoli (id, nome, categoria, unita, principio, confezione, codice, prezzo, scorta_minima, note, attivo, versione, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
-      .run(id, a.nome, a.categoria, a.unita, a.principio, a.confezione, a.codice, a.prezzo, a.scortaMinima, a.note, a.attivo ? 1 : 0, rev);
+    self.controllaCodici(a.barcode, id);
+    self.db().prepare('INSERT INTO articoli (id, nome, categoria, unita, principio, confezione, codice, prezzo, scorta_minima, note, attivo, barcode, pezzi_confezione, versione, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
+      .run(id, a.nome, a.categoria, a.unita, a.principio, a.confezione, a.codice, a.prezzo, a.scortaMinima, a.note, a.attivo ? 1 : 0, JSON.stringify(a.barcode), a.pezziConfezione, rev);
   });
-  this.accessi.evento(ctx, 'articoli.crea', { articolo: a.nome, categoria: a.categoria });
+  this.accessi.evento(ctx, 'articoli.crea', { articolo: a.nome, categoria: a.categoria, barcode: a.barcode.length ? a.barcode : undefined });
   this.dopoScrittura(r);
   return { rev: r.rev, articolo: this.database.articolo(id) };
 };
@@ -299,16 +340,42 @@ Operazioni.prototype.modificaArticolo = function (ctx, id, dati) {
   var a = validaArticolo(dati);
   var doppio = this.database.articoloPerNome(a.nome);
   if (doppio && doppio.id !== prima.id) throw errore(409, 'Esiste già un articolo con questo nome.');
+  // chi non manda codici a barre e pezzi per confezione (client vecchi, importazioni) non li cancella
+  if (a.barcode === undefined) a.barcode = prima.barcode;
+  if (a.pezziConfezione === undefined) a.pezziConfezione = prima.pezziConfezione;
   var self = this;
   var r = this.database.scrivi(function (rev) {
-    self.db().prepare('UPDATE articoli SET nome = ?, categoria = ?, unita = ?, principio = ?, confezione = ?, codice = ?, prezzo = ?, scorta_minima = ?, note = ?, attivo = ?, versione = versione + 1, rev = ? WHERE id = ?')
-      .run(a.nome, a.categoria, a.unita, a.principio, a.confezione, a.codice, a.prezzo, a.scortaMinima, a.note, a.attivo ? 1 : 0, rev, prima.id);
+    self.controllaCodici(a.barcode, prima.id);
+    self.db().prepare('UPDATE articoli SET nome = ?, categoria = ?, unita = ?, principio = ?, confezione = ?, codice = ?, prezzo = ?, scorta_minima = ?, note = ?, attivo = ?, barcode = ?, pezzi_confezione = ?, versione = versione + 1, rev = ? WHERE id = ?')
+      .run(a.nome, a.categoria, a.unita, a.principio, a.confezione, a.codice, a.prezzo, a.scortaMinima, a.note, a.attivo ? 1 : 0, JSON.stringify(a.barcode), a.pezziConfezione, rev, prima.id);
   });
   var cambi = {};
-  Object.keys(a).forEach(function (k) { if (a[k] !== prima[k]) cambi[k] = { prima: prima[k], dopo: a[k] }; });
+  Object.keys(a).forEach(function (k) { if (JSON.stringify(a[k]) !== JSON.stringify(prima[k])) cambi[k] = { prima: prima[k], dopo: a[k] }; });
   this.accessi.evento(ctx, 'articoli.modifica', { articolo: prima.nome, cambi: cambi });
   this.dopoScrittura(r);
   return { rev: r.rev, articolo: this.database.articolo(prima.id) };
+};
+
+/*
+ * Associa un codice letto a un articolo (dalla finestra "Codice non riconosciuto").
+ * Idempotente se il codice è già dell'articolo; 409 se è di un altro articolo; 400 se la chiave non è valida.
+ */
+Operazioni.prototype.associaCodice = function (ctx, id, chiave) {
+  this.richiedi(ctx, 'articoli');
+  var a = this.database.articolo(String(id));
+  if (!a) throw errore(404, 'Articolo non trovato.');
+  var k = Barcode.normalizzaChiave(chiave);
+  if (!k) throw errore(400, 'Codice a barre non valido.');
+  if (a.barcode.indexOf(k) >= 0) return { rev: this.database.rev(), articolo: a };
+  if (a.barcode.length >= MAX_CODICI) throw errore(400, 'Troppi codici a barre per un articolo (massimo ' + MAX_CODICI + ').');
+  var self = this;
+  var r = this.database.scrivi(function (rev) {
+    self.controllaCodici([k], a.id);
+    self.db().prepare('UPDATE articoli SET barcode = ?, versione = versione + 1, rev = ? WHERE id = ?').run(JSON.stringify(a.barcode.concat([k])), rev, a.id);
+  });
+  this.accessi.evento(ctx, 'articoli.barcode', { articolo: a.nome, chiave: k });
+  this.dopoScrittura(r);
+  return { rev: r.rev, articolo: this.database.articolo(a.id) };
 };
 
 Operazioni.prototype.eliminaArticolo = function (ctx, id) {
@@ -556,7 +623,8 @@ Operazioni.prototype.importaArchivio = function (ctx, dati) {
   var articoli = [];
   dati.articoli.forEach(function (a) {
     var v;
-    try { v = validaArticolo(a); } catch (e) { scartati++; return; }
+    // la versione per un solo PC non ha codici a barre né pezzi per confezione: si ignorano (gli articoli nascono senza)
+    try { v = validaArticolo(Object.assign({}, a, { barcode: undefined, pezziConfezione: undefined })); } catch (e) { scartati++; return; }
     var base = v.nome;
     var n = 2;
     while (nomiUsati[v.nome.toLowerCase()]) v.nome = base + ' (' + (n++) + ')';

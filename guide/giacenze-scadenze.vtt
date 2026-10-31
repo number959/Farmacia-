@@ -1,0 +1,25 @@
+WEBVTT
+
+1
+00:00:03.147 --> 00:00:10.530
+Giacenze (tasto G) mostra quanto c’è in ogni reparto, il totale e il valore del magazzino.
+
+2
+00:00:10.530 --> 00:00:19.002
+Filtra per reparto o per categoria, oppure cerca per nome o principio attivo.
+
+3
+00:00:19.002 --> 00:00:24.028
+Spunta Solo sotto scorta per vedere cosa riordinare.
+
+4
+00:00:24.028 --> 00:00:31.909
+Tocca una riga per aprire la scheda dell’articolo: giacenze per reparto, lotti e ultimi movimenti.
+
+5
+00:00:31.909 --> 00:00:39.664
+Scadenze (tasto Z) elenca i lotti in giacenza, dal primo che scade. Il colore dice quanto manca.
+
+6
+00:00:39.664 --> 00:00:47.890
+Scegli l’intervallo e il reparto. Stampa ed Excel stampano o esportano l’elenco che vedi.
