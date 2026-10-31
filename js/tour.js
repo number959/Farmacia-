@@ -54,9 +54,6 @@
 
   function conLettore() { return !!paginaLettore(); }
 
-  // menu laterale sempre visibile (non sul telefono): sugli schermi stretti alcuni elementi della barra sono nascosti
-  function schermoLargo() { return !menuNascosto(); }
-
   /* Casella di oggi della prima riga della nota consumi (o l'ultima, se il mese mostrato è più corto). */
   function cellaDiOggi() {
     var riga = document.querySelector('#r-tab table.registro tbody tr');
@@ -99,7 +96,7 @@
           testo: 'Premi <kbd>Ctrl</kbd> <kbd>K</kbd> (oppure <kbd>/</kbd>) da qualsiasi pagina, scrivi il nome di un articolo o di una pagina e premi Invio.' },
         { el: '#utente-menu', posizione: 'sotto', titolo: 'Il tuo utente',
           testo: 'Da qui cambi la password ed esci. Se il computer è condiviso, esci sempre a fine turno.' },
-        { el: '#collegamento', se: schermoLargo, posizione: 'sotto', titolo: 'Collegamento al server',
+        { el: '#collegamento', facoltativo: true, posizione: 'sotto', titolo: 'Collegamento al server',
           testo: '<b>● In linea</b>: quello che registrano gli altri lo vedi subito. Se compare <b>⚠ Server non raggiungibile</b>, non registrare finché il collegamento non torna.' },
         { el: '#guidami', posizione: 'sotto', titolo: 'Guidami',
           testo: 'In ogni pagina questo pulsante ti mostra, passo per passo, cosa fare lì.' },
@@ -462,6 +459,27 @@
     return t ? Math.max(0, t.getBoundingClientRect().bottom) : 0;
   }
 
+  function accessoVisibile() { return !!(root.Accesso && root.Accesso.visibile && root.Accesso.visibile()); }
+
+  // il programma si vede ed è in uso: non c'è la schermata di accesso sopra (uscita, sessione scaduta)
+  function appUsabile() {
+    var app = document.getElementById('app');
+    return !!app && !app.hidden && !accessoVisibile();
+  }
+
+  function appPronta() { return !!(App.S && App.utente) && appUsabile(); }
+
+  /* Una finestra aperta con qualcosa di scritto (per esempio un articolo nuovo): il giro non la chiude. */
+  function finestraConDatiScritti() {
+    var m = document.getElementById('modale');
+    if (!m || m.hidden) return false;
+    var tipi = ['text', 'number', 'month', 'date', 'password', 'email', 'tel', 'url', 'search'];
+    return lista(m.querySelectorAll('input, textarea')).some(function (i) {
+      if (i.tagName !== 'TEXTAREA' && tipi.indexOf((i.getAttribute('type') || 'text').toLowerCase()) < 0) return false;
+      return i.value !== i.defaultValue;
+    });
+  }
+
   /* Campi scritti e non ancora registrati nella pagina aperta (cambiando pagina andrebbero persi). */
   function modificheNonRegistrate() {
     var cont = document.getElementById('contenuto');
@@ -607,19 +625,7 @@
         trovati = []; // non c'è e non è facoltativo: fumetto al centro
       }
       trovati = trovati || [];
-      // telefono: i passi sul menu laterale aprono il menu, gli altri lo chiudono
-      var app = document.getElementById('app');
-      var serveMenu = trovati.length && menuNascosto() && nelMenu(trovati);
-      var attesaMenu = Promise.resolve();
-      if (serveMenu && !app.classList.contains('menu-aperto')) {
-        app.classList.add('menu-aperto');
-        c.menuAperto = true;
-        attesaMenu = aspettaFermo(document.getElementById('laterale'), 700);
-      } else if (!serveMenu && c.menuAperto) {
-        app.classList.remove('menu-aperto');
-        c.menuAperto = false;
-      }
-      return attesaMenu.then(function () {
+      return menuPerIlPasso(c, trovati).then(function () {
         if (!vivo()) return;
         c.bersagli = trovati;
         if (trovati.length) portaInVista(trovati);
@@ -629,6 +635,55 @@
     }).catch(function (e) {
       console.error(e);
       if (vivo()) { segnaAttesa(false); disegnaPasso(); }
+    });
+  }
+
+  /* Telefono: i passi sul menu laterale aprono il menu, gli altri lo chiudono (finito il movimento del menu). */
+  function menuPerIlPasso(c, trovati) {
+    var app = document.getElementById('app');
+    var serveMenu = trovati.length && menuNascosto() && nelMenu(trovati);
+    if (serveMenu && !app.classList.contains('menu-aperto')) {
+      app.classList.add('menu-aperto');
+      c.menuAperto = true;
+      return aspettaFermo(document.getElementById('laterale'), 700);
+    }
+    if (!serveMenu && c.menuAperto) {
+      app.classList.remove('menu-aperto');
+      c.menuAperto = false;
+    }
+    return Promise.resolve();
+  }
+
+  /*
+   * Finestra ridimensionata o telefono ruotato: l'elemento del passo può essere uscito dallo schermo, e il menu
+   * laterale può essere diventato nascosto (o di nuovo sempre visibile). Finito il ridimensionamento lo riporto in vista.
+   */
+  var timerRidimensiona = null;
+
+  function suRidimensiona() {
+    var c = corsa;
+    if (!c) return;
+    var w = root.innerWidth, a = root.innerHeight;
+    var d = c.dimensioni || [w, a];
+    // la barra degli indirizzi del telefono che compare e scompare mentre si scorre: non riporto indietro la pagina
+    if (w === d[0] && Math.abs(a - d[1]) < d[1] * 0.25) return;
+    c.dimensioni = [w, a];
+    clearTimeout(timerRidimensiona);
+    timerRidimensiona = setTimeout(riallinea, 200);
+  }
+
+  function riallinea() {
+    timerRidimensiona = null;
+    var c = corsa;
+    if (!c || c.inAttesa) return;
+    var gettone = c.gettone;
+    var p = c.passi[c.i];
+    var trovati = p && p.el ? trova(p) : [];
+    menuPerIlPasso(c, trovati).then(function () {
+      if (corsa !== c || c.gettone !== gettone || c.inAttesa) return;
+      c.bersagli = trovati;
+      if (trovati.length) portaInVista(trovati);
+      c.ultimaPosizione = null;
     });
   }
 
@@ -902,8 +957,7 @@
   function controllo() {
     if (!corsa) return;
     // uscita, sessione scaduta: niente giro sopra la schermata di accesso
-    var app = document.getElementById('app');
-    if (!App.utente || !App.S || (app && app.hidden) || (root.Accesso && root.Accesso.visibile && root.Accesso.visibile())) Tour.ferma();
+    if (!appPronta()) Tour.ferma();
   }
 
   /* ======================= avvio e fine ======================= */
@@ -918,6 +972,9 @@
     }
     var t = document.getElementById('utente-tendina');
     if (t && !t.hidden) { t.hidden = true; document.getElementById('utente-btn').setAttribute('aria-expanded', 'false'); }
+    // il menu laterale aperto a mano (finestra stretta) coprirebbe la pagina: lo riapre il giro nei passi sul menu
+    var app = document.getElementById('app');
+    if (app) app.classList.remove('menu-aperto');
     chiudiElenco();
     nascondiInvito(false);
   }
@@ -939,7 +996,8 @@
       menuAperto: false,
       navigatoIl: 0,
       paginaAttesa: App.paginaCorrente,
-      fuocoPrima: document.activeElement
+      fuocoPrima: document.activeElement,
+      dimensioni: [root.innerWidth, root.innerHeight]
     };
     corsa.passi = g.passi.filter(function (p) {
       if (p.se && !p.se()) return false;
@@ -951,6 +1009,7 @@
     if (App.utente) scriviMemoria(chiaveInvito(), 'fatto');
     radice = costruisci();
     root.addEventListener('keydown', tasti, true);
+    root.addEventListener('resize', suRidimensiona);
     timerPosizione = setInterval(controllo, 250);
     rafPosizione = root.requestAnimationFrame(seguiElemento);
     vaiAlPasso(0, 1);
@@ -961,7 +1020,12 @@
 
   Tour.avvia = function (id) {
     var g = giro(id);
-    if (!giroPermesso(g)) return false;
+    if (!appPronta() || !giroPermesso(g)) return false;
+    // una finestra con qualcosa di scritto non si chiude da sola (si perderebbe): prima la chiude chi la sta usando
+    if (finestraConDatiScritti()) {
+      App.avviso('Prima chiudi la finestra aperta (o salva quello che hai scritto), poi avvia il giro guidato.', 'errore');
+      return false;
+    }
     var pag = paginaDelGiro(g);
     // il giro cambia pagina: se qui c'è qualcosa di scritto e non registrato, chiedo prima
     if (pag && pag !== App.paginaCorrente && modificheNonRegistrate()) {
@@ -979,17 +1043,28 @@
     timerPosizione = null;
     if (rafPosizione) { root.cancelAnimationFrame(rafPosizione); rafPosizione = 0; }
     root.removeEventListener('keydown', tasti, true);
+    root.removeEventListener('resize', suRidimensiona);
+    clearTimeout(timerRidimensiona);
+    timerRidimensiona = null;
     if (c && c.menuAperto) document.getElementById('app').classList.remove('menu-aperto');
     if (c) clearTimeout(c.timerMuove);
     var r = radice;
     radice = null;
+    // il fuoco torna dove era solo se è ancora nel giro: se nel frattempo è andato altrove (per esempio nel campo
+    // password della sessione scaduta) non lo sposto
+    var attivo = document.activeElement;
+    var fuocoNelGiro = !attivo || attivo === document.body || (!!r && r.contains(attivo));
+    if (c && fuocoNelGiro && appUsabile()) {
+      var prima = c.fuocoPrima;
+      // l'elemento di prima non c'è più (pagina cambiata, elenco dei giri o invito chiusi): il pulsante Guidami
+      var dove = prima && prima !== document.body && prima.isConnected && typeof prima.focus === 'function' &&
+        !prima.closest('.tour-elenco, .tour-invito') ? prima : document.getElementById('guidami');
+      if (dove) { try { dove.focus({ preventScroll: true }); } catch (e) { /* niente */ } }
+    }
     if (r) {
       r.classList.remove('visibile');
       r.classList.add('esce');
       setTimeout(function () { r.remove(); }, rid() ? 0 : 180);
-    }
-    if (c && c.fuocoPrima && c.fuocoPrima.isConnected && c.fuocoPrima.focus && c.fuocoPrima !== document.body) {
-      try { c.fuocoPrima.focus({ preventScroll: true }); } catch (e) { /* niente */ }
     }
   };
 
@@ -1075,7 +1150,7 @@
   }
 
   Tour.apriElenco = function () {
-    if (!App.S || !App.utente) return;
+    if (!appPronta()) return;
     if (elencoAperto()) { chiudiElenco(); return; }
     var giri = Tour.elenco();
     var qui = Tour.perPagina(App.paginaCorrente);
@@ -1109,7 +1184,7 @@
 
   /* Pulsante 🧭 Guidami nella barra: il giro della pagina aperta, altrimenti l'elenco. */
   function suGuidami() {
-    if (!App.S || !App.utente) return;
+    if (!appPronta()) return;
     var id = Tour.perPagina(App.paginaCorrente);
     if (id && giroPermesso(giro(id))) { chiudiElenco(); Tour.avvia(id); }
     else Tour.apriElenco();
@@ -1170,19 +1245,26 @@
     document.body.appendChild(invito);
   }
 
-  // l'app diventa visibile dopo l'accesso: un attimo dopo, se è il primo accesso su questo browser, l'invito
+  /*
+   * L'app diventa visibile dopo l'accesso (anche dopo una sessione scaduta, magari con un altro utente): un attimo dopo,
+   * se è il primo accesso di quell'utente su questo browser, l'invito. Quando sopra compare la schermata di accesso
+   * (uscita, sessione scaduta) giro, elenco e invito si chiudono subito.
+   */
   function osservaIngresso() {
     var app = document.getElementById('app');
+    var acc = document.getElementById('accesso');
     if (!app || !root.MutationObserver) return;
-    var visibilePrima = !app.hidden;
-    new root.MutationObserver(function () {
-      var ora = !app.hidden;
-      if (ora === visibilePrima) return;
-      visibilePrima = ora;
+    var usabilePrima = appUsabile();
+    var oss = new root.MutationObserver(function () {
+      var ora = appUsabile();
+      if (ora === usabilePrima) return;
+      usabilePrima = ora;
       if (!ora) { nascondiInvito(false); chiudiElenco(); if (corsa) Tour.ferma(); return; }
       clearTimeout(timerInvito);
       timerInvito = setTimeout(mostraInvito, 1200);
-    }).observe(app, { attributes: true, attributeFilter: ['hidden'] });
+    });
+    oss.observe(app, { attributes: true, attributeFilter: ['hidden'] });
+    if (acc) oss.observe(acc, { attributes: true, attributeFilter: ['hidden'] });
   }
 
   /* ======================= collegamenti ======================= */

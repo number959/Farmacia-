@@ -333,8 +333,22 @@
   };
 
   var chiusuraModale = null;
+  var apertaDa = null; // elemento che aveva il fuoco quando si è aperta la finestra: ci torna alla chiusura
+
+  /* Con una finestra aperta o la schermata di accesso davanti, la pagina sotto non si raggiunge con Tab né con i clic. */
+  App.aggiornaInerte = function () {
+    var app = document.getElementById('app');
+    var m = document.getElementById('modale');
+    var acc = document.getElementById('accesso');
+    if (!app) return;
+    app.inert = !!((m && !m.hidden) || (acc && !acc.hidden));
+  };
+
   App.apriModale = function (opz) {
     var m = document.getElementById('modale');
+    var attivo = document.activeElement;
+    // una finestra aperta da un'altra finestra torna comunque a chi ha aperto la prima
+    if (m.hidden) apertaDa = attivo && attivo !== document.body && !m.contains(attivo) ? attivo : null;
     m.className = 'modale' + (opz.largo ? ' largo' : '');
     m.innerHTML =
       '<div class="modale-testa"><h2 id="modale-titolo">' + h(opz.titolo) + '</h2>' +
@@ -343,6 +357,7 @@
       '<div class="modale-piede">' + (opz.piede || '<button class="btn" type="button" data-chiudi>Chiudi</button>') + '</div>';
     m.hidden = false;
     document.getElementById('velo').hidden = false;
+    App.aggiornaInerte();
     chiusuraModale = opz.allaChiusura || null;
     m.querySelectorAll('[data-chiudi]').forEach(function (b) { b.addEventListener('click', App.chiudiModale); });
     var primo = m.querySelector('.modale-corpo input:not([type=checkbox]):not([readonly]), .modale-corpo select, .modale-corpo textarea');
@@ -363,6 +378,13 @@
     m.hidden = true;
     m.innerHTML = '';
     document.getElementById('velo').hidden = true;
+    App.aggiornaInerte();
+    var torna = apertaDa;
+    apertaDa = null;
+    // il fuoco torna dove era (se c'è ancora e nessun altro l'ha già preso)
+    if (torna && torna.isConnected && (!document.activeElement || document.activeElement === document.body)) {
+      try { torna.focus({ preventScroll: true }); } catch (e) { /* elemento non più attivabile */ }
+    }
     var f = chiusuraModale;
     chiusuraModale = null;
     if (f) f();

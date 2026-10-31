@@ -310,6 +310,7 @@
     'articoli.modifica': 'Modifica articolo',
     'articoli.elimina': 'Eliminazione articolo',
     'articoli.importa': 'Importazione articoli',
+    'articoli.barcode': 'Codice a barre associato',
     'impostazioni.modifica': 'Modifica impostazioni',
     'reparti.modifica': 'Modifica reparti',
     'reparti.elimina': 'Eliminazione reparto',

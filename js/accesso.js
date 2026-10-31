@@ -28,6 +28,7 @@
     var s = schermo();
     s.hidden = true;
     s.innerHTML = '';
+    if (App.aggiornaInerte) App.aggiornaInerte();
   };
 
   /* Disegna la scheda centrale con il marchio della struttura. */
@@ -51,6 +52,7 @@
       (st.versione ? '<p class="accesso-versione">Versione ' + h(st.versione) + '</p>' : '') +
       '</div>';
     s.hidden = false;
+    if (App.aggiornaInerte) App.aggiornaInerte();
     // fuoco subito (non dopo un ritardo: chi scrive in fretta non deve finire nel campo sbagliato)
     var primo = s.querySelector('input:not([hidden]):not([readonly])');
     if (primo) primo.focus();

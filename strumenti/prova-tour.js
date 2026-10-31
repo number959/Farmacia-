@@ -11,6 +11,10 @@
  *   (sul telefono i passi sul menu aprono il menu), il riquadro luminoso è sull'elemento, il fumetto sta nello schermo
  *   e non copre l'elemento; tastiera (frecce, Invio, Esc), pulsanti Indietro / Avanti / Fine;
  * - con righe scritte e non registrate un giro che cambia pagina chiede prima; il giro della pagina non le tocca;
+ *   una finestra con dati scritti non si chiude (Guidami raggiunto con Tab);
+ * - casi limite (amministratore): il fuoco torna su Guidami anche partendo dall'elenco; finestra ristretta durante il
+ *   passo sul menu e rotazione del telefono (l'elemento resta evidenziato); sessione scaduta con il giro o l'elenco
+ *   aperti (si chiudono e non rubano il fuoco al campo password); sul telefono l'invito non copre il menu aperto;
  * - nessun giro scrive dati (nessuna richiesta POST/PUT/DELETE, revisione dei dati invariata), niente errori JS o CSP.
  * I passi facoltativi saltati (per esempio la barra del lettore se non c'è ancora) sono elencati, non sono errori.
  */
@@ -234,6 +238,19 @@ function leggiPasso() {
           });
           ok(pos.dentro && !pos.copreBarra, chi + ': l’invito sta nello schermo e non copre la barra in alto');
           ok(/Sì/.test(pos.testo) && /Non ora/.test(pos.testo) && /Non chiedere più/.test(pos.testo), chi + ': l’invito ha Sì / Non ora / Non chiedere più');
+          if (schermo.nome === 'telefono') {
+            // il menu laterale aperto passa sopra l'invito: nessuna voce resta coperta
+            await p.tap('#apri-menu');
+            await p.waitForTimeout(400);
+            const coperte = await p.evaluate(() => Array.from(document.querySelectorAll('#menu a')).filter((a) => {
+              const b = a.getBoundingClientRect();
+              const e = document.elementFromPoint(b.left + Math.min(40, b.width / 2), b.top + b.height / 2);
+              return !!e && !!e.closest('.tour-invito');
+            }).map((a) => a.getAttribute('data-pagina')));
+            ok(coperte.length === 0, chi + ': l’invito non copre le voci del menu aperto' + (coperte.length ? ' (' + coperte.join(', ') + ')' : ''));
+            await p.evaluate(() => document.getElementById('app').classList.remove('menu-aperto'));
+            await p.waitForTimeout(300);
+          }
           if (schermo.nome === 'desktop' && u.ruolo === 'amministratore') {
             await p.click('.tour-invito [data-invito="mai"]');
             await p.waitForTimeout(300);
@@ -296,7 +313,8 @@ function leggiPasso() {
             await p.keyboard.press('ArrowDown');
             await p.keyboard.press('Escape');
           } else {
-            await p.touchscreen.tap(195, 640);
+            // un tocco in basso, fuori dall'elenco (in proporzione allo schermo)
+            await p.touchscreen.tap(Math.round(schermo.opz.viewport.width / 2), Math.round(schermo.opz.viewport.height * 0.8));
           }
           await p.waitForTimeout(150);
           ok(await p.locator('.tour-elenco').count() === 0, chi + ': l’elenco si chiude (' + (schermo.nome === 'desktop' ? 'Esc' : 'tocco fuori') + ')');
@@ -371,6 +389,112 @@ function leggiPasso() {
           const rimasti = await p.evaluate(() => [document.querySelector('#righe tr:first-child .r-art').value, document.querySelector('#righe tr:first-child .r-q').value]);
           ok(rimasti[0] === 'KETOROLAC 30 mg/ml f' && rimasti[1] === '7', chi + ': dopo il giro del Carico le righe scritte sono ancora lì');
           ok((await p.evaluate(() => document.activeElement && document.activeElement.id)) === 'guidami', chi + ': chiuso il giro il fuoco torna al pulsante Guidami');
+        }
+
+        /* --- casi limite (solo amministratore): fuoco, finestre aperte, ridimensionamento, rotazione, sessione scaduta --- */
+        if (u.ruolo === 'amministratore') {
+          const pronto = () => attendi(async () => { const x = await stato(); return x.attivo && !x.inAttesa ? x : null; }, 6000);
+          const fuoco = () => p.evaluate(() => { const a = document.activeElement; return a ? (a.id ? '#' + a.id : a.tagName.toLowerCase()) : null; });
+          if (schermo.nome === 'desktop') {
+            // giro avviato dall'elenco (che poi sparisce): chiuso il giro il fuoco torna su Guidami, non sulla pagina vuota
+            await p.evaluate(() => { location.hash = '#guida'; });
+            await p.waitForTimeout(300);
+            await p.click('#guidami');
+            await p.waitForSelector('.tour-elenco');
+            await p.keyboard.press('Enter');
+            await pronto();
+            await p.keyboard.press('Escape');
+            await p.waitForTimeout(250);
+            ok((await fuoco()) === '#guidami', chi + ': giro avviato dall’elenco e chiuso con Esc: il fuoco torna su Guidami');
+
+            // una finestra con dati scritti non si chiude se si arriva a Guidami con Tab e si preme Invio
+            await p.evaluate(() => { location.hash = '#articoli'; });
+            await p.waitForSelector('#a-nuovo');
+            await p.click('#a-nuovo');
+            const campoArt = p.locator('#modale:not([hidden]) .modale-corpo input:not([type=checkbox])').first();
+            await campoArt.fill('ARTICOLO SCRITTO A MANO');
+            for (let i = 0; i < 80 && (await fuoco()) !== '#guidami'; i++) await p.keyboard.press('Tab');
+            if ((await fuoco()) !== '#guidami') await p.evaluate(() => document.getElementById('guidami').focus());
+            await p.keyboard.press('Enter');
+            await p.waitForTimeout(400);
+            const finestra = await p.evaluate(() => !document.getElementById('modale').hidden);
+            ok(finestra && (await campoArt.inputValue()) === 'ARTICOLO SCRITTO A MANO' && !(await stato()).attivo,
+              chi + ': finestra con dati scritti: Guidami non la chiude e non avvia il giro');
+            await p.evaluate(() => App.chiudiModale());
+
+            // finestra ristretta (menu laterale nascosto) durante il passo sul menu, e di nuovo larga
+            await p.evaluate(() => { location.hash = '#oggi'; });
+            await p.waitForSelector('#contenuto .indicatori');
+            await p.evaluate(() => Tour.avvia('benvenuto'));
+            await pronto();
+            await p.keyboard.press('ArrowRight');
+            await attendi(async () => { const x = await stato(); return !x.inAttesa && x.indice === 2 ? x : null; }, 5000);
+            const evidenziato = () => p.evaluate(() => !Tour.stato().centrato && !document.querySelector('.tour-luce').classList.contains('vuota'));
+            await p.setViewportSize({ width: 700, height: 900 });
+            ok(!!(await attendi(async () => (await stato()).menuAperto && (await evidenziato()), 3000)), chi + ': finestra ristretta durante il passo sul menu: il menu si apre e resta evidenziato');
+            await p.setViewportSize(schermo.opz.viewport);
+            ok(!!(await attendi(async () => !(await p.evaluate(() => document.getElementById('app').classList.contains('menu-aperto'))) && (await evidenziato()), 3000)),
+              chi + ': finestra di nuovo larga: il menu torna normale e resta evidenziato');
+            await p.keyboard.press('Escape');
+            await p.waitForTimeout(250);
+
+            // sessione scaduta con il giro aperto: il giro si chiude e il fuoco resta nel campo della password
+            const scade = async () => {
+              await ctx.clearCookies();
+              await p.evaluate(() => Api.sincronizza({ remota: true }).catch(() => {}));
+              await p.waitForSelector('#accesso:not([hidden]) #acc-pw', { timeout: 8000 });
+              await p.waitForTimeout(500);
+            };
+            const rientra = async () => {
+              await p.fill('#acc-pw', PW);
+              await p.keyboard.press('Enter');
+              await p.waitForSelector('#accesso', { state: 'hidden', timeout: 10000 });
+              await attendi(() => p.evaluate(() => !!(App.S && App.utente)), 5000);
+            };
+            await p.evaluate(() => { location.hash = '#giacenze'; });
+            await p.waitForSelector('#g-rep');
+            await p.click('#guidami');
+            await pronto();
+            await scade();
+            ok(!(await stato()).attivo && (await p.locator('.tour').count()) === 0, chi + ': sessione scaduta: il giro si chiude');
+            ok((await fuoco()) === '#acc-pw', chi + ': sessione scaduta: il fuoco resta nel campo password (' + (await fuoco()) + ')');
+            ok((await p.evaluate(() => Tour.avvia('giacenze'))) === false, chi + ': sessione scaduta: nessun giro sopra la schermata di accesso');
+            await rientra();
+            // e con l'elenco dei giri aperto (che starebbe sopra la schermata di accesso)
+            await p.evaluate(() => { location.hash = '#guida'; });
+            await p.waitForTimeout(300);
+            await p.click('#guidami');
+            await p.waitForSelector('.tour-elenco');
+            await scade();
+            ok((await p.locator('.tour-elenco').count()) === 0, chi + ': sessione scaduta: l’elenco dei giri si chiude');
+            await rientra();
+          } else {
+            // telefono ruotato durante un passo in fondo alla pagina: l'elemento torna in vista ed evidenziato
+            await p.evaluate(() => { location.hash = '#carico'; });
+            await p.waitForSelector('#registra');
+            await p.evaluate(() => Tour.avvia('carico'));
+            for (let i = 0; i < 15; i++) {
+              const s = await pronto();
+              if (!s || s.selettore === '#registra') break;
+              await p.evaluate(() => document.querySelector('.tour-fumetto [data-tour="avanti"]').click());
+              await attendi(async () => { const x = await stato(); return x.inAttesa || x.indice !== s.indice ? x : null; }, 3000);
+            }
+            const inVista = () => attendi(() => p.evaluate(() => {
+              const s = Tour.stato(), b = Tour.bersagli()[0], vv = window.visualViewport;
+              if (!s.attivo || s.inAttesa || s.centrato || !b || document.querySelector('.tour-luce').classList.contains('vuota')) return null;
+              const r = b.getBoundingClientRect();
+              return r.top >= vv.offsetTop && r.bottom <= vv.offsetTop + vv.height;
+            }), 4000);
+            ok((await stato()).selettore === '#registra' && !!(await inVista()), chi + ': passo "Registra il carico" in vista');
+            await p.setViewportSize({ width: 800, height: 390 });
+            await p.waitForTimeout(100);
+            ok(!!(await inVista()), chi + ': telefono ruotato (800×390): l’elemento del passo torna in vista, evidenziato');
+            await p.setViewportSize(schermo.opz.viewport);
+            await p.waitForTimeout(100);
+            ok(!!(await inVista()), chi + ': telefono di nuovo verticale: l’elemento del passo resta in vista, evidenziato');
+            await p.evaluate(() => Tour.ferma());
+            await p.waitForTimeout(250);
+          }
         }
 
         /* --- tutti i giri, passo per passo --- */

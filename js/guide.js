@@ -237,20 +237,25 @@
     return Math.floor(n / 60) + ':' + String(n % 60).padStart(2, '0');
   }
 
-  // il file c'è? HEAD; se il server non lo capisce (405, 501…) provo a chiedere il primo byte
+  // il file c'è? HEAD; se il server non lo capisce (405, 501…) provo a chiedere il primo byte.
+  // Solo 404/410 vogliono dire "non c'è": la rete che cade o un errore del server rifiutano la promessa.
   function esiste(url) {
     return fetch(url, { method: 'HEAD', cache: 'no-cache' }).then(function (r) {
       if (r.ok) return true;
       if (r.status === 404 || r.status === 410) return false;
-      return fetch(url, { headers: { Range: 'bytes=0-0' }, cache: 'no-cache' }).then(function (x) { return x.ok; });
-    }).catch(function () { return false; });
+      return fetch(url, { headers: { Range: 'bytes=0-0' }, cache: 'no-cache' }).then(function (x) {
+        if (x.ok) return true;
+        if (x.status === 404 || x.status === 410) return false;
+        throw new Error('HTTP ' + x.status);
+      });
+    });
   }
 
   var stato = {}; // id → Promise del controllo (una volta per sessione della pagina)
 
   Guide.controlla = function (g) {
     if (!stato[g.id]) {
-      stato[g.id] = esiste(g.video).then(function (c) {
+      var prova = esiste(g.video).then(function (c) {
         if (!c) return { video: false, passi: [], durata: null };
         return fetch(g.sottotitoli, { cache: 'no-cache' }).then(function (r) {
           return r.ok ? r.text() : '';
@@ -259,11 +264,24 @@
           return { video: true, passi: passi, durata: passi.length ? passi[passi.length - 1].fine : null };
         });
       });
-      // dopo un errore (per esempio la rete) si riprova la volta dopo
-      stato[g.id].catch(function () { delete stato[g.id]; });
+      stato[g.id] = prova;
+      // dopo un errore (per esempio la rete) non lo ricordo: si riprova la volta dopo
+      prova.catch(function () { if (stato[g.id] === prova) delete stato[g.id]; });
     }
-    return stato[g.id];
+    return stato[g.id].catch(function () { return { video: false, passi: [], durata: null }; });
   };
+
+  // ferma il video e libera il lettore (memoria e collegamento): il solo pause() lascia tutto il video in memoria
+  var videoAperto = null;
+  function liberaVideo(v) {
+    if (!v) return;
+    if (videoAperto === v) videoAperto = null;
+    try {
+      v.pause();
+      v.removeAttribute('src');
+      v.load();
+    } catch (e) { /* già liberato */ }
+  }
 
   /* Finestra con il video: i passi stanno a fianco (sotto sul telefono), quello in corso è evidenziato, un clic ci salta. */
   Guide.apriVideo = function (id) {
@@ -289,10 +307,14 @@
           }).join('') + '</ol></div></div>',
         piede: (giro ? '<button class="btn" type="button" id="guide-giro-video" title="Ti mostro sullo schermo dove sono le cose">🧭 Guidami sulla pagina</button>' : '') +
           '<span class="spazio"></span><button class="btn primario" type="button" data-chiudi>Chiudi</button>',
-        allaChiusura: function () { if (video) { try { video.pause(); } catch (e) { /* già chiuso */ } } },
+        allaChiusura: function () { liberaVideo(video); },
         dopo: function (m) {
           m.classList.add('guide-modale');
-          video = m.querySelector('video');
+          // un'altra finestra del video aperta sopra questa (doppio avvio) non è passata da chiudiModale
+          liberaVideo(videoAperto);
+          video = videoAperto = m.querySelector('video');
+          var box = m.querySelector('.guide-video');
+          var corpo = m.querySelector('.modale-corpo');
           var voci = m.querySelectorAll('.guide-passi-video li');
           var lista = m.querySelector('.guide-passi-video');
           var attivo = -1;
@@ -315,12 +337,17 @@
           video.addEventListener('timeupdate', aggiorna);
           video.addEventListener('seeked', aggiorna);
           video.addEventListener('error', function () {
-            var box = m.querySelector('.guide-video');
-            if (box) box.insertAdjacentHTML('beforeend', '<p class="guide-errore-video">Non riesco a caricare il video. Riprova più tardi.</p>');
+            // solo nella sua finestra (non in quella aperta dopo) e una volta sola
+            if (!box.isConnected || box.querySelector('.guide-errore-video')) return;
+            box.insertAdjacentHTML('beforeend', '<p class="guide-errore-video">Non riesco a caricare il video. Riprova più tardi.</p>');
           });
           lista.addEventListener('click', function (e) {
             var b = e.target.closest('[data-passo]');
             if (!b || !conTempi) return;
+            // sul telefono i passi sono sotto il video: se la finestra è scorsa, riporto in vista il video
+            var rv = box.getBoundingClientRect();
+            var rc = corpo.getBoundingClientRect();
+            if (rv.top < rc.top || rv.bottom > rc.bottom) corpo.scrollTop += rv.top - rc.top - 12;
             video.currentTime = passi[Number(b.getAttribute('data-passo'))].inizio + 0.01;
             var p = video.play();
             if (p && p.catch) p.catch(function () { /* il browser non lo fa partire da solo: c'è il tasto play */ });

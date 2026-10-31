@@ -124,7 +124,8 @@
 
 /* ---------- schermi stretti ---------- */
 @media (max-width: 900px) {
-  .tour-invito { left: 12px; right: 12px; bottom: 12px; width: auto; max-width: 460px; }
+  /* sotto il menu laterale (z-index 40) quando lo si apre, sopra la barra in alto (30) */
+  .tour-invito { left: 12px; right: 12px; bottom: 12px; width: auto; max-width: 460px; z-index: 35; }
 }
 @media (max-width: 600px) {
   /* la larghezza la calcola js/tour.js sulla parte visibile dello schermo */

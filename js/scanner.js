@@ -462,10 +462,19 @@
           visti.forEach(function (c) { f.visti[c] = adesso; });
           if (!giaVisto) {
             var codice = migliore(visti);
-            f.letture++;
-            if (!f.continua.checked) chiudiFotocamera();
-            else f.stato.textContent = 'Letto (' + f.letture + '): ' + root.Barcode.leggibile(codice) + ' — inquadra la confezione successiva.';
-            alLeggere(codice);
+            if (!root.Barcode.analizza(codice).chiavi.length) {
+              // non è una lettura valida (per esempio l'etichetta secondaria GS1 con solo lotto e scadenza):
+              // la fotocamera resta aperta e aspetta il codice della confezione
+              Scanner.suono('errore');
+              f.stato.textContent = 'Questo codice non identifica il prodotto (' + root.Barcode.leggibile(codice).slice(0, 40) + '): inquadra il codice a barre o il Data Matrix della confezione.';
+              f.stato.classList.add('errore');
+            } else {
+              f.letture++;
+              f.stato.classList.remove('errore');
+              if (!f.continua.checked) chiudiFotocamera();
+              else f.stato.textContent = 'Letto (' + f.letture + '): ' + root.Barcode.leggibile(codice) + ' — inquadra la confezione successiva.';
+              alLeggere(codice);
+            }
           }
         }
         if (!f.chiusa) f.timer = setTimeout(cerca, 120);

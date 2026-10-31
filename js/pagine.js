@@ -615,6 +615,8 @@
     if (cfg.lettore) {
       collegaLettore(cont);
       App.gestoreScansione = function (info, a, passo) {
+        // durante la registrazione la pagina si ridisegna: una lettura fatta adesso andrebbe persa
+        if (cont.querySelector('#registra').disabled) { App.avviso('Sto registrando: aspetta un attimo e leggi di nuovo il codice.', 'errore'); return false; }
         var conLotto = col.indexOf('lotto') >= 0;
         var conScelta = col.indexOf('lotto-scelta') >= 0;
         var lottoCodice = info.lotto || '';
@@ -983,6 +985,7 @@
     collegaLettore(cont);
     var rinfrescaConsumi = App.rinfresca;
     App.gestoreScansione = function (info, a, passo) {
+      if (cont.querySelector('#c-registra').disabled) { App.avviso('Sto registrando: aspetta un attimo e leggi di nuovo il codice.', 'errore'); return false; }
       mostraArticoloNeiFiltri(cont, '#c-cat', '#c-cerca', a);
       var k = chiave(stato(), a.id);
       scrittiConsumi[k] = App.fmtCampo(C.r3(App.numero(scrittiConsumi[k] || '') + passo));
@@ -1250,6 +1253,7 @@
     collegaLettore(cont);
     var rinfrescaInventario = App.rinfresca;
     App.gestoreScansione = function (info, a, passo) {
+      if (cont.querySelector('#i-registra').disabled) { App.avviso('Sto registrando: aspetta un attimo e leggi di nuovo il codice.', 'errore'); return false; }
       mostraArticoloNeiFiltri(cont, '#i-cat', '#i-cerca', a);
       var k = valore(cont, '#i-rep') + '|' + valore(cont, '#i-data') + '|' + a.id;
       contatiInventario[k] = App.fmtCampo(C.r3(App.numero(contatiInventario[k] || '') + passo));
