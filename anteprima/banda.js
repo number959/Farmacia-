@@ -7,6 +7,8 @@
   'use strict';
   var A = window.Anteprima;
   if (!A) return;
+  // la pagina pubblicata come Artifact viene avvolta in un <html> senza lingua: la lingua serve ai lettori di schermo
+  if (!document.documentElement.lang) document.documentElement.lang = 'it';
 
   function h(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 
@@ -68,8 +70,49 @@
     box.classList.toggle('aperta', si);
   }
   testa.addEventListener('click', function () { apri(corpo.hidden); });
-  // all'inizio aperta, così si vedono subito gli utenti di prova; sul telefono chiusa, per non coprire il modulo di accesso
-  apri(!window.matchMedia || window.matchMedia('(min-width: 700px)').matches);
+  // aperto solo se accanto al modulo di accesso (largo circa 440 px, al centro) c'è posto per il riquadro (largo fino a 380 px)
+  function largo() { return !window.matchMedia || window.matchMedia('(min-width: 1240px)').matches; }
+  // all'inizio aperto, così si vedono subito gli utenti di prova; su telefono e tablet chiuso, per non coprire il modulo di accesso
+  apri(largo());
+
+  // con la schermata di accesso davanti il programma rende "inerte" tutto il resto della pagina (App.aggiornaInerte):
+  // il riquadro deve restare usabile, è da qui che si sceglie l'utente di prova
+  function nonInerte() {
+    if (box.inert) box.inert = false;
+    if (box.hasAttribute('inert')) box.removeAttribute('inert');
+    if (box.hasAttribute('data-inerte-accesso')) box.removeAttribute('data-inerte-accesso');
+  }
+  nonInerte();
+  // dopo l'accesso (anche scrivendo utente e password a mano) il riquadro si chiude da solo, così non copre menu e pulsanti;
+  // tornando alla schermata di accesso (uscita, sessione scaduta) sul computer si riapre con gli utenti di prova
+  var accesso = document.getElementById('accesso');
+  function accessoVisibile() { return !!accesso && !accesso.hidden; }
+  var eraAccesso = accessoVisibile();
+  if (window.MutationObserver) {
+    new MutationObserver(nonInerte).observe(box, { attributes: true, attributeFilter: ['inert', 'data-inerte-accesso'] });
+    if (accesso) {
+      new MutationObserver(function () {
+        var ora = accessoVisibile();
+        if (ora === eraAccesso) return;
+        eraAccesso = ora;
+        apri(ora && largo());
+      }).observe(accesso, { attributes: true, attributeFilter: ['hidden'] });
+    }
+    // una finestra (per esempio la scheda aperta toccando un codice di prova) o la ricerca: il riquadro aperto si chiude,
+    // così non copre i campi della finestra sugli schermi di media larghezza
+    ['modale', 'ricerca'].forEach(function (idEl) {
+      var el = document.getElementById(idEl);
+      if (el) new MutationObserver(function () { if (!el.hidden && !corpo.hidden) apri(false); }).observe(el, { attributes: true, attributeFilter: ['hidden'] });
+    });
+  }
+
+  // le copie di sicurezza dell'anteprima stanno solo nella pagina: "Scarica" non ha un file da dare (nel programma vero sì)
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[href]');
+    if (!a || !/(^|\/)api\/backup\//.test(a.getAttribute('href'))) return;
+    e.preventDefault();
+    if (window.App && App.avviso) App.avviso('Nell’anteprima le copie di sicurezza restano dentro la pagina e non si scaricano: nel programma installato “Scarica” salva il file .db della copia.', 'ok');
+  }, true);
 
   box.addEventListener('click', function (e) {
     var u = e.target.closest('[data-utente]');

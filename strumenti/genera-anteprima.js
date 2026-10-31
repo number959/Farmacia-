@@ -15,14 +15,19 @@ const OUT = path.join(RADICE, 'dist', 'anteprima');
 fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(OUT, { recursive: true });
 let html = fs.readFileSync(path.join(RADICE, 'index.html'), 'utf8');
+// se index.html cambia forma, le sostituzioni qui sotto non devono fallire in silenzio (l'anteprima cercherebbe un server vero)
+function sostituisci(cerca, metti) {
+  if (html.indexOf(cerca) < 0) throw new Error('In index.html non trovo: ' + cerca);
+  html = html.replace(cerca, metti);
+}
 const file = new Set();
 html.replace(/(?:src|href)="((?:css|js|vendor)\/[^"]+)"/g, (_, rel) => { file.add(rel); return _; });
 ['js/demo.js', 'anteprima/server-finto.js', 'anteprima/banda.js', 'anteprima/anteprima.css'].forEach((f) => file.add(f));
 // il server simulato si carica subito dopo i calcoli, prima di tutto ciò che parla con il server
-html = html.replace('<script src="js/calcoli.js"></script>', '<script src="js/calcoli.js"></script>\n  <script src="js/demo.js"></script>\n  <script src="anteprima/server-finto.js"></script>');
-html = html.replace('<script src="js/avvio.js"></script>', '<script src="js/avvio.js"></script>\n  <script src="anteprima/banda.js"></script>');
-html = html.replace('<link rel="stylesheet" href="css/app.css">', '<link rel="stylesheet" href="css/app.css">\n  <link rel="stylesheet" href="anteprima/anteprima.css">');
-html = html.replace('<title>Gestionale Farmacia · Clinica Posillipo</title>', '<title>Gestionale Farmacia · Anteprima</title>');
+sostituisci('<script src="js/calcoli.js"></script>', '<script src="js/calcoli.js"></script>\n  <script src="js/demo.js"></script>\n  <script src="anteprima/server-finto.js"></script>');
+sostituisci('<script src="js/avvio.js"></script>', '<script src="js/avvio.js"></script>\n  <script src="anteprima/banda.js"></script>');
+sostituisci('<link rel="stylesheet" href="css/app.css">', '<link rel="stylesheet" href="css/app.css">\n  <link rel="stylesheet" href="anteprima/anteprima.css">');
+sostituisci('<title>Gestionale Farmacia · Clinica Posillipo</title>', '<title>Gestionale Farmacia · Anteprima</title>');
 fs.writeFileSync(path.join(OUT, 'index.html'), html);
 for (const rel of file) {
   fs.mkdirSync(path.dirname(path.join(OUT, rel)), { recursive: true });
@@ -39,3 +44,5 @@ const corpo = /<body>([\s\S]*?)<\/body>/.exec(html)[1];
 const stili = testa.match(/<link rel="stylesheet"[^>]*>/g).join('\n');
 fs.writeFileSync(path.join(OUT, 'pagina-artifact.html'), '<title>Gestionale Farmacia Posillipo</title>\n' + stili + '\n' + corpo.trim() + '\n');
 console.log('Anteprima in ' + path.relative(RADICE, OUT) + ' (' + (file.size + 1) + ' file più le videoguide)');
+// senza la funzione "downloads" i file Excel nella pagina pubblicata non si scaricano (i download diretti sono bloccati)
+console.log('Per pubblicarla come Artifact: pagina-artifact.html, gli altri file accanto con gli stessi percorsi, capabilities { downloads: true }.');

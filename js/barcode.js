@@ -7,7 +7,8 @@
  *
  * Codici riconosciuti:
  *   GS1        Data Matrix dei farmaci, UDI dei dispositivi medici, GS1-128: (01) GTIN, (17) scadenza AAMMGG,
- *              (10) lotto, (21) seriale. Con il separatore GS (\x1D), con le parentesi "(01)…(17)…" oppure
+ *              (10) lotto, (21) seriale, (716) AIC italiano (chiave 'aic:' in più a 'gtin:').
+ *              Con il separatore GS (\x1D), con le parentesi "(01)…(17)…" oppure
  *              senza separatori quando i campi di lunghezza variabile sono in fondo.
  *   AIC        Code 32 dei farmaci italiani: "A" + 9 cifre, 9 cifre, oppure le 6 lettere/cifre in base 32
  *              che un lettore impostato su Code 39 restituisce così come sono.
@@ -218,14 +219,19 @@
       (/^01\d{14}/.test(senzaFnc1) && senzaFnc1.length >= 16 && gtinValido(senzaFnc1.substr(2, 14)))) {
       campi = campiGrezzi(senzaFnc1);
     }
-    if (campi && (campi['01'] || campi['02'] || campi['10'] || campi['17'] || campi['21'] || campi['00'])) {
+    if (campi && (campi['01'] || campi['02'] || campi['10'] || campi['17'] || campi['21'] || campi['00'] || campi['716'])) {
       out.tipo = 'gs1';
       var g = campi['01'] || campi['02'] || '';
       if (/^\d{14}$/.test(g) && gtinValido(g)) out.gtin = g;
+      // AI 716: codice AIC (Italia) nel Data Matrix dei farmaci; vale anche come chiave "aic:", così la confezione
+      // si riconosce anche se all'articolo è stato associato il bollino (Code 32)
+      var a716 = String(campi['716'] || '').replace(/^[Aa]/, '');
+      if (/^\d{9}$/.test(a716) && aicValido(a716)) out.aic = a716;
       out.lotto = (campi['10'] || '').slice(0, 60);
       out.seriale = (campi['21'] || '').slice(0, 60);
       out.scadenza = campi['17'] ? scadenzaGs1(campi['17']) : '';
-      if (out.gtin) out.chiavi = ['gtin:' + out.gtin];
+      if (out.gtin) out.chiavi.push('gtin:' + out.gtin);
+      if (out.aic) out.chiavi.push('aic:' + out.aic);
       return out;
     }
 

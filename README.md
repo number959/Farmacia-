@@ -64,7 +64,7 @@ Funziona con i lettori **USB o Bluetooth** che si comportano da tastiera (tutti 
 Il programma riconosce la lettura anche se il cursore è in un altro campo e non la confonde con chi scrive a mano. Su
 telefono e tablet c'è anche il pulsante **📷 Fotocamera** (Chrome o Edge, con l'indirizzo in **HTTPS**: vedi LEGGIMI).
 
-Codici riconosciuti: **Data Matrix GS1** delle confezioni dei farmaci e dei dispositivi medici (GTIN, lotto e scadenza),
+Codici riconosciuti: **Data Matrix GS1** delle confezioni dei farmaci e dei dispositivi medici (GTIN, lotto, scadenza e, se c'è, l'AIC),
 **Code 32 / AIC** dei farmaci italiani, **EAN-13 / EAN-8 / UPC**, e qualsiasi altro codice interno.
 
 | Pagina | Cosa fa una lettura |

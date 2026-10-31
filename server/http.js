@@ -446,7 +446,8 @@ Server.prototype.gestisciApi = function (req, res) {
  * e questa scheda non deve registrare a nome dell'altro.
  */
 function utenteDiverso(req, ctx) {
-  var atteso = req.headers['x-utente'] || ctx.query.get('utente');
+  // ?utente= vale solo per le notifiche (EventSource non manda intestazioni): altrove è un filtro (per esempio /api/attivita)
+  var atteso = req.headers['x-utente'] || (ctx.percorso === '/api/eventi' ? ctx.query.get('utente') : null);
   return !!atteso && !!ctx.utente && atteso !== ctx.utente.id;
 }
 

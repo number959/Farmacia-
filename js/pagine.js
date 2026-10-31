@@ -957,10 +957,13 @@
         var movimenti = righe.map(function (r) {
           return { tipo: 'consumo', data: st.data, articoloId: r.articoloId, repartoId: st.rep, quantita: r.quantita };
         });
+        // quello che si manda: una quantità riscritta durante la registrazione resta da registrare
+        var inviati = {};
+        righe.forEach(function (r) { var k = chiave(st, r.articoloId); inviati[k] = scrittiConsumi[k]; });
         bottone.disabled = true;
         App.aggiungiMovimenti(movimenti).then(function () {
           bottone.disabled = false;
-          righe.forEach(function (r) { delete scrittiConsumi[chiave(st, r.articoloId)]; });
+          Object.keys(inviati).forEach(function (k) { if (scrittiConsumi[k] === inviati[k]) delete scrittiConsumi[k]; });
           App.avviso('Consumi registrati: ' + righe.length + (righe.length === 1 ? ' articolo' : ' articoli'), 'ok');
           disegna();
         }, function (e) {
@@ -1291,7 +1294,7 @@
         // la differenza si calcola adesso, sulla giacenza attuale; il server controlla che non sia cambiata
         var teorica = C.giacenza(App.S, p[2], rep, data);
         var d = C.r3(App.numero(contatiInventario[k]) - teorica);
-        registrate.push(k);
+        registrate.push([k, contatiInventario[k]]);
         if (d) mov.push({ tipo: 'rettifica', data: data, articoloId: p[2], repartoId: rep, quantita: d, teorica: teorica, note: 'Inventario del ' + App.fmtData(data) });
       });
       if (!mov.length) { App.avviso('Nessuna differenza da registrare.'); return; }
@@ -1300,7 +1303,8 @@
         bottone.disabled = true;
         App.aggiungiMovimenti(mov).then(function () {
           bottone.disabled = false;
-          registrate.forEach(function (k) { delete contatiInventario[k]; });
+          // una quantità cambiata durante la registrazione resta da registrare
+          registrate.forEach(function (x) { if (contatiInventario[x[0]] === x[1]) delete contatiInventario[x[0]]; });
           App.avviso('Inventario registrato', 'ok');
           disegna();
         }, function (e) {

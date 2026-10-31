@@ -23,12 +23,22 @@
     return !!s && !s.hidden;
   };
 
+  // elemento della pagina (o della finestra aperta) che aveva il fuoco quando è comparsa la schermata di accesso
+  var fuocoPrima = null;
+
   Accesso.nascondi = function () {
     clearTimeout(timerRiprova);
     var s = schermo();
     s.hidden = true;
     s.innerHTML = '';
     if (App.aggiornaInerte) App.aggiornaInerte();
+    // dopo il nuovo accesso (sessione scaduta) il fuoco torna dov'era, se quell'elemento c'è ancora
+    var f = fuocoPrima;
+    fuocoPrima = null;
+    var a = document.activeElement;
+    if (f && f.isConnected && (!a || a === document.body)) {
+      try { f.focus({ preventScroll: true }); } catch (e) { /* elemento non più attivabile */ }
+    }
   };
 
   /* Disegna la scheda centrale con il marchio della struttura. */
@@ -51,6 +61,13 @@
       '<div class="accesso-corpo">' + corpo + '</div>' +
       (st.versione ? '<p class="accesso-versione">Versione ' + h(st.versione) + '</p>' : '') +
       '</div>';
+    if (s.hidden) {
+      var a = document.activeElement;
+      var dove = a && a !== document.body ? a.closest('#app, #modale') : null;
+      fuocoPrima = dove ? a : null;
+    }
+    // la fotocamera del lettore non resta accesa sotto la schermata di accesso (sessione scaduta)
+    if (root.Scanner && root.Scanner.fotocameraAperta && root.Scanner.fotocameraAperta()) root.Scanner.chiudiFotocamera();
     s.hidden = false;
     if (App.aggiornaInerte) App.aggiornaInerte();
     // fuoco subito (non dopo un ritardo: chi scrive in fretta non deve finire nel campo sbagliato)

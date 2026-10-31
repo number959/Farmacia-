@@ -149,3 +149,20 @@ test('GS1: parentesi con gli spazi, lotto che finisce come una data, campo varia
   assert.deepEqual(v.chiavi, ['gtin:' + GTIN]);
   assert.equal(v.lotto, '');
 });
+
+test('GS1 con l\'AIC (AI 716, Italia): chiave gtin e chiave aic', () => {
+  const r = B.analizza(']d201' + GTIN + '716' + '012345676' + GS + '17281231' + '10L7' + GS + '21S1');
+  assert.equal(r.tipo, 'gs1');
+  assert.equal(r.aic, '012345676');
+  assert.deepEqual(r.chiavi, ['gtin:' + GTIN, 'aic:012345676']);
+  assert.equal(r.lotto, 'L7');
+  assert.equal(r.scadenza, '2028-12');
+  // con le parentesi e la "A" davanti
+  assert.deepEqual(B.analizza('(01)' + GTIN + '(716)A012345676(10)L1').chiavi, ['gtin:' + GTIN, 'aic:012345676']);
+  // AIC con la cifra di controllo sbagliata: resta solo il GTIN
+  const s = B.analizza('(01)' + GTIN + '(716)012345677(10)L1');
+  assert.equal(s.aic, '');
+  assert.deepEqual(s.chiavi, ['gtin:' + GTIN]);
+  // solo AIC e lotto, senza GTIN
+  assert.deepEqual(B.analizza('(716)012345676(10)L1').chiavi, ['aic:012345676']);
+});

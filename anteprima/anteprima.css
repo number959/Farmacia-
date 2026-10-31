@@ -10,10 +10,19 @@
 .anteprima-corpo code { font-weight: 700; }
 .anteprima-nota { color: #6b5d1f; font-size: 12px; }
 /* sopra la schermata di accesso (75), sotto gli avvisi (80) e il giro di Guidami (90) */
-/* sul telefono si fa da parte mentre ci sono l'invito al giro, una finestra o la ricerca */
-@media (max-width: 700px) {
+/* durante un giro di Guidami si fa da parte: starebbe sopra gli elementi che il giro evidenzia (il giro blocca comunque i clic) */
+body:has(.tour) .anteprima-banda { visibility: hidden; }
+/* su telefono e tablet (fino a 900 px, dove l'invito al giro va in basso a sinistra come il riquadro) si fa da parte
+   mentre ci sono l'invito al giro, una finestra o la ricerca */
+@media (max-width: 900px) {
   body:has(.tour-invito) .anteprima-banda,
   body:has(#modale:not([hidden])) .anteprima-banda,
   body:has(#ricerca:not([hidden])) .anteprima-banda { visibility: hidden; }
+}
+/* spazio in fondo per il riquadro chiuso (alto circa 40 px, in basso a sinistra): l'ultima riga della pagina e il piede
+   del menu laterale (articoli e movimenti dell'archivio) si possono sempre portare sopra il riquadro scorrendo */
+@media screen {
+  .principale { padding-bottom: 56px; }
+  .laterale { padding-bottom: 56px; }
 }
 @media print { .anteprima-banda { display: none; } }

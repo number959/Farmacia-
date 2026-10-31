@@ -967,8 +967,11 @@
     if (!document.getElementById('modale').hidden) App.chiudiModale();
     var ric = document.getElementById('ricerca');
     if (ric && !ric.hidden) {
-      ric.hidden = true;
-      if (document.getElementById('modale').hidden) document.getElementById('velo').hidden = true;
+      if (App.chiudiRicerca) App.chiudiRicerca();
+      else {
+        ric.hidden = true;
+        if (document.getElementById('modale').hidden) document.getElementById('velo').hidden = true;
+      }
     }
     var t = document.getElementById('utente-tendina');
     if (t && !t.hidden) { t.hidden = true; document.getElementById('utente-btn').setAttribute('aria-expanded', 'false'); }

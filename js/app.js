@@ -334,21 +334,49 @@
 
   var chiusuraModale = null;
   var apertaDa = null; // elemento che aveva il fuoco quando si è aperta la finestra: ci torna alla chiusura
+  var ricercaApertaDa = null; // lo stesso per la ricerca rapida
 
-  /* Con una finestra aperta o la schermata di accesso davanti, la pagina sotto non si raggiunge con Tab né con i clic. */
+  /*
+   * Con una finestra aperta o la schermata di accesso davanti, la pagina sotto non si raggiunge con Tab né con i clic.
+   * Con la schermata di accesso davanti non si raggiungono nemmeno finestra, ricerca e fotocamera rimaste aperte sotto.
+   */
   App.aggiornaInerte = function () {
     var app = document.getElementById('app');
     var m = document.getElementById('modale');
     var acc = document.getElementById('accesso');
     if (!app) return;
-    app.inert = !!((m && !m.hidden) || (acc && !acc.hidden));
+    var accesso = !!(acc && !acc.hidden);
+    app.inert = accesso || !!(m && !m.hidden);
+    if (accesso) {
+      // i "fratelli" della schermata di accesso (di solito i figli di body; anche se la pagina è avvolta in un contenitore)
+      Array.prototype.forEach.call(acc.parentNode.children, function (el) {
+        if (el === app || el === acc || el.id === 'avvisi' || /^(SCRIPT|STYLE|LINK)$/.test(el.tagName)) return;
+        if (!el.inert) { el.inert = true; el.setAttribute('data-inerte-accesso', ''); }
+      });
+    } else {
+      Array.prototype.forEach.call(document.querySelectorAll('[data-inerte-accesso]'), function (el) {
+        el.inert = false;
+        el.removeAttribute('data-inerte-accesso');
+      });
+    }
   };
+
+  /*
+   * Elemento a cui tornerà il fuoco (escluso quello dentro "dentro"). Ricerca rapida e menu dell'utente si chiudono
+   * quando aprono una finestra: il fuoco torna a chi aveva aperto la ricerca, o al pulsante dell'utente.
+   */
+  function fuocoDaRicordare(dentro) {
+    var a = document.activeElement;
+    if (!a || a === document.body || (dentro && dentro.contains(a))) return null;
+    if (a.closest('#utente-menu')) return document.getElementById('utente-btn');
+    if (a.closest('#ricerca')) return ricercaApertaDa && ricercaApertaDa.isConnected ? ricercaApertaDa : null;
+    return a;
+  }
 
   App.apriModale = function (opz) {
     var m = document.getElementById('modale');
-    var attivo = document.activeElement;
     // una finestra aperta da un'altra finestra torna comunque a chi ha aperto la prima
-    if (m.hidden) apertaDa = attivo && attivo !== document.body && !m.contains(attivo) ? attivo : null;
+    if (m.hidden) apertaDa = fuocoDaRicordare(m);
     m.className = 'modale' + (opz.largo ? ' largo' : '');
     m.innerHTML =
       '<div class="modale-testa"><h2 id="modale-titolo">' + h(opz.titolo) + '</h2>' +
@@ -360,7 +388,7 @@
     App.aggiornaInerte();
     chiusuraModale = opz.allaChiusura || null;
     m.querySelectorAll('[data-chiudi]').forEach(function (b) { b.addEventListener('click', App.chiudiModale); });
-    var primo = m.querySelector('.modale-corpo input:not([type=checkbox]):not([readonly]), .modale-corpo select, .modale-corpo textarea');
+    var primo = m.querySelector('.modale-corpo input:not([type=checkbox]):not([type=hidden]):not([hidden]):not([readonly]), .modale-corpo select, .modale-corpo textarea');
     setTimeout(function () {
       // se l'utente sta già scrivendo nella finestra non gli sposto il cursore
       if (m.contains(document.activeElement)) return;
@@ -381,8 +409,11 @@
     App.aggiornaInerte();
     var torna = apertaDa;
     apertaDa = null;
-    // il fuoco torna dove era (se c'è ancora e nessun altro l'ha già preso)
-    if (torna && torna.isConnected && (!document.activeElement || document.activeElement === document.body)) {
+    // il fuoco torna dove era (se c'è ancora e nessun altro l'ha già preso). Un fuoco rimasto nella pagina è quello
+    // di prima dell'apertura (con la finestra aperta la pagina era inerte): per esempio la voce del menu dell'utente
+    // appena nascosta, se la finestra si chiude prima di aver preso il fuoco
+    var ora = document.activeElement;
+    if (torna && torna.isConnected && (!ora || ora === document.body || document.getElementById('app').contains(ora))) {
       try { torna.focus({ preventScroll: true }); } catch (e) { /* elemento non più attivabile */ }
     }
     var f = chiusuraModale;
@@ -631,6 +662,7 @@
   App.apriRicerca = function () {
     if (!App.S) return;
     var r = document.getElementById('ricerca');
+    if (r.hidden) ricercaApertaDa = fuocoDaRicordare(r);
     r.hidden = false;
     document.getElementById('velo').hidden = false;
     var inp = document.getElementById('ricerca-testo');
@@ -640,9 +672,18 @@
   };
 
   function chiudiRicerca() {
-    document.getElementById('ricerca').hidden = true;
+    var r = document.getElementById('ricerca');
+    var a = document.activeElement;
+    // il fuoco è nella ricerca, o su nessun elemento (un clic sul velo lo toglie prima di chiuderla)
+    var conFuoco = !a || a === document.body || r.contains(a);
+    r.hidden = true;
     if (document.getElementById('modale').hidden) document.getElementById('velo').hidden = true;
+    // il fuoco torna dove era prima della ricerca (anche dentro una finestra aperta)
+    if (conFuoco && ricercaApertaDa && ricercaApertaDa.isConnected) {
+      try { ricercaApertaDa.focus({ preventScroll: true }); } catch (e) { /* elemento non più attivabile */ }
+    }
   }
+  App.chiudiRicerca = chiudiRicerca;
 
   function cercaRapida(testo) {
     var t = testo.trim().toLowerCase();
@@ -675,7 +716,8 @@
     var r = risultatiRicerca[i];
     if (!r) return;
     chiudiRicerca();
-    if (r.tipo === 'pagina') App.vai(r.id);
+    // "Vai a" con una finestra aperta: la finestra non resta sopra la pagina nuova
+    if (r.tipo === 'pagina') { App.chiudiModale(); App.vai(r.id); }
     else App.schedaArticolo(r.id);
   }
 
@@ -804,6 +846,11 @@
   function collegaInterfaccia() {
     window.addEventListener('hashchange', function () {
       if (!App.S || !App.utente) return;
+      // pagina cambiata dal tasto Indietro/Avanti o dall'indirizzo (non da App.vai): finestra e ricerca non restano sopra
+      if (!App._parametriInAttesa) {
+        if (!document.getElementById('ricerca').hidden) chiudiRicerca();
+        if (!document.getElementById('modale').hidden) App.chiudiModale();
+      }
       App.parametri = App._parametriInAttesa || {};
       App._parametriInAttesa = null;
       App.mostra(location.hash.slice(1));

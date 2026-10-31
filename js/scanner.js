@@ -246,8 +246,11 @@
     // ricerca rapida aperta: si chiude, il codice letto vale come ricerca
     var ric = document.getElementById('ricerca');
     if (ric && !ric.hidden) {
-      ric.hidden = true;
-      if (document.getElementById('modale').hidden) document.getElementById('velo').hidden = true;
+      if (App.chiudiRicerca) App.chiudiRicerca();
+      else {
+        ric.hidden = true;
+        if (document.getElementById('modale').hidden) document.getElementById('velo').hidden = true;
+      }
     }
     var m = document.getElementById('modale');
     if (!m.hidden) {
@@ -614,6 +617,39 @@
     if (r.modo === 'trattieni') replica(r);
   }
 
+  /*
+   * La pagina ha ridisegnato il campo a metà raffica (per esempio Consumi e Inventario quando arrivano i movimenti
+   * di un altro utente, o la pagina pulita dopo una registrazione): il campo con il cursore è stato tolto e il fuoco
+   * è su quello nuovo, o sulla pagina. La raffica continua lì, altrimenti la lettura si spezzerebbe in due: la prima
+   * metà resterebbe scritta nel campo nuovo (le pagine conservano quello che si scrive) e la seconda non sarebbe una lettura.
+   * Il campo nuovo tornerà al valore che aveva senza i caratteri della raffica.
+   */
+  function continuaSuNuovoCampo(r, el, t, limite) {
+    if (!r || r.el === el || !r.el || r.el.isConnected || t - r.ultimo > limite) return false;
+    var testo = campoTesto(el);
+    if (r.modo === 'trattieni' && testo) return false; // i tasti trattenuti erano per un pulsante o un elenco: non li sposto in un campo
+    if (r.modo === 'testo' && testo) {
+      var v = valoreDi(el);
+      var scritti = r.caratteri.split(GS).join(''); // il GS non si scrive nel campo
+      var f = r.foto;
+      // il campo nuovo ha il valore di prima con i caratteri della raffica dove c'era il cursore (o in fondo)
+      var conRaffica = f.inizio === null || f.inizio === undefined ? f.valore + scritti
+        : f.valore.slice(0, f.inizio) + scritti + f.valore.slice(f.fine);
+      var base = v;
+      if (v === conRaffica || v === f.valore + scritti) base = f.valore;
+      else if (scritti && v.slice(-scritti.length) === scritti) base = v.slice(0, -scritti.length);
+      var sel = base === r.foto.valore ? r.foto : { inizio: base.length, fine: base.length };
+      r.foto = { valore: base, inizio: sel.inizio, fine: sel.fine };
+      r.cambiato = false;
+    } else if (r.modo === 'testo') {
+      // il fuoco è tornato alla pagina: da qui i tasti si trattengono (se non è una lettura si ripassano alla pagina)
+      r.modo = 'trattieni';
+      r.foto = null;
+    }
+    r.el = el;
+    return true;
+  }
+
   function programmaFine(r) {
     clearTimeout(r.timer);
     var limite = r.caratteri.length >= MIN_CARATTERI ? INVIO_MAX : GAP_MAX;
@@ -644,7 +680,7 @@
 
     if ((k === 'Enter' || k === 'Tab') && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
       var r = raffica;
-      if (r && r.el === el && letturaValida(r, t)) {
+      if (r && (r.el === el || continuaSuNuovoCampo(r, el, t, INVIO_MAX)) && letturaValida(r, t)) {
         // è una lettura: l'Invio non arriva alla pagina e i caratteri non restano nel campo
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -664,6 +700,7 @@
       return;
     }
 
+    if (raffica && raffica.el !== el) continuaSuNuovoCampo(raffica, el, t, GAP_MAX);
     var c = carattere(e, !!(raffica && raffica.el === el && t - raffica.ultimo <= GAP_MAX && raffica.caratteri.length));
     if (c === null || e.repeat) { chiudiRaffica(); return; }
     if (raffica && (raffica.el !== el || t - raffica.ultimo > GAP_MAX)) chiudiRaffica();

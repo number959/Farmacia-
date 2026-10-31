@@ -182,7 +182,9 @@ Importazione da Excel, archivio della versione per un solo PC e dati di prova cr
   regola GS1), `10` lotto, `21` seriale; `11` e gli altri AI noti si leggono e si ignorano. Forme accettate: con il separatore
   GS (`\x1D`, oppure `<GS>`/`{GS}` scritti come testo), con le parentesi `(01)…(17)…`, senza separatori quando i campi variabili
   sono in fondo (se un campo variabile finisce con `17`/`11` + data valida, la data si stacca). Chiave `gtin:` (nessuna chiave
-  se manca il GTIN, per esempio un SSCC o un lotto da solo).
+  se manca il GTIN, per esempio un SSCC o un lotto da solo). Se c'è l'AI `716` (AIC italiano, 9 cifre con cifra di controllo
+  valida) si aggiunge anche la chiave `aic:`: la confezione col nuovo Data Matrix viene riconosciuta anche quando all'articolo
+  è stato associato solo il bollino (Code 32). Per associare un codice nuovo si usa la prima chiave (`gtin:`).
 - **AIC (Code 32)**: `A` + 9 cifre, 9 cifre, oppure le 6 lettere/cifre in base 32 (`0123456789BCDFGHJKLMNPQRSTUVWXYZ`) di un
   lettore impostato su Code 39; cifra di controllo obbligatoria. Chiave `aic:` + 9 cifre.
 - **EAN-13, EAN-8, UPC-A, GTIN-14** con cifra di controllo valida → `gtin:` + 14 cifre.
@@ -196,7 +198,8 @@ Importazione da Excel, archivio della versione per un solo PC e dati di prova cr
   testo i caratteri passano e, se era una lettura, il campo torna al valore e alla selezione di prima della raffica (con un
   evento `input`); fuori dai campi (pagina, pulsanti, elenchi a discesa) i tasti si trattengono finché non si capisce se è una
   lettura, poi si ripassano alla pagina (tasti rapidi) o si applicano all'elenco come la scelta per iniziali del browser.
-  L'Invio di una lettura non arriva alla pagina. I campi password, gli eventi `repeat` e la composizione (IME) non si
+  L'Invio di una lettura non arriva alla pagina. Se la pagina ridisegna il campo a metà lettura (per esempio arrivano i
+  movimenti di un altro utente), la lettura continua sul campo nuovo, che torna al valore senza i caratteri letti. I campi password, gli eventi `repeat` e la composizione (IME) non si
   considerano mai. Il separatore GS arriva come `Ctrl+]` (solo dentro una raffica già iniziata).
   Conseguenza per le prove automatiche: con Playwright `keyboard.type(testo)` senza `delay` seguito da Invio è una lettura;
   per scrivere come una persona usare `fill()` o `delay` ≥ 60 ms.
