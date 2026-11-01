@@ -298,6 +298,17 @@ test('assortimento: soglie, permessi, nessuna scrittura inutile, articolo tolto'
   assert.equal(riga('r-sala', ART.para).attivo, true);
   const att = await admin.get('/api/attivita?azione=assortimento');
   assert.ok(att.json.eventi.some((e) => e.azione === 'assortimento.modifica' && e.username === 'farma'));
+
+  // un articolo non attivo non entra in un assortimento né in un armadio; dove c'è già, le soglie si cambiano
+  const vecchio = (await admin.post('/api/articoli', { nome: 'ARTICOLO DISMESSO prova', categoria: 'FARMACI', unita: 'pz' })).json.articolo;
+  assert.equal((await f.put('/api/assortimento', { repartoId: 'r-sala', righe: [{ articoloId: vecchio.id, scortaMin: 1 }] })).stato, 200);
+  const spento = await admin.put('/api/articoli/' + vecchio.id, Object.assign({}, vecchio, { attivo: false }));
+  assert.equal(spento.stato, 200, JSON.stringify(spento.json));
+  assert.equal((await f.put('/api/assortimento', { repartoId: 'r-sala', righe: [{ articoloId: vecchio.id, scortaMin: 2 }] })).stato, 200);
+  const nuovoSpento = await f.put('/api/assortimento', { repartoId: 'r-ambulatori', righe: [{ articoloId: vecchio.id, scortaMin: 1 }] });
+  assert.equal(nuovoSpento.stato, 400);
+  assert.match(nuovoSpento.json.errore, /non è attivo/);
+  assert.equal((await admin.put('/api/ubicazioni', { repartoId: 'r-ambulatori', righe: [{ articoloId: vecchio.id, armadioId: null }] })).stato, 200, 'toglierlo da un armadio va sempre bene');
 });
 
 test('ubicazioni: una casella un articolo, magazzini propri, aggiunta all’assortimento', async () => {
@@ -389,6 +400,14 @@ test('magazzini: eliminazione solo se mai usato, con armadi, assortimento e uten
   const no = await admin.del('/api/magazzini/' + usato.id);
   assert.equal(no.stato, 409);
   assert.match(no.json.errore, /Attivo/);
+  // con un DDT da spedire non si disattiva (né si elimina): prima si annulla
+  const ddt = await admin.post('/api/ddt', { origineId: usato.id, destinazioneId: 'r-degenza', righe: [{ articoloId: ART.garze, quantita: 2 }] });
+  assert.equal(ddt.stato, 200, JSON.stringify(ddt.json));
+  const occupato = await admin.put('/api/magazzini/' + usato.id, { attivo: false });
+  assert.equal(occupato.stato, 409);
+  assert.match(occupato.json.errore, /DDT/);
+  assert.equal((await admin.del('/api/magazzini/' + usato.id)).stato, 409);
+  assert.equal((await admin.post('/api/ddt/' + ddt.json.ddt.id + '/annulla', { motivo: 'prova' })).stato, 200);
   const dis = await admin.put('/api/magazzini/' + usato.id, { attivo: false });
   assert.equal(dis.stato, 200);
   assert.equal(dis.json.magazzino.attivo, false);

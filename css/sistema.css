@@ -1,1 +1,133 @@
-/* Versione 3.0 – parte E (docs/NOVITA-3.0.md). Usare solo le variabili CSS di css/app.css. */
+/* Versione 3.0 – parte E (docs/NOVITA-3.0.md): pagina Sistema (base dati, copie, giornale).
+   Solo variabili di css/app.css (con un valore di riserva per quelle nuove della 3.0). */
+
+.sis { display: grid; gap: 18px; min-width: 0; }
+.sis > * { min-width: 0; }
+.sis-griglia { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 18px; align-items: start; }
+.sis-griglia > * { min-width: 0; }
+
+/* ---------- stato: semaforo, titolo, motivi, azioni ---------- */
+.sis-stato { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px 22px; align-items: center; padding: 18px 22px; position: relative; overflow: hidden; }
+.sis-stato::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--linea-forte); transition: background var(--durata, 240ms) var(--curva, ease); }
+.sis-stato[data-stato="ok"]::before { background: var(--ok); }
+.sis-stato[data-stato="attenzione"]::before { background: var(--attenzione); }
+.sis-stato[data-stato="problema"]::before { background: var(--pericolo); }
+
+.sis-semaforo { display: grid; gap: 7px; padding: 9px 8px; border-radius: 18px; background: var(--blu-notte, var(--laterale)); box-shadow: var(--ombra); }
+.sis-luce { width: 22px; height: 22px; border-radius: 50%; background: color-mix(in srgb, var(--superficie) 14%, transparent); transition: background var(--durata, 240ms) var(--curva, ease), box-shadow var(--durata, 240ms) var(--curva, ease); }
+/* la luce accesa "respira" piano (niente animazione con movimento ridotto, in fondo al file) */
+.sis-semaforo[data-stato="problema"] .sis-luce.rosso { --luce: var(--pericolo); }
+.sis-semaforo[data-stato="attenzione"] .sis-luce.giallo { --luce: var(--attenzione); }
+.sis-semaforo[data-stato="ok"] .sis-luce.verde { --luce: var(--ok); }
+.sis-semaforo[data-stato="problema"] .sis-luce.rosso,
+.sis-semaforo[data-stato="attenzione"] .sis-luce.giallo, .sis-semaforo[data-stato="ok"] .sis-luce.verde {
+  background: color-mix(in srgb, var(--luce) 75%, var(--superficie));
+  box-shadow: 0 0 12px 2px color-mix(in srgb, var(--luce) 60%, transparent);
+  animation: sis-respira 3.2s var(--curva, ease) infinite;
+}
+@keyframes sis-respira {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.25); }
+}
+
+.sis-stato-testo { min-width: 0; display: grid; gap: 4px; }
+.sis-sopra { font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--tenue); }
+.sis-stato-testo h2 { font-family: var(--carattere-titoli, inherit); font-size: 22px; line-height: 1.2; }
+.sis-stato[data-stato="ok"] h2 { color: var(--ok); }
+.sis-stato[data-stato="attenzione"] h2 { color: var(--attenzione); }
+.sis-stato[data-stato="problema"] h2 { color: var(--pericolo); }
+.sis-spiega { color: var(--tenue); max-width: 70ch; }
+.sis-motivi { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+.sis-motivi:empty { display: none; }
+.sis-motivi li { position: relative; padding-left: 16px; font-size: 13.5px; overflow-wrap: anywhere; }
+.sis-motivi li::before { content: ""; position: absolute; left: 0; top: .5em; width: 8px; height: 8px; border-radius: 50%; background: var(--attenzione); }
+.sis-motivi li.problema::before { background: var(--pericolo); }
+
+.sis-azioni { display: grid; gap: 8px; align-self: start; }
+.sis-azioni .btn { white-space: nowrap; justify-content: center; }
+.sis-azioni .btn[aria-busy="true"] { cursor: progress; }
+.sis-esito { grid-column: 1 / -1; font-size: 13.5px; font-weight: 600; padding: 9px 12px; border-radius: 8px; overflow-wrap: anywhere; }
+.sis-esito:empty { display: none; }
+.sis-esito.ok { background: var(--ok-chiaro); color: var(--ok); }
+.sis-esito.errore { background: var(--pericolo-chiaro); color: var(--pericolo); }
+
+/* ---------- numeri ---------- */
+.sis-numeri { grid-template-columns: repeat(auto-fit, minmax(min(100%, 158px), 1fr)); }
+.sis-numero { min-width: 0; }
+.sis-numero .titolo { text-transform: uppercase; letter-spacing: .05em; font-size: 11px; }
+.sis-numero .valore { font-family: var(--carattere-titoli, inherit); font-size: 26px; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sis-numero .valore small { font-size: 13px; font-weight: 600; color: var(--tenue); }
+.sis-numero .piccolo { overflow-wrap: anywhere; }
+.sis-cifra { font-variant-numeric: tabular-nums; }
+
+/* ---------- grafico ---------- */
+.sis-grafico { height: 280px; width: 100%; min-width: 0; }
+.sis-grafico.senza { height: auto; }
+.sis-dati-grafico { margin-top: 8px; font-size: 13px; }
+.sis-dati-grafico summary { cursor: pointer; color: var(--tenue); width: max-content; max-width: 100%; }
+.sis-dati-grafico[open] summary { margin-bottom: 8px; }
+
+/* ---------- copie ---------- */
+.sis-riassunto { margin-bottom: 10px; font-size: 13.5px; }
+.sis-tabella-copie td, .sis-tabella-copie th { white-space: nowrap; }
+.sis-tabella-copie .sis-quando { font-variant-numeric: tabular-nums; }
+.sis-tabella-copie .sis-cosa { font-weight: 600; margin-right: 6px; }
+.sis-tabella-copie .sis-tipo { color: var(--tenue); font-size: 12.5px; }
+.sis-tabella-copie tr.sis-nuova td { background: var(--ok-chiaro); transition: background 1.2s var(--curva, ease); }
+.sis-seconda-segno { color: var(--primario); font-size: 12px; }
+.sis-scheda-copie .tabella-contenitore { max-height: 430px; }
+.sis-altro { margin-top: 10px; }
+.sis-nota { margin-top: 12px; }
+.sis-rosso { color: var(--pericolo); font-weight: 600; }
+.sis-verde { color: var(--ok); font-weight: 700; }
+
+/* ---------- cronologia ---------- */
+.sis-cronologia { list-style: none; margin: 0; padding: 0; position: relative; }
+.sis-cronologia::before { content: ""; position: absolute; left: 6px; top: 6px; bottom: 6px; width: 2px; background: var(--linea); }
+.sis-cronologia li { position: relative; display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 12px; padding: 6px 0; }
+.sis-punto { width: 14px; height: 14px; margin-top: 3px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--superficie); position: relative; z-index: 1; }
+.sis-cronologia li.problema .sis-punto { background: var(--pericolo); }
+.sis-cronologia li.cura .sis-punto { background: var(--primario); }
+.sis-voce-titolo { font-weight: 600; font-size: 13.5px; }
+.sis-cronologia .piccolo { overflow-wrap: anywhere; }
+
+/* ---------- prova di ripristino ---------- */
+.sis-prova-testa { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-bottom: 8px; }
+.sis-tabella-prova { margin-top: 10px; }
+#sis-prova-esito > p + p { margin-top: 6px; }
+
+/* ---------- seconda cartella ---------- */
+.sis-seconda-modulo { display: grid; gap: 10px; margin-top: 12px; }
+.sis-seconda-modulo .campo input { width: 100%; }
+.sis-seconda-stato { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; overflow-wrap: anywhere; }
+.sis-percorso { overflow-wrap: anywhere; }
+#sis-seconda > p + p { margin-top: 8px; }
+
+/* ---------- come funziona ---------- */
+.sis-come { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 16px 22px; }
+.sis-come h3 { font-family: var(--carattere-titoli, inherit); font-size: 14px; margin-bottom: 4px; color: var(--primario); }
+.sis-come p { font-size: 13.5px; color: var(--testo); }
+
+/* ---------- telefono ---------- */
+@media (max-width: 760px) {
+  .sis-stato { grid-template-columns: auto minmax(0, 1fr); padding: 16px; }
+  .sis-azioni { grid-column: 1 / -1; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); }
+  .sis-stato-testo h2 { font-size: 19px; }
+  .sis-semaforo { gap: 5px; padding: 7px 6px; border-radius: 14px; }
+  .sis-luce { width: 16px; height: 16px; }
+  .sis-tabella-copie .sis-largo { display: none; }
+  .sis-tabella-copie th, .sis-tabella-copie td { padding: 7px 8px; }
+  .sis-tabella-copie .sis-cosa, .sis-tabella-copie .sis-tipo { display: block; margin: 0; }
+  .sis .scheda-testa .nota { flex-basis: 100%; }
+  .sis-grafico { height: 230px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sis-luce, .sis-semaforo .sis-luce { animation: none !important; transition: none; }
+  .sis-stato::before, .sis-tabella-copie tr.sis-nuova td { transition: none; }
+}
+
+@media print {
+  .sis-azioni, .sis-seconda-modulo, .sis-altro { display: none; }
+  .sis-luce { animation: none; }
+}

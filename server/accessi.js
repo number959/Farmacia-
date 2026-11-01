@@ -1,9 +1,14 @@
 /*
  * Utenti, password, sessioni, ruoli e registro attività.
+ * Versione 3.0 (parte C): verifica in due passaggi (2FA, codici TOTP come Google o Microsoft Authenticator),
+ * codici di recupero, computer attendibili e criterio dell'amministratore (docs/NOVITA-3.0.md, "2FA").
  */
 'use strict';
 
 var crypto = require('crypto');
+var fs = require('fs');
+var path = require('path');
+var Totp = require('../js/totp.js');
 
 // id invariati dalla 2.x, etichette della 3.0 (docs/NOVITA-3.0.md)
 var RUOLI = {
@@ -21,9 +26,21 @@ var INATTIVITA_MS = 8 * 60 * 60 * 1000;
 var DURATA_MAX_MS = 14 * 60 * 60 * 1000;
 var PASSWORD_MIN = 8;
 
-function errore(stato, messaggio) {
+/* ---------- verifica in due passaggi (2FA) ---------- */
+var SFIDA_MS = 5 * 60 * 1000;                     // tempo per scrivere il codice dopo la password giusta
+var DISPOSITIVO_MS = 30 * 24 * 60 * 60 * 1000;    // "Ricorda questo computer per 30 giorni"
+var ATTIVAZIONE_MS = 60 * 60 * 1000;              // chiave mostrata nel QR e non ancora confermata
+var CODICI_RECUPERO = 10;
+var MAX_DISPOSITIVI_COOKIE = 5;                   // più utenti sullo stesso computer
+var CRITERI_2FA = ['nessuno', 'amministratori', 'farmacisti', 'tutti'];
+var FILE_CHIAVE = 'chiave-2fa.key';               // nella cartella dati: cifra i segreti TOTP in accessi.db
+var ALFABETO_RECUPERO = '23456789abcdefghjkmnpqrstuvwxyz'; // niente 0/o, 1/l/i: si leggono senza dubbi
+
+/* Errore con stato HTTP; "dati" (facoltativo) si aggiunge alla risposta JSON accanto a "errore". */
+function errore(stato, messaggio, dati) {
   var e = new Error(messaggio);
   e.stato = stato;
+  if (dati) e.dati = dati;
   return e;
 }
 
@@ -104,15 +121,38 @@ function puoScrivereReparto(perm, repartoId) {
 
 /* ---------- conversione ---------- */
 
-function utenteDaRiga(r) {
+/* Il criterio dell'amministratore chiede la verifica in due passaggi a questo ruolo? */
+function obbligo2fa(ruolo, criterio) {
+  if (criterio === 'tutti') return true;
+  if (criterio === 'farmacisti') return ruolo === 'amministratore' || ruolo === 'farmacista';
+  if (criterio === 'amministratori') return ruolo === 'amministratore';
+  return false;
+}
+
+/*
+ * Utente come lo vede il client. Campi della 3.0: dueFattori (verifica in due passaggi attiva),
+ * dueFattoriObbligatoria (il criterio la chiede al suo ruolo), dueFattoriDaAttivare (obbligatoria e non ancora attiva:
+ * la sessione serve solo ad attivarla, come la password provvisoria serve solo a cambiarla).
+ */
+function utenteDaRiga(r, criterio) {
   if (!r) return null;
   var reparti = [];
   try { reparti = JSON.parse(r.reparti || '[]'); } catch (e) { reparti = []; }
+  var attiva = !!r.totp_attivo;
+  var obbligatoria = obbligo2fa(r.ruolo, criterio);
   return {
     id: r.id, username: r.username, nome: r.nome, ruolo: r.ruolo, reparti: reparti,
     attivo: !!r.attivo, cambioPassword: !!r.cambio_password, ultimoAccesso: r.ultimo_accesso || null,
-    bloccato: r.bloccato_fino > Date.now()
+    bloccato: r.bloccato_fino > Date.now(),
+    dueFattori: attiva, dueFattoriObbligatoria: obbligatoria, dueFattoriDaAttivare: obbligatoria && !attiva
   };
+}
+
+function listaJson(testo) {
+  try {
+    var l = JSON.parse(testo || '[]');
+    return Array.isArray(l) ? l.filter(function (x) { return typeof x === 'string'; }) : [];
+  } catch (e) { return []; }
 }
 
 function Accessi(database, log) {
@@ -122,20 +162,41 @@ function Accessi(database, log) {
   this.fallitiPerCoppia = {};  // 'utente|ip' -> [istanti degli errori]
   this.ipSegnalati = {};       // ip -> istante dell'ultimo evento "bloccato-ip" registrato
   this.erroriCambioPassword = {}; // hash della sessione -> numero di password attuali sbagliate
+  // verifica in due passaggi
+  this.sfide = {};             // hash della sfida -> { utenteId, ip, scade }: password giusta, manca il codice
+  this.attivazioni = {};       // id utente -> { segreto (byte), scade }: chiave mostrata nel QR, da confermare con un codice
+  this.ultimoErrore2fa = {};   // id utente -> istante dell'ultimo codice sbagliato (gli errori vecchi non contano)
+  this.chiave = null;          // chiave AES-256 dei segreti TOTP (file nella cartella dati)
+  this.criterioNoto = 'nessuno';
 }
 
 Accessi.prototype.db = function () { return this.database.accessi; };
+
+/* Orologio (le prove lo sostituiscono per simulare il passare del tempo). */
+Accessi.prototype.adesso = function () { return Date.now(); };
+
+/* Criterio dell'amministratore (impostazione richiedi2fa nel database del magazzino). */
+Accessi.prototype.criterio2fa = function () {
+  try {
+    // solo questa riga: le impostazioni intere contengono anche il logo, che può essere grande
+    var r = this.database.dati.prepare("SELECT valore FROM impostazioni WHERE chiave = 'richiedi2fa'").get();
+    var c = r ? JSON.parse(r.valore) : 'nessuno';
+    this.criterioNoto = CRITERI_2FA.indexOf(c) >= 0 ? c : 'nessuno';
+  } catch (e) { /* database del magazzino chiuso un attimo (ripristino di una copia): vale l'ultimo letto */ }
+  return this.criterioNoto;
+};
 
 Accessi.prototype.contaUtenti = function () {
   return this.db().prepare('SELECT COUNT(*) n FROM utenti').get().n;
 };
 
 Accessi.prototype.utente = function (id) {
-  return utenteDaRiga(this.db().prepare('SELECT * FROM utenti WHERE id = ?').get(id));
+  return utenteDaRiga(this.db().prepare('SELECT * FROM utenti WHERE id = ?').get(id), this.criterio2fa());
 };
 
 Accessi.prototype.elencoUtenti = function () {
-  return this.db().prepare('SELECT * FROM utenti ORDER BY nome COLLATE NOCASE').all().map(utenteDaRiga);
+  var criterio = this.criterio2fa();
+  return this.db().prepare('SELECT * FROM utenti ORDER BY nome COLLATE NOCASE').all().map(function (r) { return utenteDaRiga(r, criterio); });
 };
 
 /* ---------- registro attività ---------- */
@@ -238,9 +299,10 @@ Accessi.prototype.reimpostaPassword = function (ctx, id, nuova) {
   var pw = nuovaPassword(nuova);
   var self = this;
   this.database.transazioneAccessi(function () {
-    self.db().prepare('UPDATE utenti SET hash = ?, sale = ?, cambio_password = 1, tentativi = 0, bloccato_fino = 0 WHERE id = ?').run(pw.hash, pw.sale, id);
+    self.db().prepare('UPDATE utenti SET hash = ?, sale = ?, cambio_password = 1, tentativi = 0, tentativi_2fa = 0, bloccato_fino = 0 WHERE id = ?').run(pw.hash, pw.sale, id);
     self.db().prepare('DELETE FROM sessioni WHERE utente_id = ?').run(id);
   });
+  delete this.ultimoErrore2fa[id];
   this.sblocca(u.username);
   this.evento(ctx, 'utenti.nuova-password', { utente: u.username });
 };
@@ -306,10 +368,18 @@ Accessi.prototype.sblocca = function (username) {
   });
 };
 
-Accessi.prototype.login = function (ctx, username, password, agente) {
+/*
+ * Primo passo dell'accesso: nome utente e password.
+ * opz.dispositivi: token dei "computer attendibili" letti dal cookie del browser.
+ * Restituisce { token, tokenHash, utente } (sessione aperta) oppure, se l'utente ha la verifica in due passaggi
+ * attiva e questo computer non è attendibile, { dueFattori: true, sfida } SENZA sessione: si continua con
+ * loginDueFattori(sfida, codice).
+ */
+Accessi.prototype.login = function (ctx, username, password, agente, opz) {
+  opz = opz || {};
   username = String(username || '').trim().toLowerCase();
   password = String(password || '');
-  var adesso = Date.now();
+  var adesso = this.adesso();
   this.pulisciContatori(adesso);
   var valido = /^[a-z0-9._-]{3,40}$/.test(username) && password.length <= 200;
   var coppia = username.slice(0, 40) + '|' + ctx.ip;
@@ -353,18 +423,458 @@ Accessi.prototype.login = function (ctx, username, password, agente) {
     throw errore(403, 'Questo utente è disattivato. Rivolgiti all’amministratore.');
   }
   delete this.fallitiPerCoppia[coppia];
+
+  if (riga.totp_attivo) {
+    // computer attendibile (cookie "Ricorda questo computer"): il codice non serve
+    if (this.dispositivoAttendibile(riga.id, opz.dispositivi, adesso)) {
+      return this.apriSessione(ctx, riga, agente, { dueFattori: 'computer attendibile' });
+    }
+    if (!locale && riga.bloccato_fino > adesso) throw errore(429, messaggioBlocco2fa(riga.bloccato_fino, adesso));
+    return { dueFattori: true, sfida: this.nuovaSfida(riga.id, ctx.ip, adesso) };
+  }
+  return this.apriSessione(ctx, riga, agente, {});
+};
+
+/* Apre la sessione dell'utente (password giusta e, se serve, secondo fattore giusto). */
+Accessi.prototype.apriSessione = function (ctx, riga, agente, dettagli) {
+  var db = this.db();
+  var adesso = this.adesso();
   var token = crypto.randomBytes(32).toString('base64url');
   var th = hashToken(token);
   this.database.transazioneAccessi(function () {
     db.prepare('UPDATE utenti SET tentativi = 0, bloccato_fino = 0, ultimo_accesso = ? WHERE id = ?').run(new Date(adesso).toISOString(), riga.id);
     db.prepare('INSERT INTO sessioni (token_hash, utente_id, creata, ultimo_uso, ip, agente) VALUES (?, ?, ?, ?, ?, ?)')
       .run(th, riga.id, adesso, adesso, ctx.ip || '', String(agente || '').slice(0, 300));
-    // sessioni scadute di tutti: le tolgo qui, è un buon momento
+    // sessioni scadute di tutti: le tolgo qui, è un buon momento (e anche i computer attendibili scaduti)
     db.prepare('DELETE FROM sessioni WHERE ultimo_uso < ? OR creata < ?').run(adesso - INATTIVITA_MS, adesso - DURATA_MAX_MS);
+    db.prepare('DELETE FROM dispositivi WHERE scade < ?').run(adesso);
   });
   var utente = this.utente(riga.id);
-  this.evento({ utente: utente, ip: ctx.ip }, 'accesso.entrata', {});
+  this.evento({ utente: utente, ip: ctx.ip }, 'accesso.entrata', dettagli || {});
   return { token: token, tokenHash: th, utente: utente };
+};
+
+/* ---------- verifica in due passaggi: sfida, codici, computer attendibili ---------- */
+
+function messaggioBlocco2fa(fino, adesso) {
+  var minuti = Math.max(1, Math.ceil((fino - adesso) / 60000));
+  return 'Troppi codici sbagliati: la verifica in due passaggi di questo utente è bloccata per ' + minuti +
+    (minuti === 1 ? ' minuto' : ' minuti') + '. Riprova dopo, oppure chiedi aiuto all’amministratore.';
+}
+
+/* Sfida: prova che la password era giusta. Vale 5 minuti, dallo stesso computer, e si usa una volta sola. */
+Accessi.prototype.nuovaSfida = function (utenteId, ip, adesso) {
+  this.pulisciSfide(adesso);
+  var sfida = crypto.randomBytes(24).toString('base64url');
+  this.sfide[hashToken(sfida)] = { utenteId: utenteId, ip: ip || '', scade: adesso + SFIDA_MS, creata: adesso };
+  return sfida;
+};
+
+Accessi.prototype.pulisciSfide = function (adesso) {
+  var self = this;
+  var chiavi = Object.keys(this.sfide);
+  chiavi.forEach(function (k) { if (self.sfide[k].scade <= adesso) delete self.sfide[k]; });
+  // ogni sfida richiede la password giusta: tante insieme non ce ne sono, ma la memoria non deve crescere senza limiti
+  chiavi = Object.keys(this.sfide);
+  if (chiavi.length > 1000) {
+    chiavi.sort(function (a, b) { return self.sfide[a].creata - self.sfide[b].creata; })
+      .slice(0, chiavi.length - 1000).forEach(function (k) { delete self.sfide[k]; });
+  }
+  Object.keys(this.attivazioni).forEach(function (k) { if (self.attivazioni[k].scade <= adesso) delete self.attivazioni[k]; });
+};
+
+/* Token validi del cookie dei computer attendibili (al massimo 5, solo caratteri base64url). */
+function tokenDispositivi(lista) {
+  if (!Array.isArray(lista)) lista = String(lista || '').split('.');
+  return lista.map(String).filter(function (t) { return /^[A-Za-z0-9_-]{20,100}$/.test(t); }).slice(0, MAX_DISPOSITIVI_COOKIE);
+}
+
+/* Hash del token se uno dei token del browser è un computer attendibile (non scaduto) di questo utente. */
+Accessi.prototype.dispositivoAttendibile = function (utenteId, tokens, adesso) {
+  var st = this.db().prepare('SELECT token_hash FROM dispositivi WHERE token_hash = ? AND utente_id = ? AND scade > ?');
+  var lista = tokenDispositivi(tokens);
+  for (var i = 0; i < lista.length; i++) {
+    var th = hashToken(lista[i]);
+    if (st.get(th, utenteId, adesso)) return th;
+  }
+  return null;
+};
+
+/*
+ * Secondo passo dell'accesso: { sfida, codice | codiceRecupero, ricorda }.
+ * Restituisce { token, tokenHash, utente, dispositivo?, codiciRimasti? }.
+ * Errori: 401 sfida scaduta o già usata (si ricomincia dalla password), 400 codice sbagliato (si riprova con la
+ * stessa sfida), 429 troppi codici sbagliati (5: blocco di 15 minuti, tranne che dal server stesso).
+ */
+Accessi.prototype.loginDueFattori = function (ctx, dati, agente) {
+  dati = dati || {};
+  var adesso = this.adesso();
+  this.pulisciSfide(adesso);
+  var chiave = hashToken(String(dati.sfida || '').slice(0, 200));
+  var sfida = this.sfide[chiave];
+  var scaduta = errore(401, 'La verifica è scaduta: scrivi di nuovo nome utente e password.', { sfidaScaduta: true });
+  if (!sfida || sfida.ip !== (ctx.ip || '')) throw scaduta;
+  var db = this.db();
+  var riga = db.prepare('SELECT * FROM utenti WHERE id = ?').get(sfida.utenteId);
+  if (!riga || !riga.attivo || !riga.totp_attivo) { delete this.sfide[chiave]; throw scaduta; }
+  var locale = !!ctx.locale;
+  var conNome = { ip: ctx.ip, username: riga.username };
+  if (!locale && riga.bloccato_fino > adesso) {
+    delete this.sfide[chiave];
+    throw errore(429, messaggioBlocco2fa(riga.bloccato_fino, adesso));
+  }
+  var esito = this.controllaSecondoFattore(riga, dati.codiceRecupero ? { codiceRecupero: dati.codiceRecupero } : { codice: dati.codice }, adesso);
+  if (!esito.ok) {
+    if (esito.motivo === 'gia-usato') {
+      // lo stesso codice due volte (per esempio visto da qualcuno): non vale, ma non conta come tentativo
+      this.evento(conNome, 'accesso.2fa.codice-riusato', { utente: riga.username });
+      throw errore(400, 'Questo codice è già stato usato. Aspetta che l’app mostri il codice nuovo (cambia ogni 30 secondi) e scrivi quello.', { codiceUsato: true });
+    }
+    var n = 0;
+    if (!locale) {
+      var ultimo = this.ultimoErrore2fa[riga.id];
+      // gli errori di più di 15 minuti fa non contano più (un codice sbagliato ogni tanto non deve bloccare nessuno)
+      n = (ultimo && adesso - ultimo < BLOCCO_MS ? riga.tentativi_2fa : 0) + 1;
+      this.ultimoErrore2fa[riga.id] = adesso;
+      if (n >= TENTATIVI_MAX) {
+        db.prepare('UPDATE utenti SET tentativi_2fa = 0, bloccato_fino = ? WHERE id = ?').run(adesso + BLOCCO_MS, riga.id);
+        delete this.ultimoErrore2fa[riga.id];
+        delete this.sfide[chiave];
+        this.evento(conNome, 'accesso.2fa.bloccato', { utente: riga.username, tentativi: n });
+        throw errore(429, messaggioBlocco2fa(adesso + BLOCCO_MS, adesso));
+      }
+      db.prepare('UPDATE utenti SET tentativi_2fa = ? WHERE id = ?').run(n, riga.id);
+    }
+    this.evento(conNome, 'accesso.2fa.fallito', { utente: riga.username, tipo: esito.tipo, tentativo: n || undefined });
+    var rimasti = locale ? null : TENTATIVI_MAX - n;
+    throw errore(400, esito.tipo === 'recupero'
+      ? 'Questo codice di recupero non è giusto o è già stato usato.' + (rimasti !== null ? ' Tentativi rimasti: ' + rimasti + '.' : '')
+      : 'Il codice non è giusto. Controlla di leggere il codice di questo programma nell’app e che l’ora del telefono sia giusta.' +
+        (rimasti !== null ? ' Tentativi rimasti: ' + rimasti + '.' : ''), rimasti !== null ? { tentativiRimasti: rimasti } : null);
+  }
+  // giusto: la sfida non vale più, il passo usato nemmeno (niente codici ripetuti)
+  delete this.sfide[chiave];
+  delete this.ultimoErrore2fa[riga.id];
+  var dispositivo = null;
+  var self = this;
+  this.database.transazioneAccessi(function () {
+    if (esito.tipo === 'codice') db.prepare('UPDATE utenti SET totp_ultimo_passo = ?, tentativi_2fa = 0 WHERE id = ?').run(esito.passo, riga.id);
+    else db.prepare('UPDATE utenti SET codici_recupero = ?, tentativi_2fa = 0 WHERE id = ?').run(JSON.stringify(esito.codici), riga.id);
+    if (dati.ricorda) {
+      dispositivo = crypto.randomBytes(32).toString('base64url');
+      db.prepare('INSERT INTO dispositivi (token_hash, utente_id, creato, scade, ip, agente) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(hashToken(dispositivo), riga.id, adesso, adesso + DISPOSITIVO_MS, ctx.ip || '', String(agente || '').slice(0, 300));
+    }
+  });
+  if (esito.tipo === 'recupero') this.evento(conNome, 'accesso.2fa.recupero', { utente: riga.username, codiciRimasti: esito.codici.length });
+  if (dispositivo) self.evento(conNome, 'accesso.2fa.ricorda-computer', { utente: riga.username, giorni: DISPOSITIVO_MS / 86400000 });
+  var s = this.apriSessione(ctx, riga, agente, { dueFattori: esito.tipo === 'codice' ? 'codice' : 'codice di recupero' });
+  s.dispositivo = dispositivo;
+  if (esito.tipo === 'recupero') s.codiciRimasti = esito.codici.length;
+  return s;
+};
+
+/*
+ * Controlla il secondo fattore di un utente con la 2FA attiva.
+ * dati: { codice } (6 cifre dell'app; un testo con lettere si prova come codice di recupero) oppure { codiceRecupero }.
+ * → { ok: true, tipo: 'codice', passo } | { ok: true, tipo: 'recupero', codici: [hash rimasti] }
+ *   | { ok: false, tipo, motivo: 'sbagliato' | 'gia-usato' }
+ */
+Accessi.prototype.controllaSecondoFattore = function (riga, dati, adesso) {
+  var codice = String(dati.codice === undefined || dati.codice === null ? '' : dati.codice).slice(0, 100);
+  var recupero = dati.codiceRecupero !== undefined && dati.codiceRecupero !== null && dati.codiceRecupero !== ''
+    ? String(dati.codiceRecupero).slice(0, 100)
+    : (/[a-z]/i.test(codice) ? codice : null);
+  if (recupero !== null) {
+    var codici = listaJson(riga.codici_recupero);
+    var i = codici.indexOf(hashRecupero(riga.id, recupero));
+    if (i < 0) return { ok: false, tipo: 'recupero', motivo: 'sbagliato' };
+    codici.splice(i, 1);
+    return { ok: true, tipo: 'recupero', codici: codici };
+  }
+  var segreto = this.decifraSegreto(riga);
+  var passo = Totp.verifica(segreto, codice, adesso, { finestra: 1, ultimoPasso: riga.totp_ultimo_passo || 0 });
+  if (passo >= 0) return { ok: true, tipo: 'codice', passo: passo };
+  if (Totp.verifica(segreto, codice, adesso, { finestra: 1 }) >= 0) return { ok: false, tipo: 'codice', motivo: 'gia-usato' };
+  return { ok: false, tipo: 'codice', motivo: 'sbagliato' };
+};
+
+/* ---------- segreti cifrati (AES-256-GCM, chiave in un file della cartella dati) ---------- */
+
+/*
+ * La chiave sta in <dati>/chiave-2fa.key (32 byte casuali in base64), creata al primo uso e leggibile solo dal
+ * servizio. Senza questo file i segreti in accessi.db non servono a niente: chi copia solo accessi.db non può
+ * calcolare i codici. Un file presente ma rovinato NON si sostituisce (i segreti diventerebbero illeggibili per sempre).
+ */
+Accessi.prototype.chiaveSegreti = function () {
+  if (this.chiave) return this.chiave;
+  var file = path.join(this.database.cartella, FILE_CHIAVE);
+  var testo = null;
+  try { testo = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  if (testo === null) {
+    var nuova = crypto.randomBytes(32);
+    try {
+      fs.writeFileSync(file, nuova.toString('base64') + '\n', { mode: 384 /* 0600 */, flag: 'wx' });
+      this.log('Creata la chiave della verifica in due passaggi: ' + file);
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+    }
+    testo = fs.readFileSync(file, 'utf8'); // anche se un altro processo l'ha creata un attimo prima
+  }
+  var chiave = Buffer.from(String(testo).trim(), 'base64');
+  if (chiave.length !== 32) {
+    this.log('File ' + file + ' non valido: la verifica in due passaggi non si può controllare.');
+    throw errore(500, 'Il file della chiave della verifica in due passaggi (' + FILE_CHIAVE + ' nella cartella dati) è rovinato. Rimettilo da una copia di sicurezza della cartella dati.');
+  }
+  this.chiave = chiave;
+  return chiave;
+};
+
+function cifra(chiave, utenteId, segreto) {
+  var iv = crypto.randomBytes(12);
+  var c = crypto.createCipheriv('aes-256-gcm', chiave, iv);
+  c.setAAD(Buffer.from('totp:' + utenteId)); // il segreto cifrato vale solo per il suo utente
+  var dati = Buffer.concat([c.update(Buffer.from(segreto)), c.final()]);
+  return 'v1.' + iv.toString('base64url') + '.' + c.getAuthTag().toString('base64url') + '.' + dati.toString('base64url');
+}
+
+Accessi.prototype.cifraSegreto = function (utenteId, segreto) {
+  return cifra(this.chiaveSegreti(), utenteId, segreto);
+};
+
+Accessi.prototype.decifraSegreto = function (riga) {
+  var parti = String(riga.totp_segreto || '').split('.');
+  try {
+    if (parti.length !== 4 || parti[0] !== 'v1') throw new Error('formato');
+    var d = crypto.createDecipheriv('aes-256-gcm', this.chiaveSegreti(), Buffer.from(parti[1], 'base64url'));
+    d.setAAD(Buffer.from('totp:' + riga.id));
+    d.setAuthTag(Buffer.from(parti[2], 'base64url'));
+    return Buffer.concat([d.update(Buffer.from(parti[3], 'base64url')), d.final()]);
+  } catch (e) {
+    if (e.stato) throw e;
+    this.log('Segreto TOTP di ' + riga.username + ' non leggibile: ' + e.message);
+    throw errore(409, 'La verifica in due passaggi di questo utente non si può controllare: la chiave del server è cambiata (cartella dati copiata senza il file ' +
+      FILE_CHIAVE + '?). Chiedi all’amministratore di azzerarla, poi attivala di nuovo.');
+  }
+};
+
+/* ---------- codici di recupero ---------- */
+
+function nuovoCodiceRecupero() {
+  var s = '';
+  for (var i = 0; i < 10; i++) s += ALFABETO_RECUPERO.charAt(crypto.randomInt(ALFABETO_RECUPERO.length));
+  return s.slice(0, 5) + '-' + s.slice(5);
+}
+
+/* Codice scritto dall'utente → hash salvato (maiuscole, spazi e trattini non contano). */
+function hashRecupero(utenteId, codice) {
+  var pulito = String(codice || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return crypto.createHash('sha256').update('recupero:' + utenteId + ':' + pulito).digest('hex');
+}
+
+function nuoviCodiciRecupero(utenteId) {
+  var chiari = [];
+  while (chiari.length < CODICI_RECUPERO) {
+    var c = nuovoCodiceRecupero();
+    if (chiari.indexOf(c) < 0) chiari.push(c);
+  }
+  return { chiari: chiari, hash: chiari.map(function (c) { return hashRecupero(utenteId, c); }) };
+}
+
+/* ---------- verifica in due passaggi: gestione dal proprio account ---------- */
+
+Accessi.prototype.riga = function (id) {
+  var r = this.db().prepare('SELECT * FROM utenti WHERE id = ?').get(id);
+  if (!r) throw errore(404, 'Utente non trovato.');
+  return r;
+};
+
+function contaDispositivi(db, utenteId, adesso) {
+  return db.prepare('SELECT COUNT(*) n FROM dispositivi WHERE utente_id = ? AND scade > ?').get(utenteId, adesso).n;
+}
+
+/* Stato della 2FA dell'utente collegato (GET /api/2fa). */
+Accessi.prototype.stato2fa = function (utenteId) {
+  var r = this.riga(utenteId);
+  var adesso = this.adesso();
+  var u = utenteDaRiga(r, this.criterio2fa());
+  return {
+    attiva: u.dueFattori,
+    attivataIl: r.totp_attivato_il || null,
+    obbligatoria: u.dueFattoriObbligatoria,
+    daAttivare: u.dueFattoriDaAttivare,
+    criterio: this.criterio2fa(),
+    codiciRimasti: u.dueFattori ? listaJson(r.codici_recupero).length : 0,
+    dispositivi: contaDispositivi(this.db(), utenteId, adesso),
+    giorniDispositivo: DISPOSITIVO_MS / 86400000,
+    oraServer: new Date(adesso).toISOString()
+  };
+};
+
+/*
+ * Primo passo dell'attivazione (o del cambio di telefono): una chiave nuova da inquadrare con l'app.
+ * Finché non si conferma con un codice resta solo in memoria (un'ora); la 2FA già attiva continua a valere.
+ */
+Accessi.prototype.inizia2fa = function (ctx, emittente) {
+  var r = this.riga(ctx.utente.id);
+  var adesso = this.adesso();
+  this.pulisciSfide(adesso);
+  var segreto = crypto.randomBytes(20);
+  this.attivazioni[r.id] = { segreto: segreto, scade: adesso + ATTIVAZIONE_MS };
+  var base32 = Totp.base32Codifica(segreto);
+  return {
+    segretoBase32: base32,
+    chiave: Totp.formattaChiave(base32),
+    uri: Totp.uriOtpauth({ emittente: emittente, utente: r.username, segretoBase32: base32 }),
+    emittente: emittente,
+    utente: r.username,
+    cambio: !!r.totp_attivo,
+    oraServer: new Date(adesso).toISOString()
+  };
+};
+
+/*
+ * Conferma dell'attivazione con il primo codice dell'app: da qui la 2FA vale.
+ * Restituisce i 10 codici di recupero in chiaro (si vedono solo adesso). Le altre sessioni dell'utente si chiudono.
+ */
+Accessi.prototype.conferma2fa = function (ctx, codice) {
+  var r = this.riga(ctx.utente.id);
+  var adesso = this.adesso();
+  this.pulisciSfide(adesso);
+  var att = this.attivazioni[r.id];
+  if (!att) throw errore(409, 'La chiave mostrata non vale più (è passata più di un’ora o il server è stato riavviato). Ricomincia: il programma ne mostrerà una nuova.', { ricomincia: true });
+  var passo = Totp.verifica(att.segreto, codice, adesso, { finestra: 1 });
+  if (passo < 0) {
+    throw errore(400, /^\s*\d{3}\s*-?\s*\d{3}\s*$/.test(String(codice || ''))
+      ? 'Il codice non è giusto. Controlla di aver inquadrato il codice QR qui sopra (o scritto bene la chiave) e che l’ora del telefono sia impostata in automatico.'
+      : 'Scrivi le 6 cifre che mostra l’app.');
+  }
+  var segretoCifrato = this.cifraSegreto(r.id, att.segreto);
+  var codici = nuoviCodiciRecupero(r.id);
+  var db = this.db();
+  var giaAttiva = !!r.totp_attivo;
+  this.database.transazioneAccessi(function () {
+    db.prepare('UPDATE utenti SET totp_segreto = ?, totp_attivo = 1, totp_attivato_il = ?, totp_ultimo_passo = ?, codici_recupero = ?, tentativi_2fa = 0 WHERE id = ?')
+      .run(segretoCifrato, new Date(adesso).toISOString(), passo, JSON.stringify(codici.hash), r.id);
+    // le altre sessioni sono state aperte senza il secondo fattore: si chiudono
+    db.prepare('DELETE FROM sessioni WHERE utente_id = ? AND token_hash != ?').run(r.id, ctx.tokenHash || '');
+  });
+  delete this.attivazioni[r.id];
+  this.evento(ctx, giaAttiva ? 'accesso.2fa.riconfigurata' : 'accesso.2fa.attivata', { codiciRecupero: CODICI_RECUPERO });
+  return { codiciRecupero: codici.chiari, utente: this.utente(r.id) };
+};
+
+/*
+ * Password attuale giusta? Con una sessione rubata non si deve poter indovinare la password (o il codice) all'infinito:
+ * 5 errori chiudono la sessione, come nel cambio password.
+ */
+Accessi.prototype.controllaPasswordSessione = function (ctx, password, azione) {
+  var riga = this.riga(ctx.utente.id);
+  if (passwordGiusta(String(password || '').slice(0, 200), riga)) return riga;
+  this.erroreSessione(ctx, azione, 'La password non è giusta.');
+};
+
+Accessi.prototype.erroreSessione = function (ctx, azione, messaggio) {
+  var n = (this.erroriCambioPassword[ctx.tokenHash] || 0) + 1;
+  this.erroriCambioPassword[ctx.tokenHash] = n;
+  this.evento(ctx, azione + '-fallito', { tentativo: n });
+  if (n >= TENTATIVI_MAX) {
+    delete this.erroriCambioPassword[ctx.tokenHash];
+    this.db().prepare('DELETE FROM sessioni WHERE token_hash = ?').run(ctx.tokenHash || '');
+    throw errore(401, 'Troppi errori: per sicurezza la sessione è stata chiusa. Accedi di nuovo.');
+  }
+  throw errore(400, messaggio);
+};
+
+/* Disattiva la propria 2FA: servono password e codice (dell'app o di recupero). Non se il criterio la richiede. */
+Accessi.prototype.disattiva2fa = function (ctx, password, codice) {
+  var r = this.riga(ctx.utente.id);
+  if (!r.totp_attivo) throw errore(409, 'La verifica in due passaggi non è attiva.');
+  if (obbligo2fa(r.ruolo, this.criterio2fa())) {
+    throw errore(409, 'L’amministratore richiede la verifica in due passaggi per il tuo ruolo: non si può disattivare. Se hai cambiato telefono usa «Cambia telefono».');
+  }
+  this.controllaPasswordSessione(ctx, password, 'accesso.2fa.disattiva');
+  var esito = this.controllaSecondoFattore(r, { codice: codice }, this.adesso());
+  if (!esito.ok) this.erroreSessione(ctx, 'accesso.2fa.disattiva', esito.motivo === 'gia-usato' ? 'Questo codice è già stato usato: aspetta il codice nuovo nell’app.' : 'Il codice non è giusto.');
+  delete this.erroriCambioPassword[ctx.tokenHash];
+  this.azzera(r.id);
+  this.evento(ctx, 'accesso.2fa.disattivata', {});
+  return { utente: this.utente(r.id) };
+};
+
+/* Toglie segreto, codici di recupero e computer attendibili. */
+Accessi.prototype.azzera = function (utenteId) {
+  var db = this.db();
+  var tolti = 0;
+  this.database.transazioneAccessi(function () {
+    db.prepare("UPDATE utenti SET totp_segreto = '', totp_attivo = 0, totp_attivato_il = NULL, totp_ultimo_passo = 0, codici_recupero = '[]', tentativi_2fa = 0, bloccato_fino = 0 WHERE id = ?").run(utenteId);
+    tolti = Number(db.prepare('DELETE FROM dispositivi WHERE utente_id = ?').run(utenteId).changes) || 0;
+  });
+  delete this.attivazioni[utenteId];
+  delete this.ultimoErrore2fa[utenteId];
+  var self = this;
+  Object.keys(this.sfide).forEach(function (k) { if (self.sfide[k].utenteId === utenteId) delete self.sfide[k]; });
+  return tolti;
+};
+
+/* Nuovi codici di recupero (quelli vecchi non valgono più): serve la password. */
+Accessi.prototype.nuoviCodici2fa = function (ctx, password) {
+  var r = this.riga(ctx.utente.id);
+  if (!r.totp_attivo) throw errore(409, 'Prima attiva la verifica in due passaggi.');
+  this.controllaPasswordSessione(ctx, password, 'accesso.2fa.nuovi-codici');
+  delete this.erroriCambioPassword[ctx.tokenHash];
+  var codici = nuoviCodiciRecupero(r.id);
+  this.db().prepare('UPDATE utenti SET codici_recupero = ? WHERE id = ?').run(JSON.stringify(codici.hash), r.id);
+  this.evento(ctx, 'accesso.2fa.nuovi-codici', { codiciRecupero: CODICI_RECUPERO });
+  return { codiciRecupero: codici.chiari };
+};
+
+/* Dimentica tutti i computer attendibili dell'utente collegato. */
+Accessi.prototype.dimenticaDispositivi = function (ctx) {
+  var n = Number(this.db().prepare('DELETE FROM dispositivi WHERE utente_id = ?').run(ctx.utente.id).changes) || 0;
+  this.evento(ctx, 'accesso.2fa.dimentica-computer', { computer: n });
+  return { ok: true, tolti: n };
+};
+
+/* ---------- verifica in due passaggi: amministratore ---------- */
+
+/* Utenti con lo stato della 2FA (GET /api/sicurezza). */
+Accessi.prototype.statoSicurezza = function () {
+  var criterio = this.criterio2fa();
+  var adesso = this.adesso();
+  var db = this.db();
+  var disp = {};
+  db.prepare('SELECT utente_id, COUNT(*) n FROM dispositivi WHERE scade > ? GROUP BY utente_id').all(adesso).forEach(function (x) { disp[x.utente_id] = x.n; });
+  var utenti = db.prepare('SELECT * FROM utenti ORDER BY nome COLLATE NOCASE').all().map(function (r) {
+    var u = utenteDaRiga(r, criterio);
+    return {
+      id: u.id, username: u.username, nome: u.nome, ruolo: u.ruolo, attivo: u.attivo,
+      dueFattori: u.dueFattori, attivataIl: r.totp_attivato_il || null,
+      obbligatoria: u.dueFattoriObbligatoria, daAttivare: u.dueFattoriDaAttivare,
+      codiciRimasti: u.dueFattori ? listaJson(r.codici_recupero).length : 0,
+      dispositivi: disp[u.id] || 0,
+      ultimoAccesso: u.ultimoAccesso, bloccato: u.bloccato
+    };
+  });
+  return { richiedi2fa: criterio, criteri: CRITERI_2FA.slice(), utenti: utenti, oraServer: new Date(adesso).toISOString() };
+};
+
+/* Utenti attivi che con questo criterio dovrebbero attivare la 2FA e non l'hanno ancora fatto. */
+Accessi.prototype.utentiDaAttivare = function (criterio) {
+  return this.db().prepare('SELECT * FROM utenti WHERE attivo = 1 AND totp_attivo = 0').all()
+    .filter(function (r) { return obbligo2fa(r.ruolo, criterio); })
+    .map(function (r) { return r.id; });
+};
+
+/* L'amministratore azzera la 2FA di un utente (telefono perso): al prossimo accesso basta la password. */
+Accessi.prototype.azzera2fa = function (ctx, utenteId) {
+  var r = this.riga(utenteId);
+  var aveva = !!r.totp_attivo;
+  var computer = this.azzera(r.id);
+  // le sessioni aperte dell'utente si chiudono (tranne quella di chi sta azzerando, se è la sua)
+  this.db().prepare('DELETE FROM sessioni WHERE utente_id = ? AND token_hash != ?').run(r.id, ctx.tokenHash || '');
+  this.evento(ctx, 'accesso.2fa.azzerata', { utente: r.username, eraAttiva: aveva, computer: computer });
+  return { utente: this.utente(r.id) };
 };
 
 /* Accesso d'emergenza da riga di comando sul server: nuova password provvisoria per un utente. */
@@ -378,7 +888,11 @@ Accessi.prototype.passwordEmergenza = function (username) {
     self.db().prepare('UPDATE utenti SET hash = ?, sale = ?, cambio_password = 1, attivo = 1, tentativi = 0, bloccato_fino = 0 WHERE id = ?').run(pw.hash, pw.sale, riga.id);
     self.db().prepare('DELETE FROM sessioni WHERE utente_id = ?').run(riga.id);
   });
-  this.evento({ ip: 'riga di comando sul server', username: riga.username }, 'utenti.password-emergenza', { utente: riga.username });
+  // chi usa l'accesso d'emergenza spesso ha perso anche il telefono: la verifica in due passaggi si azzera
+  // (se il criterio la richiede, al prossimo accesso il programma guida a riattivarla)
+  var aveva2fa = !!riga.totp_attivo;
+  this.azzera(riga.id);
+  this.evento({ ip: 'riga di comando sul server', username: riga.username }, 'utenti.password-emergenza', { utente: riga.username, dueFattoriAzzerata: aveva2fa });
   return provvisoria;
 };
 
@@ -393,7 +907,7 @@ Accessi.prototype.sessione = function (token, automatica) {
   var db = this.db();
   var s = db.prepare('SELECT * FROM sessioni WHERE token_hash = ?').get(th);
   if (!s) return null;
-  var adesso = Date.now();
+  var adesso = this.adesso();
   if (adesso - s.ultimo_uso > INATTIVITA_MS || adesso - s.creata > DURATA_MAX_MS) {
     db.prepare('DELETE FROM sessioni WHERE token_hash = ?').run(th);
     return null;
@@ -419,6 +933,12 @@ module.exports = {
   puoScrivereReparto: puoScrivereReparto,
   errore: errore,
   nuovoId: nuovoId,
+  obbligo2fa: obbligo2fa,
+  tokenDispositivi: tokenDispositivi,
+  CRITERI_2FA: CRITERI_2FA,
   INATTIVITA_MS: INATTIVITA_MS,
-  DURATA_MAX_MS: DURATA_MAX_MS
+  DURATA_MAX_MS: DURATA_MAX_MS,
+  SFIDA_MS: SFIDA_MS,
+  DISPOSITIVO_MS: DISPOSITIVO_MS,
+  MAX_DISPOSITIVI_COOKIE: MAX_DISPOSITIVI_COOKIE
 };

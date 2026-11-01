@@ -4,7 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>NefroCenter Pharmacy</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e5a6e'/%3E%3Cpath d='M13 7h6v6h6v6h-6v6h-6v-6H7v-6h6z' fill='%23fff'/%3E%3C/svg%3E">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#14294F">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='16' fill='%231C4184'/%3E%3Cpath d='M13 7h6v6h6v6h-6v6h-6v-6H7v-6h6z' fill='%23fff'/%3E%3Ccircle cx='25' cy='7' r='4' fill='%23E10717'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="css/caratteri.css">
   <link rel="stylesheet" href="css/app.css">
   <link rel="stylesheet" href="css/scanner.css">
@@ -44,8 +46,18 @@
           <button class="guidami" id="guidami" type="button" title="Guida sullo schermo: ti mostro passo per passo cosa fare in questa pagina">🧭 <span>Guidami</span></button>
           <div class="utente-menu" id="utente-menu">
             <button class="utente-btn" id="utente-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="utente-tendina"></button>
-            <div class="utente-tendina" id="utente-tendina" role="menu" hidden>
+            <div class="utente-tendina" id="utente-tendina" role="menu" aria-label="Menu dell’utente" hidden>
+              <div class="utente-chi" id="utente-chi" role="presentation"></div>
               <button type="button" role="menuitem" id="utente-password">🔑 Cambia password</button>
+              <button type="button" role="menuitem" id="utente-sicurezza" hidden>🔐 Sicurezza dell’account</button>
+              <div class="utente-separatore" role="separator"></div>
+              <div class="utente-tema-titolo" role="presentation">Tema dello schermo</div>
+              <div class="utente-tema" role="group" aria-label="Tema dello schermo">
+                <button type="button" role="menuitemradio" aria-checked="false" data-scegli-tema="chiaro" title="Sfondo chiaro"><span aria-hidden="true">☀️</span>Chiaro</button>
+                <button type="button" role="menuitemradio" aria-checked="false" data-scegli-tema="scuro" title="Sfondo scuro, per gli ambienti poco illuminati"><span aria-hidden="true">🌙</span>Scuro</button>
+                <button type="button" role="menuitemradio" aria-checked="false" data-scegli-tema="automatico" title="Come le impostazioni del computer"><span aria-hidden="true">🖥️</span>Automatico</button>
+              </div>
+              <div class="utente-separatore" role="separator"></div>
               <button type="button" role="menuitem" id="utente-esci">🚪 Esci</button>
             </div>
           </div>

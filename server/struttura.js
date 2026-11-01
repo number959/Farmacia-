@@ -4,7 +4,11 @@
  *
  *   POST   /api/magazzini        { nome, tipo: 'centrale'|'periferico', piano, livello, colore, descrizione, attivo, ordine }
  *   PUT    /api/magazzini/:id    stessi campi (quelli che mancano restano come sono)       → { rev, magazzino }
- *   DELETE /api/magazzini/:id    solo se mai usato (movimenti, richieste, DDT)             → { rev }
+ *                                un solo centrale: scegliendone un altro, quello di prima diventa periferico;
+ *                                non si disattiva con DDT da spedire o in viaggio o richieste aperte (409)
+ *   DELETE /api/magazzini/:id    solo se mai usato (movimenti, richieste, DDT; altrimenti 409: si disattiva);
+ *                                armadi e assortimento (solo configurazione) si cancellano con lui → { rev }
+ *   "In transito" (r-transito) non si modifica né si elimina (400); niente armadi né assortimento.
  *   POST   /api/armadi           { repartoId, nome, tipo, ripiani 1–12, colonne 1–20, ordine, colore, note, attivo }
  *   PUT    /api/armadi/:id       stessi campi (quelli che mancano restano come sono)       → { rev, armadio, liberati }
  *   DELETE /api/armadi/:id       le caselle tornano libere                                 → { rev, liberati }
@@ -202,6 +206,7 @@ Struttura.prototype.modificaMagazzino = function (ctx, id, dati) {
   if (eraCentrale && v.tipo !== 'centrale') {
     throw errore(400, 'Ci vuole sempre una farmacia centrale: per cambiarla, apri il magazzino che deve diventarlo e scegli «Farmacia centrale».');
   }
+  if (prima.attivo && !v.attivo) this.controllaDisattivazione(prima);
   var exCentrale = v.tipo === 'centrale' && !eraCentrale ? this.centrale() : null;
   var self = this;
   var r = this.database.scrivi(function (rev) {
@@ -217,6 +222,21 @@ Struttura.prototype.modificaMagazzino = function (ctx, id, dati) {
   if (exCentrale) det.exCentrale = exCentrale.nome;
   this.fine(ctx, 'magazzini.modifica', det, r);
   return { rev: r.rev, magazzino: this.database.reparto(prima.id) };
+};
+
+/*
+ * Un magazzino si disattiva solo quando non ha merce in viaggio né lavoro in corso con la farmacia:
+ * disattivato non compare più negli elenchi e un DDT diretto lì non si potrebbe spedire né ricevere.
+ */
+Struttura.prototype.controllaDisattivazione = function (rep) {
+  var db = this.db();
+  var ddt = db.prepare("SELECT COUNT(*) n FROM ddt WHERE (origine_id = ? OR destinazione_id = ?) AND stato IN ('in_preparazione', 'in_transito')").get(rep.id, rep.id).n;
+  var richieste = db.prepare("SELECT COUNT(*) n FROM richieste WHERE (reparto_id = ? OR fornitore_id = ?) AND stato IN ('inviata', 'in_lavorazione')").get(rep.id, rep.id).n;
+  if (!ddt && !richieste) return;
+  var cosa = [];
+  if (ddt) cosa.push(ddt === 1 ? '1 DDT da spedire o in viaggio' : ddt + ' DDT da spedire o in viaggio');
+  if (richieste) cosa.push(richieste === 1 ? '1 richiesta aperta' : richieste + ' richieste aperte');
+  throw errore(409, '«' + rep.nome + '» ha ancora ' + cosa.join(' e ') + ': prima ricevi o annulla i DDT e chiudi le richieste, poi disattiva il magazzino.');
 };
 
 Struttura.prototype.eliminaMagazzino = function (ctx, id) {
@@ -380,6 +400,12 @@ Struttura.prototype.nomiArticoli = function () {
   return nomi;
 };
 
+Struttura.prototype.articoliNonAttivi = function () {
+  var spenti = {};
+  this.db().prepare('SELECT id FROM articoli WHERE attivo = 0').all().forEach(function (a) { spenti[a.id] = true; });
+  return spenti;
+};
+
 Struttura.prototype.righeAssortimento = function (repartoId) {
   var mappa = {};
   this.db().prepare('SELECT * FROM assortimento WHERE reparto_id = ?').all(repartoId).forEach(function (r) { mappa[r.articolo_id] = r; });
@@ -391,6 +417,7 @@ Struttura.prototype.salvaAssortimento = function (ctx, dati) {
   var rep = this.magazzinoScrivibile(ctx, dati && dati.repartoId, 'l’assortimento');
   var righe = this.righeRichiesta(dati);
   var nomi = this.nomiArticoli();
+  var spenti = this.articoliNonAttivi();
   var esistenti = this.righeAssortimento(rep.id);
   var nuove = [];
   var modifiche = [];
@@ -408,6 +435,10 @@ Struttura.prototype.salvaAssortimento = function (ctx, dati) {
       attivo: siNo(x.attivo, e ? !!e.attivo : true)
     };
     controllaSoglie(nome, v.scortaMin, v.puntoRiordino, v.scortaMax);
+    // un articolo non attivo (non più in uso) resta dove già c'è ma non entra in un assortimento
+    if (spenti[artId] && v.attivo && (!e || !e.attivo)) {
+      throw errore(400, nome + ' non è attivo: riattivalo dalla pagina Articoli prima di metterlo nell’assortimento.');
+    }
     if (!e) {
       // un articolo che si toglie e non c'era: niente da fare
       if (v.attivo) nuove.push(v);
@@ -450,6 +481,7 @@ Struttura.prototype.salvaUbicazioni = function (ctx, dati) {
   var rep = this.magazzinoScrivibile(ctx, dati && dati.repartoId, 'la posizione degli articoli negli armadi');
   var righe = this.righeRichiesta(dati);
   var nomi = this.nomiArticoli();
+  var spenti = this.articoliNonAttivi();
   var esistenti = this.righeAssortimento(rep.id);
   var armadi = {};
   this.db().prepare('SELECT * FROM armadi WHERE reparto_id = ?').all(rep.id).forEach(function (a) { armadi[a.id] = D.armadioDaRiga(a); });
@@ -468,6 +500,10 @@ Struttura.prototype.salvaUbicazioni = function (ctx, dati) {
       var arm = armadi[String(x.armadioId)];
       if (!arm) throw errore(400, 'Armadio non trovato in ' + rep.nome + ': aggiorna la pagina.');
       if (!arm.attivo) throw errore(400, 'L’armadio «' + arm.nome + '» non è attivo.');
+      var e = esistenti[artId];
+      if (spenti[artId] && (!e || !e.attivo)) {
+        throw errore(400, nomi[artId] + ' non è attivo: riattivalo dalla pagina Articoli prima di metterlo in un armadio.');
+      }
       dove = {
         armadioId: arm.id,
         ripiano: intero(x.ripiano, 'ripiano', 1, arm.ripiani),

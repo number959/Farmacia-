@@ -10,6 +10,9 @@ var A = require('./accessi.js');
 var errore = A.errore;
 
 var COOKIE = 'gf_sessione';
+// "Ricorda questo computer per 30 giorni" (verifica in due passaggi): token dei computer attendibili, separati da punti.
+// Il browser lo manda solo alle pagine di accesso (Path=/api/login), non a tutte le richieste.
+var COOKIE_DISPOSITIVO = 'gf_dispositivo';
 var LIMITE_CORPO = 2 * 1024 * 1024;
 var LIMITE_PUBBLICO = 16 * 1024; // accesso, primo amministratore, uscita: non servono corpi grandi
 var LIMITE_ARCHIVIO = 50 * 1024 * 1024;
@@ -177,6 +180,18 @@ Server.prototype.cookieSessione = function (token, durataS) {
   return COOKIE + '=' + encodeURIComponent(token) + '; HttpOnly; SameSite=Strict; Path=/; Max-Age=' + durataS + (this.https ? '; Secure' : '');
 };
 
+/* Cookie dei computer attendibili: elenco di token (il più recente per primo), oppure vuoto per toglierlo. */
+Server.prototype.cookieDispositivo = function (tokens) {
+  var valore = (tokens || []).join('.');
+  return COOKIE_DISPOSITIVO + '=' + valore + '; HttpOnly; SameSite=Strict; Path=/api/login; Max-Age=' +
+    (valore ? Math.round(A.DISPOSITIVO_MS / 1000) : 0) + (this.https ? '; Secure' : '');
+};
+
+/* Token dei computer attendibili mandati dal browser. */
+Server.prototype.dispositiviDelBrowser = function (req) {
+  return A.tokenDispositivi(leggiCookie(req)[COOKIE_DISPOSITIVO]);
+};
+
 Server.prototype.statoPubblico = function (ctx) {
   var imp = this.database.impostazioni();
   return {
@@ -201,7 +216,8 @@ Server.prototype.definisciRotte = function () {
   var op = this.operazioni;
   var db = this.database;
   var PUBBLICA = { pubblica: true, limite: LIMITE_PUBBLICO };
-  var LIBERA = { anchePasswordDaCambiare: true, limite: LIMITE_PUBBLICO };
+  // anche con la password provvisoria da cambiare o la verifica in due passaggi da attivare
+  var LIBERA = { anchePasswordDaCambiare: true, anche2faDaAttivare: true, limite: LIMITE_PUBBLICO };
 
   this.rotta('GET', '/api/stato', PUBBLICA, function (ctx) { return self.statoPubblico(ctx); });
 
@@ -212,15 +228,41 @@ Server.prototype.definisciRotte = function () {
     var reparti = db.reparti();
     var u = acc.creaUtente(ctx, { username: c.username, nome: c.nome, ruolo: 'amministratore', password: c.password }, reparti, true);
     var s = acc.login(ctx, u.username, c.password, ctx.req.headers['user-agent']);
+    if (!s.token) throw errore(409, 'Amministratore creato: accedi con nome utente e password.');
     ctx.res.setHeader('Set-Cookie', self.cookieSessione(s.token, A.DURATA_MAX_MS / 1000));
     ctx.utente = s.utente;
     return self.statoPubblico(ctx);
   });
 
+  /*
+   * Accesso, primo passo: { username, password }.
+   * Risposta { utente, permessi } con la sessione aperta, oppure { dueFattori: true, sfida } SENZA sessione
+   * quando l'utente ha la verifica in due passaggi attiva e questo computer non è attendibile.
+   */
   this.rotta('POST', '/api/login', PUBBLICA, function (ctx) {
-    var s = acc.login(ctx, ctx.corpo.username, ctx.corpo.password, ctx.req.headers['user-agent']);
+    var s = acc.login(ctx, ctx.corpo.username, ctx.corpo.password, ctx.req.headers['user-agent'], { dispositivi: self.dispositiviDelBrowser(ctx.req) });
+    if (s.dueFattori) return { dueFattori: true, sfida: s.sfida };
     ctx.res.setHeader('Set-Cookie', self.cookieSessione(s.token, A.DURATA_MAX_MS / 1000));
     return { utente: s.utente, permessi: A.permessi(s.utente) };
+  });
+
+  /*
+   * Accesso, secondo passo: { sfida, codice | codiceRecupero, ricorda }.
+   * Risposta { utente, permessi, codiciRimasti? } con la sessione aperta; con "ricorda" anche il cookie del computer
+   * attendibile per 30 giorni. 400 codice sbagliato (si riprova), 401 sfida scaduta (di nuovo la password), 429 blocco.
+   */
+  this.rotta('POST', '/api/login/2fa', PUBBLICA, function (ctx) {
+    var s = acc.loginDueFattori(ctx, ctx.corpo, ctx.req.headers['user-agent']);
+    var cookie = [self.cookieSessione(s.token, A.DURATA_MAX_MS / 1000)];
+    if (s.dispositivo) {
+      // gli altri utenti già ricordati su questo computer restano (al massimo 5)
+      var tokens = [s.dispositivo].concat(self.dispositiviDelBrowser(ctx.req)).slice(0, A.MAX_DISPOSITIVI_COOKIE);
+      cookie.push(self.cookieDispositivo(tokens));
+    }
+    ctx.res.setHeader('Set-Cookie', cookie);
+    var out = { utente: s.utente, permessi: A.permessi(s.utente) };
+    if (s.codiciRimasti !== undefined) out.codiciRimasti = s.codiciRimasti;
+    return out;
   });
 
   this.rotta('POST', '/api/logout', PUBBLICA, function (ctx) {
@@ -273,6 +315,8 @@ Server.prototype.definisciRotte = function () {
     soloAdmin(ctx, 'utenti');
     var u = acc.modificaUtente(ctx, ctx.par.id, ctx.corpo, db.reparti());
     self.chiudiSseUtente(u);
+    // con il ruolo nuovo il criterio può chiedergli la verifica in due passaggi: il suo browser se ne accorge subito
+    if (u.dueFattoriDaAttivare) self.chiudiSseUtenti([u.id]);
     self.notificaPermessi([u.id]);
     return { utente: u };
   });
@@ -358,8 +402,17 @@ Server.prototype.notificaPermessi = function (utentiIds) {
 
 Server.prototype.chiudiSseUtente = function (utente) {
   if (utente.attivo) return;
+  this.chiudiSseUtenti([utente.id]);
+};
+
+/*
+ * Chiude le notifiche aperte degli utenti indicati: il browser si ricollega e scopre subito che la sessione è
+ * cambiata (scaduta, oppure da completare con la verifica in due passaggi).
+ */
+Server.prototype.chiudiSseUtenti = function (utentiIds) {
+  if (!utentiIds || !utentiIds.length) return;
   this.ascoltatori.forEach(function (a) {
-    if (a.utenteId === utente.id) { try { a.res.end(); } catch (e) { /* già chiusa */ } }
+    if (utentiIds.indexOf(a.utenteId) >= 0) { try { a.res.end(); } catch (e) { /* già chiusa */ } }
   });
 };
 
@@ -382,6 +435,12 @@ Server.prototype.contesto = function (req, res) {
   }
   return ctx;
 };
+
+/*
+ * Sessione di chi deve attivare la verifica in due passaggi (criterio dell'amministratore) e non l'ha ancora fatto:
+ * vale solo per attivarla. 401 (non 403): il browser torna alla schermata di accesso, che guida all'attivazione.
+ */
+var ERRORE_2FA_DA_ATTIVARE = { errore: 'Prima di continuare attiva la verifica in due passaggi: l’amministratore la richiede per il tuo ruolo.', attiva2fa: true };
 
 Server.prototype.gestisciApi = function (req, res) {
   var self = this;
@@ -428,6 +487,7 @@ Server.prototype.gestisciApi = function (req, res) {
     if (!ctx.utente) return inviaJson(res, 401, { errore: 'Sessione scaduta: accedi di nuovo.' });
     if (utenteDiverso(req, ctx)) return inviaJson(res, 401, { errore: 'In questo browser è entrato un altro utente: accedi di nuovo.', altroUtente: true });
     if (ctx.utente.cambioPassword && !trovata.opz.anchePasswordDaCambiare) return inviaJson(res, 403, { errore: 'Prima di continuare cambia la password.' });
+    if (ctx.utente.dueFattoriDaAttivare && !trovata.opz.anche2faDaAttivare) return inviaJson(res, 401, ERRORE_2FA_DA_ATTIVARE);
     if (trovata.opz.permesso && !ctx.permessi[trovata.opz.permesso]) return inviaJson(res, 403, { errore: 'Il tuo utente non può fare questa operazione.' });
   }
 
@@ -441,13 +501,14 @@ Server.prototype.gestisciApi = function (req, res) {
       ctx.utente = s.utente;
       ctx.permessi = A.permessi(s.utente);
       if (ctx.utente.cambioPassword && !trovata.opz.anchePasswordDaCambiare) throw errore(403, 'Prima di continuare cambia la password.');
+      if (ctx.utente.dueFattoriDaAttivare && !trovata.opz.anche2faDaAttivare) throw errore(401, ERRORE_2FA_DA_ATTIVARE.errore, { attiva2fa: true });
       if (trovata.opz.permesso && !ctx.permessi[trovata.opz.permesso]) throw errore(403, 'Il tuo utente non può fare questa operazione.');
     }
     var risultato = trovata.gestore(ctx);
     if (risultato !== undefined && !res.headersSent) inviaJson(res, 200, risultato);
   }).catch(function (e) {
     if (res.headersSent) { try { res.end(); } catch (x) { /* già chiusa */ } return; }
-    if (e && e.stato) return inviaJson(res, e.stato, { errore: e.message });
+    if (e && e.stato) return inviaJson(res, e.stato, Object.assign({}, e.dati || {}, { errore: e.message }));
     if (e && /UNIQUE constraint failed: articoli\.nome/.test(e.message)) return inviaJson(res, 409, { errore: 'Esiste già un articolo con questo nome.' });
     self.log('Errore su ' + metodo + ' ' + ctx.percorso + ': ' + (e && (e.stack || e.message)));
     inviaJson(res, 500, { errore: 'Errore interno del server. Il dettaglio è nel registro del server.' });
@@ -468,6 +529,7 @@ function utenteDiverso(req, ctx) {
 Server.prototype.eventi = function (ctx) {
   var self = this;
   if (!ctx.utente || utenteDiverso(ctx.req, ctx)) return inviaJson(ctx.res, 401, { errore: 'Sessione scaduta: accedi di nuovo.' });
+  if (ctx.utente.dueFattoriDaAttivare) return inviaJson(ctx.res, 401, ERRORE_2FA_DA_ATTIVARE);
   var res = ctx.res;
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',

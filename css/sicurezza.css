@@ -1,1 +1,153 @@
-/* Versione 3.0 – parte C (docs/NOVITA-3.0.md). Usare solo le variabili CSS di css/app.css. */
+/*
+ * Versione 3.0 – parte C (docs/NOVITA-3.0.md): schermata di accesso con il marchio, verifica in due passaggi
+ * (secondo passo, attivazione guidata, codici di recupero), finestra "Sicurezza dell'account", pagina Sicurezza.
+ * Solo variabili CSS di css/app.css. Uniche eccezioni: il codice QR e il riquadro del logo restano nero/bianco
+ * anche con il tema scuro (le fotocamere leggono male i QR al contrario e i loghi sono fatti per il fondo chiaro).
+ */
+
+/* ---------- schermata di accesso: marchio ---------- */
+.accesso-testata { display: grid; gap: 6px; justify-items: center; text-align: center; padding-bottom: 14px; border-bottom: 1px solid var(--linea); }
+.accesso-logo { --sic-carta: #fff; background: var(--sic-carta); border-radius: 10px; padding: 8px 12px; max-width: 100%; display: grid; place-items: center; }
+.accesso-logo img { display: block; max-width: min(300px, 100%); max-height: 64px; width: auto; height: auto; object-fit: contain; }
+.accesso-nome-prodotto { font-family: var(--carattere-titoli, var(--carattere)); font-weight: 800; font-size: 21px; letter-spacing: -.01em; line-height: 1.15; color: var(--testo); }
+.accesso-struttura { font-size: 12px; color: var(--tenue); letter-spacing: .04em; text-transform: uppercase; line-height: 1.4; }
+.accesso-struttura span { white-space: normal; }
+.accesso-scheda.accesso-larga { width: min(720px, 100%); }
+.accesso-scheda h2 { font-family: var(--carattere-titoli, var(--carattere)); }
+
+/* secondo passo: codice dell'app */
+.accesso-codice, .sic-codice {
+  font-family: var(--mono); font-size: 26px !important; letter-spacing: .32em; text-align: center; padding: 10px 8px !important;
+  font-variant-numeric: tabular-nums; width: 100%;
+}
+.accesso-recupero { font-family: var(--mono); font-size: 17px !important; letter-spacing: .08em; text-align: center; }
+.accesso-ricorda { font-size: 14px; }
+.accesso-ricorda-nota { margin-top: -8px; }
+.accesso-azioni-2fa { justify-content: space-between; flex-wrap: wrap; }
+.accesso-aiuto { font-size: 13px; color: var(--tenue); }
+.accesso-aiuto summary { cursor: pointer; font-weight: 600; color: var(--primario); padding: 2px 0; }
+.accesso-aiuto summary:focus-visible { outline: 2px solid var(--primario); outline-offset: 2px; border-radius: 4px; }
+.accesso-aiuto p { margin-top: 6px; }
+
+/* ---------- attivazione guidata (schermata di accesso e finestra dell'account) ---------- */
+.sic-procedura { display: grid; gap: 14px; min-width: 0; }
+.sic-passi { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; counter-reset: none; }
+.sic-passi li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--tenue); padding: 6px 8px; border-radius: 8px; border: 1px solid var(--linea); background: var(--superficie-2); min-width: 0; }
+.sic-passi li.attuale { color: var(--testo); font-weight: 700; border-color: var(--primario); background: var(--primario-chiaro); }
+.sic-passi li.fatto { color: var(--ok); }
+.sic-passi-n { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700;
+  background: var(--superficie); border: 1px solid var(--linea-forte); color: var(--tenue); }
+.sic-passi li.attuale .sic-passi-n { background: var(--primario); border-color: var(--primario); color: var(--primario-testo); }
+.sic-passi li.fatto .sic-passi-n { background: var(--ok-chiaro); border-color: transparent; color: var(--ok); }
+.sic-passi-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sic-passo { display: grid; gap: 12px; min-width: 0; }
+.sic-passo h3, .sic-conferma h3 { font-family: var(--carattere-titoli, var(--carattere)); font-size: 16px; }
+.sic-passo h3:focus, .sic-conferma h3:focus { outline: none; }
+.sic-app { margin: 0; padding-left: 20px; display: grid; gap: 3px; }
+.sic-azioni { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
+.sic-azioni.sinistra { justify-content: flex-start; }
+.sic-errore { background: var(--pericolo-chiaro); color: var(--pericolo); border-radius: 8px; padding: 8px 12px; font-weight: 600; font-size: 13px; }
+
+/* codice QR e chiave */
+.sic-collega { display: grid; grid-template-columns: 200px 1fr; gap: 18px; align-items: start; }
+.sic-qr { --sic-qr-fondo: #fff; --sic-qr-moduli: #000; background: var(--sic-qr-fondo); border: 1px solid var(--linea); border-radius: 10px; padding: 6px; width: 200px; max-width: 100%; }
+.sic-qr-box { display: grid; gap: 8px; justify-items: center; }
+.sic-solo-telefono { display: none; }
+.sic-qr-svg { display: block; width: 100%; height: auto; aspect-ratio: 1; }
+.sic-qr-fondo { fill: var(--sic-qr-fondo); }
+.sic-qr-moduli { fill: var(--sic-qr-moduli); }
+.sic-collega-testo { display: grid; gap: 10px; min-width: 0; }
+.sic-istruzioni { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.sic-chiave { border: 1px solid var(--linea); border-radius: 8px; padding: 8px 12px; background: var(--superficie-2); }
+.sic-chiave summary { cursor: pointer; font-weight: 600; color: var(--primario); font-size: 13.5px; }
+.sic-chiave summary:focus-visible { outline: 2px solid var(--primario); outline-offset: 2px; border-radius: 4px; }
+.sic-chiave[open] { display: grid; gap: 8px; }
+.sic-dati-chiave { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
+.sic-dati-chiave dt { color: var(--tenue); font-weight: 600; }
+.sic-dati-chiave dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.sic-chiave-testo { font-size: 15px; letter-spacing: .06em; font-weight: 700; user-select: all; overflow-wrap: anywhere; }
+.sic-form-codice { display: grid; gap: 8px; max-width: 360px; }
+.sic-ora p { min-width: 0; }
+
+/* codici di recupero */
+.sic-codici { list-style: none; margin: 0; padding: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 18px;
+  border: 1px dashed var(--linea-forte); border-radius: 10px; background: var(--superficie-2); counter-reset: codice; }
+.sic-codici li { counter-increment: codice; display: flex; align-items: baseline; gap: 8px; }
+.sic-codici li::before { content: counter(codice) "."; color: var(--tenue); font-size: 12px; min-width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
+.sic-codici .mono { font-size: 16px; letter-spacing: .08em; font-weight: 700; color: var(--testo); }
+.sic-azioni-codici { display: flex; gap: 8px; flex-wrap: wrap; }
+.sic-salvati { font-weight: 600; }
+.sic-appunti { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.sic-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* stampa dei soli codici */
+.sic-stampa { display: none; }
+@media print {
+  body.stampa-codici { background: #fff; }
+  body.stampa-codici > *:not(.sic-stampa) { display: none !important; }
+  body.stampa-codici .sic-stampa { display: block; color: #000; font: 11pt/1.45 var(--carattere); padding: 10mm; }
+  .sic-stampa h1 { font-size: 16pt; margin: 0 0 2mm; }
+  .sic-stampa h2 { font-size: 12pt; margin: 0 0 4mm; font-weight: 600; }
+  .sic-stampa ol { columns: 2; font: 700 14pt/2 var(--mono); letter-spacing: .08em; margin: 6mm 0; padding-left: 10mm; }
+}
+
+/* ---------- finestra "Sicurezza dell'account" ---------- */
+.sic-account { display: grid; gap: 14px; min-width: 0; }
+.sic-stato { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; align-items: start; padding: 14px; border-radius: var(--raggio); border: 1px solid var(--linea); background: var(--superficie-2); }
+.sic-stato.attiva { background: var(--ok-chiaro); border-color: transparent; }
+.sic-stato-icona { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; font-size: 22px; background: var(--superficie); }
+.sic-stato h3 { font-family: var(--carattere-titoli, var(--carattere)); font-size: 16px; margin-bottom: 4px; }
+.sic-stato p + p { margin-top: 6px; }
+.sic-stato .etichetta { white-space: normal; }
+.sic-righe { display: grid; border: 1px solid var(--linea); border-radius: var(--raggio); overflow: hidden; }
+.sic-riga { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 14px; flex-wrap: wrap; }
+.sic-riga + .sic-riga { border-top: 1px solid var(--linea); }
+.sic-riga-testo { flex: 1 1 260px; min-width: 0; }
+.sic-riga-testo h4 { font-size: 13.5px; margin-bottom: 2px; }
+.sic-riga-testo p { font-size: 13px; color: var(--tenue); }
+.sic-riga-azione { flex: 0 0 auto; }
+.sic-conferma { display: grid; gap: 10px; max-width: 460px; }
+
+/* ---------- pagina Sicurezza (amministratore) ---------- */
+.sic-pagina { display: grid; gap: 18px; min-width: 0; }
+.sic-spiega p { min-width: 220px; }
+.sic-criteri { border: 0; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; min-width: 0; }
+.sic-criterio { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 12px 14px; border: 1px solid var(--linea); border-radius: var(--raggio);
+  background: var(--superficie); cursor: pointer; transition: border-color var(--durata, 240ms) var(--curva, ease), background-color var(--durata, 240ms) var(--curva, ease); }
+.sic-criterio:hover { border-color: var(--primario); }
+.sic-criterio.scelto { border-color: var(--primario); background: var(--primario-chiaro); box-shadow: inset 0 0 0 1px var(--primario); }
+.sic-criterio input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--primario); }
+.sic-criterio:focus-within { outline: 2px solid var(--primario); outline-offset: 2px; }
+.sic-criterio small { display: block; color: var(--tenue); font-size: 12.5px; margin-top: 3px; line-height: 1.4; }
+.sic-riepilogo { margin: 14px 0 10px; font-size: 13.5px; }
+#sic-criterio .sic-errore { margin-bottom: 10px; }
+.sic-tabella td { vertical-align: middle; }
+.sic-tabella td .mono { font-size: 12px; }
+
+/* ---------- telefono ---------- */
+@media (max-width: 640px) {
+  .accesso-scheda.accesso-larga { padding-left: 16px; padding-right: 16px; }
+  .accesso-nome-prodotto { font-size: 19px; }
+  .sic-collega { grid-template-columns: 1fr; justify-items: center; }
+  .sic-collega-testo { justify-self: stretch; }
+  .sic-qr { width: 190px; }
+  .sic-solo-telefono { display: inline-flex; white-space: normal; text-align: center; }
+  .sic-passi { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .sic-passi li { flex-direction: column; text-align: center; gap: 4px; padding: 6px 4px; font-size: 11.5px; }
+  .sic-passi-t { white-space: normal; }
+  .sic-codici { grid-template-columns: 1fr; }
+  .sic-form-codice { max-width: none; }
+  .accesso-codice, .sic-codice { font-size: 24px !important; letter-spacing: .24em; }
+  /* tabella degli utenti come schede, senza scorrere di lato */
+  .sic-tabella thead { display: none; }
+  .sic-tabella, .sic-tabella tbody, .sic-tabella tr, .sic-tabella td { display: block; width: 100%; }
+  .sic-tabella tr { padding: 10px 14px; border-bottom: 1px solid var(--linea); }
+  .sic-tabella td { border: 0; padding: 3px 0; text-align: left !important; }
+  .sic-tabella td[data-et]::before { content: attr(data-et); display: inline-block; min-width: 140px; color: var(--tenue); font-size: 12px; font-weight: 600; }
+  .sic-tabella td:first-child::before { display: none; }
+  .sic-tabella td.azioni { padding-top: 6px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sic-criterio { transition: none; }
+}

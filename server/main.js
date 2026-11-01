@@ -3,6 +3,11 @@
  *
  *   GestionaleFarmacia.exe [--porta 8080] [--host <indirizzo>] [--dati <cartella>]
  *   node server/main.js     (durante lo sviluppo)
+ *
+ * Sequenza d'avvio (versione 3.0, parte E): controllo rapido di farmacia.db e accessi.db e cura dei file danneggiati
+ * (server/salute.js) → apertura del database → giornale delle modifiche → recupero delle ultime scritture dopo uno
+ * spegnimento improvviso → server in ascolto → copie orarie verificate e controllo completo notturno.
+ * All'arresto ordinato: copia finale se c'è stato lavoro.
  */
 'use strict';
 
@@ -16,6 +21,8 @@ var Database = require('./db.js').Database;
 var Accessi = require('./accessi.js').Accessi;
 var Operazioni = require('./operazioni.js').Operazioni;
 var Backup = require('./backup.js').Backup;
+var Giornale = require('./giornale.js').Giornale;
+var Salute = require('./salute.js').Salute;
 var Server = require('./http.js').Server;
 
 var VERSIONE = '3.0.0';
@@ -99,6 +106,14 @@ function indirizziRete() {
   return out;
 }
 
+/* Esito del controllo d'avvio di un file, in parole semplici per il registro del server. */
+function descriviEsito(f) {
+  if (f.esito === 'ok') return 'in ordine';
+  if (f.esito === 'nuovo') return 'nuovo';
+  var cura = { curato: 'curato senza perdite', 'curato-con-perdite': 'curato CON PERDITE (vedi sopra)', ricreato: 'RICREATO VUOTO (vedi sopra)' }[f.cura];
+  return (f.esito === 'mancante' ? 'mancante' : 'danneggiato') + (cura ? ', ' + cura : '');
+}
+
 function avvia() {
   // una console chiusa o assente non deve generare errori a catena
   try { process.stdout.on('error', function () {}); process.stderr.on('error', function () {}); } catch (e) { /* nessuna console */ }
@@ -112,6 +127,7 @@ function avvia() {
       '  --porta <n>                    porta HTTP (predefinita 8080)\n' +
       '  --host <ind>                   indirizzo di ascolto (predefinito: tutta la rete, IPv4 e IPv6)\n' +
       '  --dati <cartella>              cartella dei dati (predefinita: "dati" accanto al programma)\n' +
+      '                                 (in configurazione.json anche "secondaCartella": copie anche su un altro disco)\n' +
       '  --reimposta-password <utente>  accesso d\'emergenza: nuova password provvisoria per l\'utente, poi esce\n');
     return;
   }
@@ -142,18 +158,43 @@ function avvia() {
   }
 
   var database;
+  // accesso d'emergenza: si usa sul server, anche mentre il servizio è in funzione (niente controlli né cura:
+  // il database è già aperto dal servizio)
+  if (arg['reimposta-password']) {
+    try {
+      database = new Database(cartellaDati);
+    } catch (e) {
+      return fatale('Non riesco ad aprire il database in ' + cartellaDati + ': ' + e.message);
+    }
+    var accessiEmergenza = new Accessi(database, log);
+    return emergenza(accessiEmergenza);
+  }
+
+  // seconda cartella delle copie (facoltativa): un percorso relativo vale dalla cartella dati, come i certificati
+  var secondaCartella = conf.secondaCartella ? path.resolve(cartellaDati, String(conf.secondaCartella)) : '';
+
+  // controllo rapido e cura dei file danneggiati, PRIMA di aprire il database per l'uso
+  var salute = new Salute({ cartella: cartellaDati, log: log, versione: VERSIONE, secondaCartella: secondaCartella });
+  try {
+    var controllo = salute.curaAllAvvio();
+    var esiti = Object.keys(controllo.file).map(function (k) { return k + '.db ' + descriviEsito(controllo.file[k]); });
+    log('Controllo della base dati all’avvio: ' + esiti.join(', ') + ' (' + controllo.durataMs + ' ms).');
+  } catch (e) {
+    return fatale('Controllo della base dati non riuscito: ' + e.message);
+  }
+
   try {
     database = new Database(cartellaDati);
   } catch (e) {
     return fatale('Non riesco ad aprire il database in ' + cartellaDati + ': ' + e.message +
       '\nForse il programma è già in esecuzione, oppure la cartella non è scrivibile.');
   }
+  database.log = log;
   var accessi = new Accessi(database, log);
 
-  // accesso d'emergenza: si usa sul server, anche mentre il servizio è in funzione
-  if (arg['reimposta-password']) {
+  function emergenza(acc) {
     try {
-      var provvisoria = accessi.passwordEmergenza(String(arg['reimposta-password']));
+      var provvisoria = acc.passwordEmergenza(String(arg['reimposta-password']));
       stampa('\nNuova password provvisoria per "' + arg['reimposta-password'] + '":  ' + provvisoria +
         '\nAl prossimo accesso il programma chiederà di cambiarla. L\'utente è stato anche riattivato.\n');
       database.chiudi();
@@ -163,9 +204,20 @@ function avvia() {
       return fatale(e.message);
     }
   }
+
+  // giornale delle modifiche, copie di sicurezza, recupero delle ultime scritture e copia dopo un'eventuale cura
+  var giornale = new Giornale(database, { log: log });
+  giornale.collega();
+  var backup = new Backup(database, log, { secondaCartella: secondaCartella });
+  backup.giornale = giornale;
+  try {
+    salute.collega({ database: database, accessi: accessi, backup: backup, giornale: giornale });
+  } catch (e) {
+    return fatale('Preparazione della base dati non riuscita: ' + e.message);
+  }
+
   var server;
   var operazioni = new Operazioni(database, accessi, function (rev) { server.notifica(rev); });
-  var backup = new Backup(database, log);
 
   var opzHttps = null;
   if (conf.https) {
@@ -218,7 +270,8 @@ function avvia() {
     stampa('');
     stampa('  Per fermare il programma chiudi questa finestra o premi Ctrl+C.');
     stampa('');
-    backup.pianifica();
+    // copie orarie verificate, controllo completo notturno (e subito, se non si fa da giorni)
+    salute.avviato();
   }
 
   var chiusura = false;
@@ -226,6 +279,8 @@ function avvia() {
     if (chiusura) return;
     chiusura = true;
     log('Arresto del server…');
+    // copia finale se dall'ultima è cambiato qualcosa; poi il giornale si chiude
+    salute.chiusura();
     backup.ferma();
     server.chiudiTutto();
     srv.close();

@@ -114,6 +114,21 @@
 
     if (App.puo('impostazioni')) {
       var accento = imp.coloreAccento || '';
+      // i magazzini (ex reparti) hanno la loro pagina: qui, in cima, solo il riepilogo e il collegamento.
+      // id="k-reparti" resta (giro guidato di Configura): ora è l'elenco dei magazzini attivi.
+      var magazzini = App.repartiAttivi().slice().sort(function (a, b) { return (Number(b.livello) || 0) - (Number(a.livello) || 0) || a.ordine - b.ordine; });
+      html += scheda('Magazzini e reparti',
+        '<div class="cf-mag-riga"><div class="cf-mag-testo">' +
+        '<p class="piccolo tenue">Farmacia centrale e magazzini di piano, con i loro armadi e il loro assortimento, si gestiscono dalla pagina <b>Magazzini e assortimento</b>. ' +
+        'La farmacia centrale riceve i carichi dai fornitori e rifornisce i magazzini di piano.</p>' +
+        '<ul class="cf-magazzini" id="k-reparti">' + magazzini.map(function (r) {
+          var centrale = r.tipo === 'centrale' || r.centrale;
+          return '<li' + (centrale ? ' class="centrale"' : '') + '><span class="mg-pallino' + (centrale ? ' centrale' : '') + '"' + (r.colore ? ' style="--st-colore:' + h(r.colore) + '"' : '') + ' aria-hidden="true"></span>' +
+            '<b>' + h(r.nome) + '</b><span class="tenue">' + h(pianoDi(r)) + (centrale ? ' · farmacia centrale' : '') + '</span></li>';
+        }).join('') + '</ul></div>' +
+        '<a class="btn primario" href="#magazzini" id="k-vai-magazzini">🏬 Apri Magazzini e assortimento</a></div>',
+        '<span class="nota">' + magazzini.length + ' magazzini attivi</span>');
+
       html += scheda('Marchio e nome del programma',
         '<div class="cf-marchio"><div class="modulo">' +
         '<label class="campo"><span>Nome del programma</span><input id="k-prodotto" maxlength="60" value="' + h(imp.nomeProdotto || '') + '" placeholder="NefroCenter Pharmacy"></label>' +
@@ -162,21 +177,6 @@
           'un livello di servizio più alto tiene più scorte e rende più rari gli esaurimenti. Ogni articolo può avere i suoi giorni di consegna nella scheda dell’articolo.</p>' +
           '<div class="strumenti" style="margin-top:14px"><span class="spazio"></span><button class="btn primario" type="button" id="k-salva-previsioni">Salva</button></div>') +
         '</div>';
-
-      // i magazzini (ex reparti) hanno la loro pagina: qui solo il riepilogo e il collegamento
-      var magazzini = App.repartiAttivi().slice().sort(function (a, b) { return (Number(b.livello) || 0) - (Number(a.livello) || 0) || a.ordine - b.ordine; });
-      // id="k-reparti" resta (giro guidato di Configura): ora è il riepilogo dei magazzini
-      html += scheda('Magazzini e reparti',
-        '<p class="piccolo tenue" style="margin-bottom:10px">Farmacia centrale e magazzini di piano, con i loro armadi e il loro assortimento, si gestiscono dalla pagina <b>Magazzini e assortimento</b>. ' +
-        'La farmacia centrale riceve i carichi dai fornitori e rifornisce i magazzini di piano.</p>' +
-        '<ul class="cf-magazzini" id="k-reparti">' + magazzini.map(function (r) {
-          var centrale = r.tipo === 'centrale' || r.centrale;
-          return '<li><span class="mg-pallino' + (centrale ? ' centrale' : '') + '"' + (r.colore ? ' style="--st-colore:' + h(r.colore) + '"' : '') + ' aria-hidden="true"></span>' +
-            '<b>' + h(r.nome) + '</b><span class="tenue">' + h(pianoDi(r)) + (centrale ? ' · farmacia centrale' : '') + '</span></li>';
-        }).join('') + '</ul>' +
-        '<div class="strumenti" style="margin-top:12px"><span class="spazio"></span>' +
-        '<a class="btn primario" href="#magazzini" id="k-vai-magazzini">🏬 Apri Magazzini e assortimento</a></div>',
-        '<span class="nota">' + magazzini.length + ' magazzini attivi</span>');
     }
     if (App.puo('backup')) {
       html += scheda('Copie di sicurezza del server',

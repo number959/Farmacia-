@@ -410,6 +410,15 @@ Database.prototype.apri = function () {
   }
 };
 
+/*
+ * Segna nel file del magazzino la sessione di lavoro (la "storia" di questo avvio o di questo ripristino).
+ * Le voci del giornale delle modifiche portano la stessa storia: dopo uno spegnimento improvviso, la cura
+ * riapplica solo le voci scritte dalla sessione che aveva aperto quel file (server/salute.js).
+ */
+Database.prototype.segnaSessione = function () {
+  this.impostaMeta('sessione', this.storia);
+};
+
 Database.prototype.chiudiDati = function () {
   if (this.dati) { this.dati.close(); this.dati = null; }
 };
@@ -548,8 +557,37 @@ Database.prototype.cambiamenti = function (da, storia) {
   return out;
 };
 
+/*
+ * Per la cura della base dati (server/salute.js): apre un file del magazzino qualsiasi (una copia, un file
+ * ricostruito in una cartella temporanea) e lo porta allo schema attuale, come all'apertura normale.
+ */
+function apriDati(file) {
+  var db = apriFile(file);
+  try {
+    creaSchemaDati(db);
+  } catch (e) {
+    try { db.close(); } catch (e2) { /* già chiuso */ }
+    throw e;
+  }
+  return db;
+}
+
+/* Lo stesso per un file degli accessi (utenti, sessioni, registro attività). */
+function apriAccessi(file) {
+  var db = apriFile(file);
+  try {
+    creaSchemaAccessi(db);
+  } catch (e) {
+    try { db.close(); } catch (e2) { /* già chiuso */ }
+    throw e;
+  }
+  return db;
+}
+
 module.exports = {
   Database: Database,
+  apriDati: apriDati,
+  apriAccessi: apriAccessi,
   articoloDaRiga: articoloDaRiga,
   repartoDaRiga: repartoDaRiga,
   movimentoDaRiga: movimentoDaRiga,

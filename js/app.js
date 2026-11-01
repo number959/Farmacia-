@@ -1,8 +1,17 @@
 /*
- * Gestionale Farmacia · Clinica Posillipo — nucleo dell'applicazione:
- * stato, utente e permessi, menu, tasti rapidi, ricerca, finestre e avvisi.
+ * NefroCenter Pharmacy (Gestionale Farmacia) — nucleo dell'applicazione:
+ * stato, utente e permessi, menu, tasti rapidi, ricerca, finestre e avvisi; aspetto (tema chiaro/scuro,
+ * colore d'accento, marchio e nome del prodotto) e passaggio animato fra le pagine.
  * I dati arrivano dal server (api.js), l'accesso è in accesso.js,
- * le pagine stanno in pagine.js e amministrazione.js e si registrano in App.pagine.
+ * le pagine stanno in pagine.js, amministrazione.js e pagine-*.js e si registrano in App.pagine.
+ *
+ * Aspetto (versione 3.0, parte F di docs/NOVITA-3.0.md):
+ *   App.temaScelto()      'chiaro' | 'scuro' | 'automatico' (scelta dell'utente in localStorage 'gf-tema',
+ *                         altrimenti l'impostazione "tema" della struttura)
+ *   App.temaEffettivo()   'chiaro' | 'scuro' (con 'automatico' segue il computer)
+ *   App.scegliTema(t)     scelta dell'utente ('' = torna al tema predefinito della struttura)
+ *   App.applicaAspetto()  tema, colore d'accento (impostazione coloreAccento) e titolo della finestra
+ *   App.disegnaMarchio()  logo, nome del prodotto e struttura nel menu laterale (chiama anche applicaAspetto)
  */
 (function (root) {
   'use strict';
@@ -185,6 +194,8 @@
 
   // "Annulla" su un movimento: chi può annullare tutto, oppure i propri consumi e perdite nei propri reparti
   App.puoAnnullare = function (m) {
+    // i movimenti nati da un DDT non si annullano da soli: si annulla il DDT (pagina DDT e consegne)
+    if (m && m.ddtId) return false;
     if (!m || m.annullato) return false;
     if (App.puo('annullaTutti')) return true;
     if (m.tipo !== 'consumo' && m.tipo !== 'perdita') return false;
@@ -251,15 +262,46 @@
     return !!c && App.giacenza(a.id, c.id) < a.scortaMinima;
   };
 
+  /*
+   * Lotti di tutte le coppie (articolo, magazzino) con giacenza: { 'articolo|magazzino': [{ lotto, scadenza, quantita }] }.
+   * Una sola passata sui movimenti (raggruppati per coppia) invece di una per coppia: con decine di migliaia di
+   * movimenti e centinaia di articoli il menu (contatore delle scadenze) e la pagina Oggi restano immediati.
+   * Si ricalcola quando cambiano le giacenze (App._giacenze azzerato dalla sincronizzazione).
+   */
+  var cacheLotti = null;
+  App.lottiPerCoppia = function () {
+    var g = App.giacenze();
+    if (cacheLotti && cacheLotti.g === g && cacheLotti.S === App.S) return cacheLotti.lotti;
+    var gruppi = {};
+    App.S.movimenti.forEach(function (m) {
+      if (m.annullato) return;
+      var k1 = m.articoloId + '|' + m.repartoId;
+      if (g[k1]) (gruppi[k1] || (gruppi[k1] = [])).push(m);
+      if (m.tipo === 'trasferimento' && m.repartoDestId && m.repartoDestId !== m.repartoId) {
+        var k2 = m.articoloId + '|' + m.repartoDestId;
+        if (g[k2]) (gruppi[k2] || (gruppi[k2] = [])).push(m);
+      }
+    });
+    var out = {};
+    Object.keys(gruppi).forEach(function (k) {
+      var i = k.indexOf('|');
+      // stesso calcolo di Calcoli.lotti, sui soli movimenti della coppia
+      out[k] = C.lotti({ movimenti: gruppi[k] }, k.slice(0, i), k.slice(i + 1));
+    });
+    cacheLotti = { g: g, S: App.S, lotti: out };
+    return out;
+  };
+
   /* Lotti con giacenza in tutti i reparti, con i giorni alla scadenza. */
   App.lottiInGiacenza = function () {
     var g = App.giacenze();
+    var lp = App.lottiPerCoppia();
     var oggi = App.oggi();
     var out = [];
     App.S.articoli.forEach(function (a) {
       App.S.reparti.forEach(function (r) {
         if (!g[a.id + '|' + r.id]) return;
-        C.lotti(App.S, a.id, r.id).forEach(function (l) {
+        (lp[a.id + '|' + r.id] || []).forEach(function (l) {
           if (l.quantita <= 0) return;
           out.push({ articolo: a, reparto: r, lotto: l.lotto, scadenza: l.scadenza, quantita: l.quantita, giorni: C.giorniAllaScadenza(l.scadenza, oggi) });
         });
@@ -529,6 +571,9 @@
       pagina = 'oggi';
       if (location.hash && location.hash !== '#oggi' && history.replaceState) history.replaceState(null, '', '#oggi');
     }
+    // animazione d'entrata solo quando si arriva su una pagina (o su una sua vista con parametri), non nei ridisegni
+    var arrivo = pagina !== paginaMostrata || Object.keys(App.parametri || {}).length > 0;
+    paginaMostrata = pagina;
     App.paginaCorrente = pagina;
     App.rinfresca = null;
     App.gestoreScansione = null; // ogni pagina che usa il lettore di codici a barre lo reimposta (js/scanner.js)
@@ -536,18 +581,33 @@
     var voce = App.MENU.filter(function (v) { return v.id === pagina; })[0];
     document.getElementById('titolo-pagina').textContent = voce ? voce.voce : '';
     document.getElementById('data-oggi').textContent = App.dataLunga(App.oggi());
-    document.title = (voce ? voce.voce + ' · ' : '') + 'Gestionale Farmacia · ' + (App.S.impostazioni.struttura || '');
+    App.aggiornaTitolo();
     document.querySelectorAll('#menu a').forEach(function (a) {
-      a.classList.toggle('attivo', a.getAttribute('data-pagina') === pagina);
+      var attiva = a.getAttribute('data-pagina') === pagina;
+      a.classList.toggle('attivo', attiva);
+      if (attiva) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
     });
     document.getElementById('app').classList.remove('menu-aperto');
     var cont = document.getElementById('contenuto');
     // contenitore nuovo: gli ascoltatori della pagina precedente se ne vanno con il vecchio
     var nuovo = cont.cloneNode(false);
     cont.parentNode.replaceChild(nuovo, cont);
+    // i grafici della pagina di prima sono usciti dalla pagina: si liberano subito
+    if (root.Grafici && root.Grafici.libera) root.Grafici.libera();
     App.pagine[pagina](nuovo, App.parametri || {});
     App.parametri = {};
+    if (arrivo && root.Motion && root.Motion.pagina) root.Motion.pagina(nuovo);
     window.scrollTo(0, 0);
+  };
+
+  var paginaMostrata = null; // ultima pagina disegnata da App.mostra (per l'animazione d'entrata)
+
+  /* Titolo della finestra: pagina · nome del prodotto · struttura. */
+  App.aggiornaTitolo = function () {
+    var imp = impostazioniAspetto();
+    var base = (imp.nomeProdotto || 'NefroCenter Pharmacy') + (imp.struttura ? ' · ' + imp.struttura : '');
+    var voce = App.S && App.utente ? App.MENU.filter(function (v) { return v.id === App.paginaCorrente; })[0] : null;
+    document.title = (voce ? voce.voce + ' · ' : '') + base;
   };
 
   App.ridisegna = function () { App.mostra(App.paginaCorrente); };
@@ -555,6 +615,9 @@
   /* Contatori delle voci del menu (voci con "conta: nome"): ogni parte registra il suo. */
   var contatori = {};
   App.registraContatore = function (nome, fn) { contatori[nome] = fn; };
+
+  // ultimi numeri mostrati nel menu: quando cambiano, il contatore pulsa (null = primo disegno dopo l'accesso)
+  var contePrima = null;
 
   App.disegnaMenu = function () {
     var conte = { scadenze: App.contaScadenze() };
@@ -568,37 +631,176 @@
     });
     // tolgo i gruppi rimasti senza voci
     voci = voci.filter(function (v, i) { return !v.gruppo || (voci[i + 1] && !voci[i + 1].gruppo); });
+    var titoli = { scadenze: 'Lotti in scadenza o scaduti', richieste: 'Richieste da gestire', consegne: 'DDT da preparare o da ricevere' };
     document.getElementById('menu').innerHTML = voci.map(function (v) {
       if (v.gruppo) return '<div class="menu-gruppo">' + h(v.gruppo) + '</div>';
-      var titoli = { scadenze: 'Lotti in scadenza o scaduti', richieste: 'Richieste da gestire', consegne: 'DDT da preparare o da ricevere' };
-      var c = v.conta && conte[v.conta] ? '<span class="conta" title="' + h(titoli[v.conta] || '') + '">' + conte[v.conta] + '</span>' : '';
-      return '<a href="#' + v.id + '" data-pagina="' + v.id + '"' + (v.id === App.paginaCorrente ? ' class="attivo"' : '') + '>' +
+      var c = v.conta && conte[v.conta] ? '<span class="conta" data-conta="' + h(v.conta) + '" title="' + h(titoli[v.conta] || '') + '">' + conte[v.conta] +
+        '<span class="nascosto"> ' + h(titoli[v.conta] || 'da vedere') + '</span></span>' : '';
+      var attiva = v.id === App.paginaCorrente;
+      return '<a href="#' + v.id + '" data-pagina="' + v.id + '"' + (attiva ? ' class="attivo" aria-current="page"' : '') + '>' +
         '<span class="ico" aria-hidden="true">' + v.ico + '</span><span class="voce">' + h(v.voce) + '</span>' + c +
         '<kbd title="Tasto rapido">' + v.tasto + '</kbd></a>';
     }).join('');
+    // contatori cambiati dall'ultima volta: un impulso per farli notare
+    if (contePrima) {
+      Object.keys(conte).forEach(function (k) {
+        if (contePrima[k] === undefined || contePrima[k] === conte[k] || !conte[k]) return;
+        var el = document.querySelector('#menu .conta[data-conta="' + k + '"]');
+        if (!el) return;
+        el.classList.add('cambiato');
+        if (root.Motion && root.Motion.evidenzia) root.Motion.evidenzia(el);
+      });
+    }
+    contePrima = conte;
   };
 
+  /* ---------- marchio, nome del prodotto, tema e colore d'accento ---------- */
+
+  App.MARCHIO = 'brand/marchio.png'; // simbolo incorporato (impostazione logo = ''); l'anteprima non ha la cartella brand/
+  var SIMBOLO = '<svg viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><path d="M13 6h6v7h7v6h-7v7h-6v-7H6v-6h7z" fill="#fff"/></svg>';
+
+  // impostazioni dell'aspetto: quelle caricate, oppure (prima dell'accesso) quelle pubbliche di /api/stato
+  function impostazioniAspetto() {
+    if (App.S && App.S.impostazioni) return App.S.impostazioni;
+    return (root.Accesso && root.Accesso.stato) || {};
+  }
+
   App.disegnaMarchio = function () {
-    var imp = App.S.impostazioni;
-    var logo = imp.logo
-      ? '<img src="' + h(imp.logo) + '" alt="">'
-      : '<svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><path d="M13 6h6v7h7v6h-7v7h-6v-7H6v-6h7z" fill="#fff"/></svg>';
-    document.getElementById('marchio').innerHTML =
-      '<div class="logo">' + logo + '</div>' +
-      '<div><div class="nome">' + h(imp.struttura) + '</div><div class="sotto">' + h(imp.sottotitolo) + '</div></div>' +
-      '<div class="prodotto">Gestionale Farmacia · carico e scarico</div>';
+    if (!App.S) return;
+    var imp = App.S.impostazioni || {};
+    var logo = imp.logo || '';
+    var box;
+    if (logo === 'nessuno') box = '<div class="logo simbolo">' + SIMBOLO + '</div>';
+    else if (/^data:image\//.test(logo)) box = '<div class="logo immagine"><img src="' + h(logo) + '" alt=""></div>';
+    else box = '<div class="logo"><img src="' + h(App.MARCHIO) + '" alt=""></div>';
+    var nome = String(imp.nomeProdotto || 'NefroCenter Pharmacy').trim();
+    var parole = nome.split(/\s+/);
+    // ultima parola più leggera ("NefroCenter Pharmacy"), come nel marchio
+    var nomeHtml = parole.length > 1 ? h(parole.slice(0, -1).join(' ')) + ' <span>' + h(parole[parole.length - 1]) + '</span>' : h(nome);
+    var el = document.getElementById('marchio');
+    el.innerHTML = box +
+      '<div><div class="nome">' + nomeHtml + '</div>' + (imp.struttura ? '<div class="sotto">' + h(imp.struttura) + '</div>' : '') + '</div>' +
+      (imp.sottotitolo ? '<div class="prodotto">' + h(imp.sottotitolo) + '</div>' : '');
+    el.title = nome + (imp.struttura ? ' · ' + imp.struttura : '');
+    // un logo che non si carica (marchio assente, immagine rovinata) lascia il posto al simbolo neutro, senza icona rotta
+    var img = el.querySelector('img');
+    if (img) {
+      var togli = function () {
+        var b = img.parentNode;
+        if (!b || !b.isConnected) return;
+        b.className = 'logo simbolo';
+        b.innerHTML = SIMBOLO;
+      };
+      img.addEventListener('error', togli);
+      if (img.complete && !img.naturalWidth && img.getAttribute('src')) togli();
+    }
+    App.applicaAspetto();
+  };
+
+  App.TEMI = { chiaro: 'Chiaro', scuro: 'Scuro', automatico: 'Automatico' };
+  var CHIAVE_TEMA = 'gf-tema';
+
+  function sceltaUtente() {
+    try {
+      var v = root.localStorage ? root.localStorage.getItem(CHIAVE_TEMA) : '';
+      return App.TEMI[v] ? v : '';
+    } catch (e) { return ''; }
+  }
+
+  function sistemaScuro() {
+    try { return !!(root.matchMedia && root.matchMedia('(prefers-color-scheme: dark)').matches); } catch (e) { return false; }
+  }
+
+  App.temaScelto = function () {
+    var imp = impostazioniAspetto();
+    return sceltaUtente() || (App.TEMI[imp.tema] ? imp.tema : 'automatico');
+  };
+
+  App.temaEffettivo = function () {
+    var t = App.temaScelto();
+    return t === 'automatico' ? (sistemaScuro() ? 'scuro' : 'chiaro') : t;
+  };
+
+  /* Tema scelto dall'utente in questo browser ('' = quello predefinito della struttura). */
+  App.scegliTema = function (tema) {
+    try {
+      if (root.localStorage) {
+        if (App.TEMI[tema]) root.localStorage.setItem(CHIAVE_TEMA, tema);
+        else root.localStorage.removeItem(CHIAVE_TEMA);
+      }
+    } catch (e) { /* memoria del browser non disponibile: vale fino alla chiusura della pagina */ temaDiRiserva = tema; }
+    App.applicaTema();
+  };
+  var temaDiRiserva = '';
+
+  App.applicaTema = function () {
+    var t = temaDiRiserva && App.TEMI[temaDiRiserva] ? (temaDiRiserva === 'automatico' ? (sistemaScuro() ? 'scuro' : 'chiaro') : temaDiRiserva) : App.temaEffettivo();
+    var html = document.documentElement;
+    var prima = html.getAttribute('data-tema');
+    if (prima !== t) html.setAttribute('data-tema', t);
+    segnaTemaNelMenu();
+    if (prima && prima !== t) dopoCambioTema();
+  };
+
+  // grafici e pagine che leggono i colori dalle variabili CSS si ridisegnano col tema nuovo (se non si perde niente)
+  function dopoCambioTema() {
+    if (root.Grafici && root.Grafici.ritema) root.Grafici.ritema();
+    if (App.pronta && App.S && App.utente && !document.getElementById('app').hidden) App.aggiornaVista();
+  }
+
+  function segnaTemaNelMenu() {
+    var scelto = temaDiRiserva || App.temaScelto();
+    var bott = document.querySelectorAll('#utente-tendina [data-scegli-tema]');
+    Array.prototype.forEach.call(bott, function (b) {
+      b.setAttribute('aria-checked', b.getAttribute('data-scegli-tema') === scelto ? 'true' : 'false');
+    });
+  }
+
+  /* Colore d'accento della struttura (impostazione coloreAccento, '' = rosso del marchio). */
+  App.applicaAccento = function () {
+    var c = String(impostazioniAspetto().coloreAccento || '');
+    var st = document.documentElement.style;
+    if (/^#[0-9a-fA-F]{6}$/.test(c)) {
+      st.setProperty('--accento', c);
+      st.setProperty('--accento-chiaro', 'color-mix(in srgb, ' + c + ' 14%, var(--superficie))');
+    } else {
+      st.removeProperty('--accento');
+      st.removeProperty('--accento-chiaro');
+    }
+  };
+
+  App.applicaAspetto = function () {
+    App.applicaAccento();
+    App.applicaTema();
+    App.aggiornaTitolo();
   };
 
   App.nomeRuolo = function (ruolo) { return App.RUOLI[ruolo] || ruolo || ''; };
 
-  /* Pulsante utente nella barra in alto: "Nome · Ruolo" con il menu Cambia password / Esci. */
+  // iniziali per il cerchietto dell'utente ("Giovanni Amministratore" -> "GA")
+  function iniziali(nome) {
+    var p = String(nome || '').trim().split(/\s+/).filter(Boolean);
+    if (!p.length) return '?';
+    var x = p.length > 1 ? p[0].charAt(0) + p[p.length - 1].charAt(0) : p[0].slice(0, 2);
+    return x.toUpperCase();
+  }
+
+  /* Pulsante utente nella barra in alto: "Nome · Ruolo" con il menu (password, sicurezza, tema, esci). */
   App.disegnaUtente = function () {
     var u = App.utente;
     var b = document.getElementById('utente-btn');
-    if (!u) { b.innerHTML = ''; return; }
-    b.innerHTML = '<span class="utente-ico" aria-hidden="true">👤</span><span class="utente-nome">' + h(u.nome || u.username) + '</span>' +
+    var chi = document.getElementById('utente-chi');
+    if (!u) { b.innerHTML = ''; b.removeAttribute('aria-label'); if (chi) chi.innerHTML = ''; return; }
+    var nome = u.nome || u.username;
+    b.innerHTML = '<span class="utente-ico" aria-hidden="true">' + h(iniziali(nome)) + '</span><span class="utente-nome">' + h(nome) + '</span>' +
       '<span class="utente-ruolo"> · ' + h(App.nomeRuolo(u.ruolo)) + '</span><span aria-hidden="true" class="utente-freccia">▾</span>';
     b.title = 'Collegato come ' + u.username;
+    // sul telefono il nome non si vede: il lettore dello schermo lo legge comunque
+    b.setAttribute('aria-label', nome + ', ' + App.nomeRuolo(u.ruolo) + ': menu dell’utente');
+    if (chi) chi.innerHTML = '<b>' + h(nome) + '</b>' + h(App.nomeRuolo(u.ruolo)) + ' · ' + h(u.username);
+    var sic = document.getElementById('utente-sicurezza');
+    if (sic) sic.hidden = !(App.Sicurezza && App.Sicurezza.apriAccount);
+    segnaTemaNelMenu();
   };
 
   App.aggiornaLaterale = function () {
@@ -608,10 +810,13 @@
     var u = App.utente || {};
     var attivi = S.movimenti.filter(function (m) { return !m.annullato; }).length;
     var reparti = u.ruolo === 'reparto' && App.permessi && App.permessi.reparti
-      ? '<div>Reparti: ' + h(App.permessi.reparti.map(App.nomeReparto).join(', ') || 'nessuno') + '</div>' : '';
+      ? '<div>Magazzini: ' + h(App.permessi.reparti.map(App.nomeReparto).join(', ') || 'nessuno') + '</div>' : '';
+    var st = (root.Accesso && root.Accesso.stato) || {};
+    var sigla = S.impostazioni.sigla || S.impostazioni.nomeProdotto || '';
     document.getElementById('stato-archivio').innerHTML =
       '<div>👤 <b>' + h(u.nome || u.username || '') + '</b> · ' + h(App.nomeRuolo(u.ruolo)) + '</div>' + reparti +
-      '<div><b>' + S.articoli.length + '</b> articoli · <b>' + attivi + '</b> movimenti</div>';
+      '<div><b>' + App.fmtNum(S.articoli.length) + '</b> articoli · <b>' + App.fmtNum(attivi) + '</b> movimenti</div>' +
+      (sigla || st.versione ? '<div class="versione">' + h(sigla) + (st.versione ? (sigla ? ' · ' : '') + 'versione ' + h(st.versione) : '') + '</div>' : '');
   };
 
   /* Dopo un cambio dei propri permessi (per esempio l'amministratore ha cambiato il suo ruolo). */
@@ -759,11 +964,41 @@
   /* ---------- menu dell'utente (barra in alto) ---------- */
   function tendinaAperta() { return !document.getElementById('utente-tendina').hidden; }
 
+  function vociTendina() {
+    return Array.prototype.filter.call(document.querySelectorAll('#utente-tendina button'), function (b) { return !b.hidden && !b.disabled; });
+  }
+
   function apriTendina(apri) {
     var t = document.getElementById('utente-tendina');
+    if (apri) {
+      var sic = document.getElementById('utente-sicurezza');
+      if (sic) sic.hidden = !(App.Sicurezza && App.Sicurezza.apriAccount);
+      segnaTemaNelMenu();
+    }
     t.hidden = !apri;
     document.getElementById('utente-btn').setAttribute('aria-expanded', apri ? 'true' : 'false');
-    if (apri) t.querySelector('button').focus();
+    if (apri) { var v = vociTendina(); if (v[0]) v[0].focus(); }
+  }
+
+  // frecce, Inizio e Fine fra le voci del menu dell'utente (come un menu del sistema)
+  function tastiTendina(e) {
+    var v = vociTendina();
+    if (!v.length) return;
+    var i = v.indexOf(document.activeElement);
+    var dove = null;
+    if (e.key === 'ArrowDown') dove = i < 0 ? 0 : (i + 1) % v.length;
+    else if (e.key === 'ArrowUp') dove = i < 0 ? v.length - 1 : (i - 1 + v.length) % v.length;
+    else if (e.key === 'Home') dove = 0;
+    else if (e.key === 'End') dove = v.length - 1;
+    else if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && document.activeElement && document.activeElement.hasAttribute('data-scegli-tema')) {
+      // fra i tre temi anche con destra e sinistra
+      var temi = v.filter(function (b) { return b.hasAttribute('data-scegli-tema'); });
+      var j = temi.indexOf(document.activeElement);
+      dove = v.indexOf(temi[(j + (e.key === 'ArrowRight' ? 1 : temi.length - 1)) % temi.length]);
+    }
+    if (dove === null) return;
+    e.preventDefault();
+    v[dove].focus();
   }
 
   App.cambiaPassword = function () {
@@ -822,7 +1057,10 @@
       App._giacenze = null;
       root.Api.rev = 0;
       root.Api.storia = null;
+      contePrima = null;
+      paginaMostrata = null;
       if (App.dimenticaScelte) App.dimenticaScelte();
+      if (root.Grafici && root.Grafici.libera) root.Grafici.libera(document.getElementById('contenuto'));
       document.getElementById('contenuto').innerHTML = '';
       document.getElementById('menu').innerHTML = '';
       document.getElementById('stato-archivio').innerHTML = '';
@@ -913,6 +1151,23 @@
     });
     document.getElementById('utente-password').addEventListener('click', function () { apriTendina(false); App.cambiaPassword(); });
     document.getElementById('utente-esci').addEventListener('click', function () { apriTendina(false); App.esci(); });
+    var sic = document.getElementById('utente-sicurezza');
+    if (sic) {
+      sic.addEventListener('click', function () {
+        apriTendina(false);
+        if (App.Sicurezza && App.Sicurezza.apriAccount) App.Sicurezza.apriAccount();
+      });
+    }
+    // tema: la scelta vale subito; il menu resta aperto per provare l'altro
+    Array.prototype.forEach.call(document.querySelectorAll('#utente-tendina [data-scegli-tema]'), function (b) {
+      b.addEventListener('click', function (e) {
+        e.stopPropagation();
+        App.scegliTema(b.getAttribute('data-scegli-tema'));
+        var nomi = { chiaro: 'Tema chiaro', scuro: 'Tema scuro', automatico: 'Tema automatico: segue le impostazioni del computer' };
+        App.avviso(nomi[b.getAttribute('data-scegli-tema')] || 'Tema cambiato', 'ok');
+      });
+    });
+    document.getElementById('utente-tendina').addEventListener('keydown', tastiTendina);
     document.addEventListener('click', function (e) {
       if (tendinaAperta() && !e.target.closest('#utente-menu')) apriTendina(false);
     });
@@ -943,6 +1198,7 @@
       App.S = null;
       Api.rev = 0;
       Api.storia = null;
+      contePrima = null;
       if (App.dimenticaScelte) App.dimenticaScelte(); // date e filtri dell'utente di prima
       sinc = Api.sincronizza({ completa: true });
     }
@@ -969,9 +1225,25 @@
 
   App.avvia = function () {
     document.getElementById('data-oggi').textContent = App.dataLunga(App.oggi());
+    App.applicaTema();
     collegaInterfaccia();
+    // tema predefinito, colore e nome della struttura per la schermata di accesso (js/accesso.js, GET /api/stato)
+    document.addEventListener('gf-stato', function () { App.applicaAspetto(); });
+    // tema automatico: segue il computer anche mentre il programma è aperto
+    try {
+      var mq = root.matchMedia && root.matchMedia('(prefers-color-scheme: dark)');
+      if (mq) {
+        var segui = function () { if (App.temaScelto() === 'automatico') App.applicaTema(); };
+        if (mq.addEventListener) mq.addEventListener('change', segui); else if (mq.addListener) mq.addListener(segui);
+      }
+    } catch (e) { /* browser senza matchMedia */ }
+    // la scelta fatta in un'altra scheda dello stesso browser vale anche qui
+    root.addEventListener('storage', function (e) { if (e.key === CHIAVE_TEMA) App.applicaTema(); });
     root.Accesso.avvia();
   };
+
+  // tema subito, prima ancora dell'avvio: la pagina non lampeggia col tema sbagliato
+  try { App.applicaTema(); } catch (e) { /* documento non pronto */ }
 
   root.App = App;
 })(this);

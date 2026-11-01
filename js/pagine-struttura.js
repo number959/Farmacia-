@@ -315,6 +315,8 @@
       g.appendChild(titolo);
       g.appendChild(svgEl('circle', { r: 11, class: 'st-alone' }));
       g.appendChild(svgEl('circle', { r: 6.5, class: 'st-punto' }));
+      // un clic sul punto apre il DDT (da tastiera: il pulsante «Apri» nell'elenco «In viaggio adesso»)
+      if (App.paginaPermessa('consegne')) g.addEventListener('click', function () { App.vai('consegne', { id: d.id }); });
       svg.appendChild(g);
       var lunghezza = traccia.getTotalLength();
       function metti(t) {
@@ -416,7 +418,7 @@
         b.addEventListener('click', function () { App.vai('armadi', { repartoId: b.getAttribute('data-rep') }); });
       });
       cont.querySelectorAll('[data-ddt]').forEach(function (b) {
-        b.addEventListener('click', function () { App.vai('consegne', { ddtId: b.getAttribute('data-ddt') }); });
+        b.addEventListener('click', function () { App.vai('consegne', { id: b.getAttribute('data-ddt') }); });
       });
       caricaResponsabili(cont);
       if (prima) {
@@ -502,6 +504,7 @@
 
   P.armadi = function (cont, par) {
     par = par || {};
+    V().annullaPresa(); // un articolo "preso" da tastiera in una visita precedente non resta in mano
     var magazzini = App.repartiAttivi();
     if (!magazzini.length) {
       cont.innerHTML = scheda('Armadi', vuoto('Nessun magazzino attivo', ''));
@@ -989,16 +992,29 @@
     });
     cont.querySelector('#ar-auto').addEventListener('click', disposizioneAutomatica);
     cont.querySelector('#ar-svuota').addEventListener('click', svuota);
-    // Invio e scelta dall'elenco: una ricerca sola anche se arrivano tutti e due gli eventi
-    var ultimaCerca = { testo: '', il: 0 };
-    function cercaUnaVolta() {
+    // Invio e scelta dall'elenco: una ricerca sola per testo scritto. L'evento change arriva anche quando il campo
+    // perde il fuoco: se il testo è quello già cercato non ripeto la ricerca (Invio invece la ripete sempre).
+    var giaCercato = null;
+    cerca.addEventListener('input', function (e) {
+      giaCercato = null;
+      // scelta di un nome dall'elenco a discesa: cerco subito, senza aspettare Invio
+      if (e.inputType === 'insertReplacementText' && App.articoloPerNome(cerca.value)) {
+        giaCercato = cerca.value.trim();
+        cercaDaCampo();
+      }
+    });
+    cerca.addEventListener('change', function () {
       var t = cerca.value.trim();
-      if (t === ultimaCerca.testo && Date.now() - ultimaCerca.il < 600) return;
-      ultimaCerca = { testo: t, il: Date.now() };
+      if (!t || t === giaCercato) return;
+      giaCercato = t;
       cercaDaCampo();
-    }
-    cerca.addEventListener('change', cercaUnaVolta);
-    cerca.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); cercaUnaVolta(); } });
+    });
+    cerca.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      giaCercato = cerca.value.trim();
+      cercaDaCampo();
+    });
     var lato = cont.querySelector('#ar-lato');
     // modalità Disponi: trascinamento dall'elenco, "Metti" da tastiera, rilascio sull'elenco = togli dall'armadio
     lato.addEventListener('av-rilascio', function (e) {
@@ -1602,14 +1618,15 @@
 
       function htmlRiga(r, a) {
         var salvato = r.nuovo || r.attivo === false ? { scortaMin: '', puntoRiordino: '', scortaMax: '' } : r;
+        // stato e avvisi sotto il nome: la tabella resta stretta abbastanza da stare accanto all'elenco dei magazzini
         return '<tr data-art="' + h(a.id) + '">' +
-          '<td class="as-nome"><b>' + h(a.nome) + '</b> <span class="as-segni"></span><div class="as-msg" hidden></div></td>' +
-          '<td class="n as-giac"></td><td class="n as-media"></td><td class="n as-copertura"></td>' +
+          '<td class="as-nome"><b>' + h(a.nome) + '</b><div class="as-sotto"><span class="as-stato"></span><span class="as-segni"></span></div>' +
+          '<div class="as-msg" hidden></div></td>' +
+          '<td class="n as-giac"></td><td class="n as-consumo"><span class="as-media"></span><small class="as-copertura"></small></td>' +
           '<td class="n">' + campo('as-min', salvato.scortaMin, 'Scorta minima', a.nome) + '</td>' +
           '<td class="n">' + campo('as-rio', salvato.puntoRiordino, 'Punto di riordino', a.nome) + '</td>' +
           '<td class="n">' + campo('as-max', salvato.scortaMax, 'Scorta massima', a.nome) + '</td>' +
           '<td class="piccolo as-posto">' + (r.attivo !== false ? htmlPostoBreve(r) : '<span class="tenue">—</span>') + '</td>' +
-          '<td class="as-stato"></td>' +
           (puoAss ? '<td class="azioni"><button class="btn piccolo" type="button" data-togli="' + h(a.id) + '"></button></td>' : '') +
           '</tr>';
       }
@@ -1634,7 +1651,8 @@
         msg.hidden = !err;
         tr.querySelector('.as-giac').innerHTML = h(App.fmtNum(s.giacenza)) + ' <span class="tenue">' + h(a ? a.unita || '' : '') + '</span>';
         tr.querySelector('.as-media').innerHTML = m > 0 ? h(App.fmtNum(Math.round(m * 100) / 100)) : '<span class="tenue">—</span>';
-        tr.querySelector('.as-copertura').innerHTML = m > 0 ? h(Math.floor(s.giacenza / m)) + ' gg' : '<span class="tenue">—</span>';
+        var giorni = m > 0 ? Math.floor(s.giacenza / m) : null;
+        tr.querySelector('.as-copertura').textContent = giorni === null ? '' : giorni === 1 ? 'copre 1 giorno' : 'copre ' + giorni + ' giorni';
         tr.querySelector('.as-stato').innerHTML = htmlStato(s);
         var b = tr.querySelector('[data-togli]');
         if (b) { b.textContent = v.attivo ? 'Togli' : 'Rimetti'; b.classList.toggle('pericolo', v.attivo); }
@@ -1672,9 +1690,9 @@
         }
         tab.innerHTML = scheda('Assortimento di ' + h(rep.nome),
           '<div class="tabella-contenitore as-contenitore"><table class="tabella as-tabella"><thead><tr>' +
-          '<th>Articolo</th><th class="n">Giacenza</th><th class="n" title="Consumo medio al giorno negli ultimi 90 giorni">Consumo/giorno</th>' +
-          '<th class="n" title="Giorni coperti dalla giacenza al consumo medio">Copertura</th>' +
-          '<th class="n">Scorta min.</th><th class="n">Punto di riordino</th><th class="n">Scorta max</th><th>Posto</th><th>Stato</th>' + (puoAss ? '<th></th>' : '') +
+          '<th>Articolo e stato</th><th class="n">Giacenza</th>' +
+          '<th class="n" title="Consumo medio al giorno negli ultimi 90 giorni (consumi e perdite; per la farmacia centrale anche quello che manda agli altri magazzini) e giorni coperti dalla giacenza">Consumo al giorno</th>' +
+          '<th class="n">Scorta minima</th><th class="n">Punto di riordino</th><th class="n">Scorta massima</th><th>Posto</th>' + (puoAss ? '<th><span class="st-sr">Azioni</span></th>' : '') +
           '</tr></thead><tbody>' + righe.map(function (x) { return htmlRiga(x.r, x.a); }).join('') + '</tbody></table></div>',
           '<span class="nota">' + righe.length + ' articoli</span>', true);
         Array.prototype.forEach.call(tab.querySelectorAll('tr[data-art]'), function (tr) {

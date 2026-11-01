@@ -1,1 +1,117 @@
-/* Versione 3.0 – parte F (docs/NOVITA-3.0.md). Usare solo le variabili CSS di css/app.css. */
+/* Pagina "Oggi" (cruscotto), js/pagine-cruscotto.js. Versione 3.0 – parte F (docs/NOVITA-3.0.md).
+   Solo variabili di css/app.css: vale per il tema chiaro e per quello scuro. */
+
+/* ---------- testa: saluto e magazzino guardato ---------- */
+.cr-testa { display: flex; align-items: flex-end; gap: 12px 18px; flex-wrap: wrap; }
+.cr-saluto { flex: 1 1 280px; min-width: 0; }
+.cr-saluto h2 { font-size: 23px; font-weight: 800; letter-spacing: -.02em; }
+.cr-saluto p { color: var(--tenue); font-size: 12.5px; margin-top: 3px; }
+.cr-vivo { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cr-vivo::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--ok); vertical-align: 1px;
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); animation: cr-vivo 2.4s ease-out infinite; }
+@keyframes cr-vivo { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 6px transparent; } }
+.cr-vista { min-width: 220px; }
+.cr-vista select { min-width: 0; }
+
+/* ---------- indicatori ---------- */
+.cr-indicatori { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.cr-indicatori .cr-largo { grid-column: span 2; }
+.cr-ind { min-height: 118px; padding-right: 44px; }
+.cr-ind .valore { margin-top: 2px; }
+.cr-ico { position: absolute; right: 12px; top: 12px; width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; font-size: 14px; font-weight: 800;
+  background: color-mix(in srgb, var(--ind-colore, var(--primario)) 11%, var(--superficie)); color: var(--ind-colore, var(--primario)); font-family: var(--carattere-titoli); }
+.cr-largo .valore { font-size: 31px; }
+.cr-nota b { color: var(--testo); font-weight: 700; }
+.cr-nota .cr-urgente, .cr-urgente { color: var(--pericolo); }
+.cr-delta { font-size: 10px; margin-left: 2px; }
+.cr-delta.su { color: var(--primario); }
+.cr-delta.giu { color: var(--tenue); }
+/* barretta della ripartizione (valore per magazzino, scadenze 30/90) */
+.cr-quota { display: flex; gap: 2px; height: 6px; margin-top: 9px; border-radius: 3px; overflow: hidden; background: var(--linea); }
+.cr-quota span { height: 100%; min-width: 3px; transition: flex-grow 600ms var(--curva); }
+.cr-legenda { display: flex; flex-wrap: wrap; gap: 3px 14px; margin-top: 7px; font-size: 11.5px; color: var(--tenue); }
+.cr-legenda span { white-space: nowrap; }
+.cr-legenda b { color: var(--testo); font-weight: 600; font-variant-numeric: tabular-nums; }
+.cr-legenda i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+.cr-spark { display: block; height: 28px; margin-top: 6px; }
+.grafico-scintilla { display: block; width: 100%; height: 100%; overflow: visible; }
+.grafico-anello { display: block; width: 100%; height: 100%; }
+
+/* ---------- griglia dei grafici ---------- */
+.cr-griglia { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; align-items: stretch; }
+.cr-griglia > .scheda { display: flex; flex-direction: column; min-width: 0; }
+.cr-griglia > .scheda > .scheda-corpo { flex: 1; display: flex; flex-direction: column; }
+.cr-consumi, .cr-top { grid-column: span 2; }
+.cr-grafico { position: relative; height: 250px; padding: 12px 14px 0; }
+.cr-grafico.alto { height: 280px; }
+.cr-tela { width: 100%; height: 100%; }
+.cr-grafico-vuoto { height: 100%; display: grid; place-items: center; text-align: center; color: var(--tenue); font-size: 13px; padding: 0 18px;
+  background-image: linear-gradient(var(--griglia) 1px, transparent 1px), linear-gradient(90deg, var(--griglia) 1px, transparent 1px); background-size: 22px 22px; border-radius: 6px; }
+.cr-sintesi { padding: 6px 18px 12px; font-size: 11.5px; color: var(--tenue); font-variant-numeric: tabular-nums; }
+
+/* scelta della misura (Unità / Valore €) */
+.cr-segmenti { display: inline-flex; border: 1px solid var(--linea-forte); border-radius: var(--raggio-piccolo); overflow: hidden; background: var(--superficie-2); }
+.cr-segmenti button { border: 0; background: transparent; padding: 3px 11px; font-size: 12px; font-weight: 600; color: var(--tenue); cursor: pointer; transition: background-color var(--durata) var(--curva), color var(--durata) var(--curva); }
+.cr-segmenti button + button { border-left: 1px solid var(--linea-forte); }
+.cr-segmenti button[aria-pressed="true"] { background: var(--primario-pieno); color: var(--primario-testo); }
+.cr-segmenti button:focus-visible { outline-offset: -2px; }
+
+/* ---------- cosa fare adesso ---------- */
+.cr-fare-elenco { list-style: none; margin: 0; padding: 8px; display: grid; gap: 4px; }
+.cr-azione { position: relative; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 11px; align-items: center; padding: 9px 10px; border-radius: var(--raggio-piccolo);
+  text-decoration: none; color: inherit; border: 1px solid transparent; transition: background-color var(--durata) var(--curva), border-color var(--durata) var(--curva); }
+.cr-azione:hover { background: var(--superficie-2); border-color: var(--linea); }
+.cr-azione::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; background: transparent; }
+.cr-azione.p3::before { background: var(--pericolo); }
+.cr-azione.p2::before { background: var(--attenzione); }
+.cr-a-ico { width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; font-size: 16px; background: var(--primario-chiaro); }
+.cr-azione.p3 .cr-a-ico { background: var(--pericolo-chiaro); }
+.cr-azione.p2 .cr-a-ico { background: var(--attenzione-chiaro); }
+.cr-a-testo { min-width: 0; }
+.cr-a-testo b { display: block; font-weight: 600; line-height: 1.3; }
+.cr-a-testo small { display: block; color: var(--tenue); font-size: 12px; line-height: 1.35; margin-top: 1px; }
+.cr-vai { color: var(--primario); font-weight: 700; transition: transform var(--durata) var(--curva); }
+.cr-azione:hover .cr-vai, .cr-azione:focus-visible .cr-vai { transform: translateX(3px); }
+.cr-tutto-ok { flex: 1; display: grid; place-items: center; align-content: center; gap: 4px; text-align: center; padding: 28px 18px; min-height: 200px; }
+.cr-tutto-ok b { font-family: var(--carattere-titoli); font-size: 16px; }
+.cr-spunta { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-size: 22px; font-weight: 800; color: var(--ok); background: var(--ok-chiaro); margin-bottom: 6px;
+  animation: cr-spunta 600ms var(--curva); }
+@keyframes cr-spunta { from { transform: scale(.6); opacity: 0; } }
+
+/* ---------- elenchi ---------- */
+.cr-num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cr-tipo { min-width: 104px; font-size: 12.5px; font-weight: 600; }
+.cr-altri { padding: 8px 18px; }
+
+/* ---------- schermi stretti ---------- */
+@media (max-width: 1240px) {
+  .cr-griglia { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cr-consumi { grid-column: 1 / -1; }
+  .cr-top { grid-column: auto; }
+}
+@media (max-width: 1100px) {
+  .cr-indicatori { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .cr-griglia { grid-template-columns: minmax(0, 1fr); }
+  .cr-consumi, .cr-top { grid-column: auto; }
+}
+@media (max-width: 600px) {
+  .cr-saluto h2 { font-size: 19px; }
+  .cr-vista { min-width: 0; flex: 1 1 100%; }
+  .cr-indicatori { gap: 10px; }
+  .cr-ind { min-height: 0; padding: 12px 12px 11px; }
+  .cr-ico { display: none; }
+  .cr-ind .titolo { font-size: 10px; letter-spacing: .06em; }
+  .cr-largo .valore { font-size: 26px; }
+  .cr-grafico, .cr-grafico.alto { height: 230px; padding: 10px 8px 0; }
+  #cr-g-tipi { height: 260px; }
+  .cr-tipo { min-width: 0; }
+  .cr-controllare .elenco-semplice li, .cr-movimenti-oggi .elenco-semplice li { flex-wrap: wrap; }
+  /* azioni rapide: due per riga, senza i tasti rapidi (sul telefono non c'è la tastiera) */
+  .cr-azioni { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .cr-azioni .btn { white-space: normal; text-align: left; justify-content: flex-start; padding: 9px 10px; font-size: 13px; line-height: 1.25; min-height: 44px; }
+  .cr-azioni .btn:first-child { grid-column: 1 / -1; justify-content: center; }
+  .cr-azioni kbd { display: none; }
+  .cr-griglia .scheda-testa .nota { flex-basis: 100%; margin-top: -6px; }
+}

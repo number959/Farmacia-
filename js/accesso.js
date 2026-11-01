@@ -1,7 +1,9 @@
 /*
  * Schermate di accesso a tutta pagina: primo amministratore, accesso con nome utente e password,
- * cambio obbligatorio della password provvisoria, server non raggiungibile.
- * Nome e logo della struttura arrivano da /api/stato (pubblico).
+ * secondo passo della verifica in due passaggi (codice dell'app o codice di recupero, "ricorda questo computer"),
+ * attivazione obbligatoria della verifica (criterio dell'amministratore), cambio obbligatorio della password provvisoria,
+ * server non raggiungibile.
+ * Nome del prodotto, struttura e logo arrivano da /api/stato (pubblico). Versione 3.0: parte C (docs/NOVITA-3.0.md).
  */
 (function (root) {
   'use strict';
@@ -9,6 +11,8 @@
   var App = root.App;
   var Api = root.Api;
   var h = App.h;
+
+  var MARCHIO = 'brand/logo.png'; // logo incorporato (impostazione logo = '')
 
   var Accesso = {
     stato: null // ultima risposta di /api/stato
@@ -41,26 +45,47 @@
     }
   };
 
-  /* Disegna la scheda centrale con il marchio della struttura. */
-  function mostra(titolo, corpo) {
+  /* Marchio della schermata: logo ('' = incorporato, 'nessuno' = niente, altrimenti l'immagine caricata), nome del prodotto e struttura. */
+  function testata() {
     var st = Accesso.stato || {};
     // con i dati caricati (sessione scaduta) valgono le impostazioni attuali, altrimenti quelle di /api/stato
     var imp = (App.S && App.S.impostazioni) || null;
-    var struttura = (imp && imp.struttura) || st.struttura || 'Clinica Posillipo';
+    var fonte = imp || st;
+    var prodotto = fonte.nomeProdotto || st.nomeProdotto || 'Gestionale Farmacia';
+    var struttura = fonte.struttura || st.struttura || '';
     var sottotitolo = imp ? (imp.sottotitolo || '') : (st.sottotitolo || '');
     var logo = imp ? imp.logo : st.logo;
+    var src = logo === 'nessuno' ? '' : (logo || MARCHIO);
+    return '<header class="accesso-testata">' +
+      // il nome è scritto qui sotto: il logo è solo decorativo per chi usa il lettore dello schermo
+      (src ? '<div class="accesso-logo"><img src="' + h(src) + '" alt="" data-logo></div>' : '') +
+      '<div class="accesso-nome-prodotto">' + h(prodotto) + '</div>' +
+      (struttura || sottotitolo ? '<div class="accesso-struttura">' + h(struttura) + (struttura && sottotitolo ? ' · ' : '') +
+        (sottotitolo ? '<span>' + h(sottotitolo) + '</span>' : '') + '</div>' : '') +
+      '</header>';
+  }
+
+  /*
+   * Disegna la scheda centrale con il marchio. opz.larga: scheda più larga (attivazione guidata con il codice QR).
+   */
+  function mostra(titolo, corpo, opz) {
+    opz = opz || {};
+    var st = Accesso.stato || {};
     var s = schermo();
     s.innerHTML =
-      '<div class="accesso-scheda" role="main">' +
-      '<div class="accesso-marchio"><div class="logo">' +
-      (logo ? '<img src="' + h(logo) + '" alt="">'
-        : '<svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true"><path d="M13 6h6v7h7v6h-7v7h-6v-7H6v-6h7z" fill="#fff"/></svg>') +
-      '</div><div><div class="nome">' + h(struttura) + '</div><div class="sotto">' + h(sottotitolo) + '</div></div></div>' +
-      '<div class="accesso-prodotto">Gestionale Farmacia · carico e scarico</div>' +
-      (titolo ? '<h2>' + h(titolo) + '</h2>' : '') +
+      '<div class="accesso-scheda' + (opz.larga ? ' accesso-larga' : '') + '" role="main">' +
+      testata() +
+      (titolo ? '<h2 id="accesso-titolo">' + h(titolo) + '</h2>' : '') +
       '<div class="accesso-corpo">' + corpo + '</div>' +
       (st.versione ? '<p class="accesso-versione">Versione ' + h(st.versione) + '</p>' : '') +
       '</div>';
+    // un logo che non si carica (file mancante, immagine rovinata) sparisce invece di mostrare l'icona rotta
+    var img = s.querySelector('img[data-logo]');
+    if (img) {
+      var togli = function () { var box = img.closest('.accesso-logo'); if (box) box.remove(); };
+      img.addEventListener('error', togli);
+      if (img.complete && !img.naturalWidth) togli();
+    }
     if (s.hidden) {
       var a = document.activeElement;
       var dove = a && a !== document.body ? a.closest('#app, #modale') : null;
@@ -71,7 +96,7 @@
     s.hidden = false;
     if (App.aggiornaInerte) App.aggiornaInerte();
     // fuoco subito (non dopo un ritardo: chi scrive in fretta non deve finire nel campo sbagliato)
-    var primo = s.querySelector('input:not([hidden]):not([readonly])');
+    var primo = s.querySelector('input:not([hidden]):not([readonly]):not([type=checkbox])');
     if (primo) primo.focus();
     return s;
   }
@@ -94,6 +119,8 @@
     attesa('Collegamento al server…');
     Api.richiesta('GET', '/api/stato', undefined, { senza401: true, senzaRitentativi: true }).then(function (st) {
       Accesso.stato = st || {};
+      // tema e colore predefiniti per la schermata di accesso (li applica chi disegna l'aspetto, js/app.js)
+      try { document.dispatchEvent(new CustomEvent('gf-stato', { detail: Accesso.stato })); } catch (e) { /* browser vecchio */ }
       if (!st.inizializzato) {
         if (st.daServer) primoAmministratore(); else nonInizializzato();
         return;
@@ -106,12 +133,12 @@
   };
 
   function attesa(testo) {
-    mostra('', '<p class="accesso-attesa">' + h(testo) + '</p>');
+    mostra('', '<p class="accesso-attesa" role="status">' + h(testo) + '</p>');
   }
 
   function serverNonRaggiungibile(e) {
     var s = mostra('Server non raggiungibile',
-      '<div class="banda pericolo"><p>' + h(e && e.stato ? e.message : 'Il programma non riesce a collegarsi al server del Gestionale Farmacia.') + '</p></div>' +
+      '<div class="banda pericolo"><p>' + h(e && e.stato ? e.message : 'Il programma non riesce a collegarsi al server.') + '</p></div>' +
       '<p>Controlla che il PC sia collegato alla rete della clinica e che il server sia acceso. Riprovo da solo tra pochi secondi.</p>' +
       '<p class="piccolo tenue">Indirizzo: ' + h(location.origin) + '</p>' +
       '<div class="accesso-azioni"><button class="btn primario" type="button" id="acc-riprova">Riprova adesso</button></div>');
@@ -135,7 +162,7 @@
 
   function primoAmministratore() {
     var s = mostra('Crea il primo amministratore',
-      '<p>Benvenuto. Questo è il primo avvio: crea l’utente <b>amministratore</b>, che potrà poi creare gli utenti per farmacia, reparti e direzione.</p>' +
+      '<p>Benvenuto. Questo è il primo avvio: crea l’utente <b>amministratore</b>, che potrà poi creare gli utenti per la farmacia, i magazzini e la direzione.</p>' +
       '<form id="acc-form" class="accesso-modulo" novalidate>' +
       campo('acc-user', 'Nome utente (per entrare)', 'text', 'username') +
       campo('acc-nome', 'Nome e cognome', 'text', 'name') +
@@ -173,9 +200,27 @@
   /*
    * Modulo di accesso. opz.scaduta: la sessione è scaduta mentre si lavorava
    * (la pagina sotto resta com'è: dopo l'accesso si risincronizza e si continua).
+   * Il server risponde 401 anche quando la sessione è ancora valida ma l'amministratore ha reso obbligatoria la verifica
+   * in due passaggi: in quel caso non serve la password, si passa subito all'attivazione guidata.
    */
   Accesso.mostraAccesso = function (opz) {
     opz = opz || {};
+    if (opz.scaduta && App.utente) {
+      var io = App.utente;
+      attesa('Controllo la sessione…');
+      Api.richiesta('GET', '/api/stato', undefined, { senza401: true, senzaRitentativi: true }).then(function (st) {
+        if (st && st.utente && st.utente.id === io.id && st.utente.dueFattoriDaAttivare && !st.utente.cambioPassword) {
+          attivazioneObbligatoria(st.utente, st.permessi);
+        } else {
+          disegnaAccesso(opz);
+        }
+      }, function () { disegnaAccesso(opz); });
+      return;
+    }
+    disegnaAccesso(opz);
+  };
+
+  function disegnaAccesso(opz) {
     var s = mostra(opz.scaduta ? 'Sessione scaduta' : 'Accedi',
       (opz.scaduta ? '<p>Per sicurezza la sessione si chiude dopo un po’ di inattività. Accedi di nuovo per continuare: quello che stavi scrivendo resta nella pagina.</p>' : '') +
       '<form id="acc-form" class="accesso-modulo" novalidate>' +
@@ -196,6 +241,8 @@
       var b = s.querySelector('#acc-invia');
       b.disabled = true;
       Api.richiesta('POST', '/api/login', { username: username, password: pw }, { senza401: true }).then(function (r) {
+        // password giusta, ma serve anche il codice dell'app (la sessione non è ancora aperta)
+        if (r.dueFattori) { secondoPasso(username, r.sfida); return; }
         entra(r.utente, r.permessi);
       }, function (err) {
         b.disabled = false;
@@ -205,7 +252,149 @@
         erroreNelModulo(s, err.stato === 423 ? '🔒 ' + err.message : err.message);
       });
     });
-  };
+  }
+
+  /* ---------- verifica in due passaggi: secondo passo dell'accesso ---------- */
+
+  function soloCifre(v) { return String(v || '').replace(/\D/g, ''); }
+
+  function secondoPasso(username, sfida) {
+    var st = Accesso.stato || {};
+    var prodotto = (App.S && App.S.impostazioni && App.S.impostazioni.nomeProdotto) || st.nomeProdotto || 'Gestionale Farmacia';
+    var s = mostra('Verifica in due passaggi',
+      '<p id="acc-2fa-spiega">Apri l’app di autenticazione sul telefono (Google Authenticator, Microsoft Authenticator…) e scrivi il codice di 6 cifre di <b>' +
+      h(prodotto) + '</b> per l’utente <b>' + h(username) + '</b>.</p>' +
+      '<form id="acc-form-2fa" class="accesso-modulo" novalidate>' +
+      '<div id="acc-blocco-codice"><label class="campo"><span>Codice dell’app</span>' +
+      '<input id="acc-codice" class="accesso-codice" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="9" spellcheck="false" autocapitalize="off" aria-describedby="acc-codice-aiuto">' +
+      '</label><p class="piccolo tenue" id="acc-codice-aiuto">Il codice cambia ogni 30 secondi. Puoi anche incollarlo.</p></div>' +
+      '<div id="acc-blocco-recupero" hidden><label class="campo"><span>Codice di recupero</span>' +
+      '<input id="acc-recupero" class="accesso-recupero" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="xxxxx-xxxxx" aria-describedby="acc-recupero-aiuto">' +
+      '</label><p class="piccolo tenue" id="acc-recupero-aiuto">Uno dei 10 codici che hai salvato quando hai attivato la verifica. Ogni codice vale una volta sola.</p></div>' +
+      '<label class="spunta accesso-ricorda"><input type="checkbox" id="acc-ricorda"> Ricorda questo computer per 30 giorni</label>' +
+      '<p class="piccolo tenue accesso-ricorda-nota">Solo sul tuo computer, non su quelli che usano anche altri: qui non ti chiederò il codice.</p>' +
+      '<p class="accesso-errore" role="alert" hidden></p>' +
+      '<button class="btn primario" type="submit" id="acc-verifica">Verifica ed entra</button>' +
+      '</form>' +
+      '<div class="accesso-azioni accesso-azioni-2fa">' +
+      '<button class="btn fantasma piccolo" type="button" id="acc-usa-recupero" aria-controls="acc-blocco-recupero acc-blocco-codice">Usa un codice di recupero</button>' +
+      '<button class="btn fantasma piccolo" type="button" id="acc-indietro">Torna indietro</button></div>' +
+      '<details class="accesso-aiuto"><summary>Non hai il telefono?</summary>' +
+      '<p>Scegli «Usa un codice di recupero» e scrivi uno dei codici che hai salvato. Se non li hai più, chiedi all’amministratore di azzerare la verifica in due passaggi del tuo utente: poi entrerai con la sola password.</p></details>');
+    var form = s.querySelector('#acc-form-2fa');
+    var codice = s.querySelector('#acc-codice');
+    var recupero = s.querySelector('#acc-recupero');
+    var bloccoCodice = s.querySelector('#acc-blocco-codice');
+    var bloccoRecupero = s.querySelector('#acc-blocco-recupero');
+    var scambia = s.querySelector('#acc-usa-recupero');
+    var inviando = false;
+    var modoRecupero = false;
+
+    var spiega = s.querySelector('#acc-2fa-spiega');
+    var spiegaCodice = spiega.innerHTML;
+    function modo(recuperoSi, valore) {
+      modoRecupero = recuperoSi;
+      spiega.innerHTML = recuperoSi
+        ? 'Scrivi uno dei <b>codici di recupero</b> che hai salvato quando hai attivato la verifica (utente <b>' + h(username) + '</b>). Dopo, quel codice non vale più.'
+        : spiegaCodice;
+      bloccoCodice.hidden = recuperoSi;
+      bloccoRecupero.hidden = !recuperoSi;
+      scambia.textContent = recuperoSi ? 'Usa il codice dell’app' : 'Usa un codice di recupero';
+      erroreNelModulo(s, '');
+      var campoAttivo = recuperoSi ? recupero : codice;
+      if (valore !== undefined) campoAttivo.value = valore;
+      campoAttivo.focus();
+    }
+    scambia.addEventListener('click', function () { modo(!modoRecupero); });
+    s.querySelector('#acc-indietro').addEventListener('click', function () { disegnaAccesso({ username: username }); });
+
+    // si scrive (o si incolla) il codice: con 6 cifre parte da solo; "123 456" o "123-456" vanno bene
+    codice.addEventListener('input', function () {
+      var v = codice.value;
+      if (/[a-z]/i.test(v) && v.replace(/[^a-z0-9]/gi, '').length >= 8) { modo(true, v.trim()); return; } // era un codice di recupero
+      var c = soloCifre(v).slice(0, 6);
+      if (v !== c && /^[\d\s-]*$/.test(v)) codice.value = c;
+      if (c.length === 6 && !inviando) invia();
+    });
+    codice.addEventListener('paste', function (e) {
+      var testo = e.clipboardData ? e.clipboardData.getData('text') : '';
+      if (!testo) return;
+      e.preventDefault();
+      if (/[a-z]/i.test(testo)) { modo(true, testo.trim()); return; }
+      codice.value = soloCifre(testo).slice(0, 6);
+      if (codice.value.length === 6 && !inviando) invia();
+    });
+    form.addEventListener('submit', function (e) { e.preventDefault(); invia(); });
+
+    function invia() {
+      var corpo = { sfida: sfida, ricorda: s.querySelector('#acc-ricorda').checked };
+      if (modoRecupero) {
+        var r = recupero.value.trim();
+        if (r.replace(/[^a-z0-9]/gi, '').length < 10) { erroreNelModulo(s, 'Scrivi il codice di recupero (10 lettere e numeri, per esempio abcde-23456).'); recupero.focus(); return; }
+        corpo.codiceRecupero = r;
+      } else {
+        var c = soloCifre(codice.value);
+        if (c.length !== 6) { erroreNelModulo(s, 'Scrivi le 6 cifre che mostra l’app.'); codice.focus(); return; }
+        corpo.codice = c;
+      }
+      erroreNelModulo(s, '');
+      inviando = true;
+      var b = s.querySelector('#acc-verifica');
+      b.disabled = true;
+      Api.richiesta('POST', '/api/login/2fa', corpo, { senza401: true }).then(function (r) {
+        entra(r.utente, r.permessi, { codiciRimasti: r.codiciRimasti });
+      }, function (err) {
+        inviando = false;
+        b.disabled = false;
+        // verifica scaduta (più di 5 minuti) o troppi codici sbagliati: si ricomincia dalla password
+        if (err.stato === 401 || err.stato === 429) { disegnaAccesso({ username: username, errore: err.message }); return; }
+        erroreNelModulo(s, err.message);
+        var campoAttivo = modoRecupero ? recupero : codice;
+        campoAttivo.value = '';
+        campoAttivo.focus();
+      });
+    }
+  }
+
+  /* ---------- attivazione obbligatoria (criterio dell'amministratore) ---------- */
+
+  function attivazioneObbligatoria(utente, permessi) {
+    var s = mostra('Attiva la verifica in due passaggi',
+      '<div class="banda info"><p>Ciao <b>' + h(utente.nome || utente.username) + '</b>. L’amministratore ha chiesto la <b>verifica in due passaggi</b> per il tuo ruolo: ' +
+      'oltre alla password servirà un codice dal tuo telefono. Ci vogliono un paio di minuti.</p></div>' +
+      '<div id="acc-attivazione"></div>' +
+      '<div class="accesso-azioni"><button class="btn fantasma piccolo" type="button" id="acc-esci">Esci</button></div>', { larga: true });
+    s.querySelector('#acc-esci').addEventListener('click', esci);
+    var cont = s.querySelector('#acc-attivazione');
+    if (!App.Sicurezza || !App.Sicurezza.procedura) {
+      cont.innerHTML = '<div class="banda pericolo"><p>Questa pagina non riesce a mostrare l’attivazione: ricaricala (F5).</p></div>';
+      return;
+    }
+    App.Sicurezza.procedura(cont, {
+      utente: utente,
+      obbligatoria: true,
+      senza401: true,
+      etichettaFine: 'Fatto: entra nel programma',
+      alTermine: function (nuovo) {
+        entra(Object.assign({}, utente, nuovo || {}, { dueFattori: true, dueFattoriDaAttivare: false }), permessi);
+      },
+      alScadere: function (err) {
+        App.utente = null;
+        App.permessi = null;
+        disegnaAccesso({ username: utente.username, errore: err && err.message });
+      }
+    });
+  }
+
+  function esci() {
+    // sotto c'era il programma (sessione diventata limitata mentre si lavorava): App.esci toglie anche i dati dalla pagina
+    if (App.S && App.esci) { App.esci(); return; }
+    Api.richiesta('POST', '/api/logout', {}, { senza401: true }).catch(function () {}).then(function () {
+      App.utente = null;
+      App.permessi = null;
+      disegnaAccesso({});
+    });
+  }
 
   /* ---------- cambio obbligatorio della password provvisoria ---------- */
   function cambioPassword(utente, permessi) {
@@ -220,13 +409,7 @@
       '<button class="btn primario" type="submit" id="acc-invia">Salva e continua</button>' +
       '</form>' +
       '<div class="accesso-azioni"><button class="btn fantasma piccolo" type="button" id="acc-esci">Esci</button></div>');
-    s.querySelector('#acc-esci').addEventListener('click', function () {
-      Api.richiesta('POST', '/api/logout', {}, { senza401: true }).catch(function () {}).then(function () {
-        App.utente = null;
-        App.permessi = null;
-        Accesso.mostraAccesso();
-      });
-    });
+    s.querySelector('#acc-esci').addEventListener('click', esci);
     s.querySelector('#acc-form').addEventListener('submit', function (e) {
       e.preventDefault();
       var attuale = s.querySelector('#acc-attuale').value;
@@ -239,28 +422,34 @@
       erroreNelModulo(s, '');
       var b = s.querySelector('#acc-invia');
       b.disabled = true;
-      Api.richiesta('POST', '/api/password', { attuale: attuale, nuova: pw }, { senza401: true }).then(function () {
-        utente.cambioPassword = false;
-        entra(utente, permessi);
+      Api.richiesta('POST', '/api/password', { attuale: attuale, nuova: pw }, { senza401: true }).then(function (r) {
+        // il server rimanda l'utente aggiornato (per esempio: ora deve attivare la verifica in due passaggi)
+        var nuovo = Object.assign({}, utente, (r && r.utente) || {}, { cambioPassword: false });
+        entra(nuovo, permessi);
       }, function (err) {
         b.disabled = false;
-        if (err.stato === 401) { Accesso.mostraAccesso({ username: utente.username }); return; }
+        if (err.stato === 401) { disegnaAccesso({ username: utente.username }); return; }
         erroreNelModulo(s, err.message);
       });
     });
   }
 
   /* ---------- ingresso nel programma ---------- */
-  function entra(utente, permessi) {
+  function entra(utente, permessi, opz) {
+    opz = opz || {};
     if (!utente) { Accesso.mostraAccesso(); return; }
     if (utente.cambioPassword) { cambioPassword(utente, permessi); return; }
+    if (utente.dueFattoriDaAttivare) { attivazioneObbligatoria(utente, permessi); return; }
     var primoIngresso = !App.pronta || !App.S;
     if (primoIngresso) attesa('Carico i dati…');
-    App.entra(utente, permessi).catch(function (e) {
+    App.entra(utente, permessi).then(function () {
+      // entrato con un codice di recupero: quanti ne restano
+      if (opz.codiciRimasti !== undefined && App.Sicurezza && App.Sicurezza.avvisoRecupero) App.Sicurezza.avvisoRecupero(opz.codiciRimasti);
+    }, function (e) {
       if (e && e.stato === 401) {
         // l'accesso è riuscito ma la sessione non vale già più (cookie bloccati dal browser, utente disattivato…):
         // qui la schermata di accesso non torna da sola, la rimetto io
-        Accesso.mostraAccesso({ username: utente.username, errore: 'Non riesco a mantenere la sessione aperta: accedi di nuovo. Se si ripete, controlla che il browser accetti i cookie per questo indirizzo.' });
+        disegnaAccesso({ username: utente.username, errore: 'Non riesco a mantenere la sessione aperta: accedi di nuovo. Se si ripete, controlla che il browser accetti i cookie per questo indirizzo.' });
         return;
       }
       console.error(e);

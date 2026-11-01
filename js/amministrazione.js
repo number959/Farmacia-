@@ -91,7 +91,19 @@
   function collegaRuolo(m) {
     var sel = m.querySelector('#u-ruolo');
     var box = m.querySelector('#u-reparti');
-    function aggiorna() { box.hidden = sel.value !== 'reparto'; }
+    // dopo la scelta del ruolo, su tutta la larghezza, in breve cosa fa
+    var desc = document.createElement('p');
+    desc.className = 'campo largo piccolo tenue';
+    desc.id = 'u-ruolo-desc';
+    desc.setAttribute('aria-live', 'polite');
+    var campo = sel.closest('.campo');
+    campo.parentNode.insertBefore(desc, campo.nextSibling);
+    sel.setAttribute('aria-describedby', 'u-ruolo-desc');
+    function aggiorna() {
+      box.hidden = sel.value !== 'reparto';
+      var t = DESCRIZIONE_RUOLI[sel.value] || '';
+      desc.textContent = t ? t.charAt(0).toUpperCase() + t.slice(1) + '.' : '';
+    }
     sel.addEventListener('change', aggiorna);
     aggiorna();
   }
