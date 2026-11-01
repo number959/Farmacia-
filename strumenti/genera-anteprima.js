@@ -8,7 +8,7 @@
  *
  * Marchio neutro (docs/NOVITA-3.0.md, "Anteprima pubblicata"): l'anteprima pubblica non usa il marchio né il nome di
  * una struttura reale. Quindi:
- *   - la cartella brand/ non si copia; le videoguide nemmeno (sono registrate sul programma installato, con il marchio);
+ *   - la cartella brand/ non si copia; le videoguide sì (sono registrate con il marchio neutro "Clinica Demo");
  *   - nei file copiati i nomi della struttura rimasti nei commenti e nei valori di riserva diventano nomi dimostrativi;
  *   - il modulo Excel della Nota consumi (js/modello.js) si ripulisce: intestazione, società, città, codice del modulo,
  *     autore e percorso originale diventano dimostrativi;
@@ -152,7 +152,13 @@ for (const rel of file) {
   else if (/^(js|css|anteprima)\//.test(rel)) fs.writeFileSync(a, neutro(fs.readFileSync(da, 'utf8')));
   else fs.copyFileSync(da, a);
 }
-// caratteri sì; marchio della struttura e videoguide no (l'anteprima pubblicata non usa il marchio di una struttura reale)
+// caratteri e videoguide sì (i video sono registrati con il marchio neutro "Clinica Demo", vedi strumenti/genera-videoguide.js);
+// marchio della struttura no (l'anteprima pubblicata non usa il marchio di una struttura reale)
+const videoguide = path.join(RADICE, 'guide');
+if (fs.existsSync(videoguide)) {
+  fs.mkdirSync(path.join(OUT, 'guide'), { recursive: true });
+  fs.readdirSync(videoguide).filter((n) => /^[a-z0-9-]+\.(mp4|jpg|vtt)$/.test(n)).forEach((n) => fs.copyFileSync(path.join(videoguide, n), path.join(OUT, 'guide', n)));
+}
 const caratteri = path.join(RADICE, 'fonts');
 if (fs.existsSync(caratteri)) {
   fs.mkdirSync(path.join(OUT, 'fonts'), { recursive: true });
@@ -178,7 +184,7 @@ const trovati = [];
     if (m) trovati.push(path.relative(OUT, f) + ': «' + m[0] + '»');
   });
 })(OUT);
-if (fs.existsSync(path.join(OUT, 'brand')) || fs.existsSync(path.join(OUT, 'guide'))) trovati.push('cartella brand/ o guide/ copiata');
+if (fs.existsSync(path.join(OUT, 'brand'))) trovati.push('cartella brand/ copiata');
 if (trovati.length) {
   fs.rmSync(OUT, { recursive: true, force: true });
   throw new Error('L’anteprima conterrebbe nomi o marchi veri:\n  ' + trovati.join('\n  '));

@@ -757,8 +757,12 @@ Operazioni.prototype.caricaDemo = function (ctx) {
   var self = this;
   var r = this.database.scrivi(function (rev) {
     demo.articoli.forEach(function (a) {
-      self.db().prepare('INSERT INTO articoli (id, nome, categoria, unita, principio, prezzo, scorta_minima, attivo, versione, rev) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?)')
-        .run(a.id, a.nome, a.categoria, a.unita || '', a.principio || '', a.prezzo || 0, a.scortaMinima || 0, rev);
+      // anche confezione, pezzi per confezione, caratteristiche, giorni di consegna e fornitore (armadi e proposta d'ordine)
+      self.db().prepare('INSERT INTO articoli (id, nome, categoria, unita, principio, confezione, prezzo, scorta_minima, pezzi_confezione, attributi, lead_time, fornitore, attivo, versione, rev) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?)')
+        .run(a.id, a.nome, a.categoria, a.unita || '', a.principio || '', a.confezione || '', a.prezzo || 0, a.scortaMinima || 0,
+          a.pezziConfezione > 0 ? a.pezziConfezione : 1, JSON.stringify(Array.isArray(a.attributi) ? a.attributi : []),
+          typeof a.leadTime === 'number' ? a.leadTime : null, a.fornitore || '', rev);
     });
     demo.movimenti.forEach(function (m) {
       self.inserisciMovimento(ctx, rev, Object.assign({}, m, { operatore: 'Dati di prova', utenteId: null }));
