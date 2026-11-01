@@ -301,6 +301,13 @@ function avvia() {
   process.on('SIGINT', chiudi);
   process.on('SIGTERM', chiudi);
   process.on('SIGBREAK', chiudi);
+  // Windows: chiusura della finestra del programma (Node la riceve come SIGHUP e lascia qualche secondo per chiudere bene)
+  process.on('SIGHUP', chiudi);
+  // Chi avvia il programma con un canale IPC (le prove automatiche) chiede un arresto ordinato con il messaggio 'chiudi':
+  // su Windows i segnali non arrivano al processo, kill() lo termina subito come una mancanza di corrente.
+  if (typeof process.send === 'function') {
+    process.on('message', function (m) { if (m === 'chiudi') chiudi(); });
+  }
   // da qui in poi un errore imprevisto si registra ma il server resta in funzione
   process.removeAllListeners('uncaughtException');
   process.on('uncaughtException', function (e) {

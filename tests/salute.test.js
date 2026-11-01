@@ -39,7 +39,8 @@ async function avviaServer(dati, opz) {
   const comando = ESEGUIBILE || process.execPath;
   const prima = !ESEGUIBILE && opz && opz.precarica ? ['-r', opz.precarica] : [];
   const argomenti = (ESEGUIBILE ? [] : prima.concat([path.join(__dirname, '..', 'server', 'main.js')])).concat(['--porta', String(porta), '--dati', dati]);
-  const proc = spawn(comando, argomenti, { stdio: ['ignore', 'pipe', 'pipe'] });
+  // canale IPC: su Windows i segnali terminano subito il processo, l'arresto ordinato si chiede con il messaggio 'chiudi'
+  const proc = spawn(comando, argomenti, { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   let uscita = '';
   proc.stdout.on('data', (d) => { uscita += d; });
   proc.stderr.on('data', (d) => { uscita += d; });
@@ -53,7 +54,11 @@ async function avviaServer(dati, opz) {
   const fine = new Promise((ok) => proc.once('exit', ok));
   return {
     porta, base, dati, proc, uscita: () => uscita,
-    ferma: () => { proc.kill('SIGTERM'); return fine; },
+    ferma: () => {
+      if (process.platform === 'win32' && proc.connected) proc.send('chiudi');
+      else proc.kill('SIGTERM');
+      return fine;
+    },
     // spegnimento improvviso: niente copia di chiusura
     uccidi: () => { proc.kill('SIGKILL'); return fine; }
   };
@@ -103,8 +108,7 @@ async function utente(admin, base, username, ruolo, reparti) {
 /* Il file si riapre e si chiude: il WAL rimasto dopo lo spegnimento improvviso finisce nel file principale. */
 function chiudiBene(file) {
   const db = new DatabaseSync(file);
-  db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-  db.close();
+  try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } finally { db.close(); }
   ['-wal', '-shm'].forEach((s) => { try { fs.unlinkSync(file + s); } catch (e) { /* non c'è */ } });
 }
 
@@ -120,12 +124,15 @@ function sovrascriviMezzo(file) {
 }
 
 function quickCheck(file) {
+  // il file va chiuso anche quando il controllo fallisce: su Windows un file aperto non si sposta (EBUSY) e il server
+  // avviato dopo non riuscirebbe a mettere da parte il file danneggiato
+  let db = null;
   try {
-    const db = new DatabaseSync(file, { readOnly: true });
-    const r = db.prepare('PRAGMA quick_check').all().map((x) => Object.values(x)[0]);
-    db.close();
-    return r.join(' ');
-  } catch (e) { return e.message; }
+    db = new DatabaseSync(file, { readOnly: true });
+    return db.prepare('PRAGMA quick_check').all().map((x) => Object.values(x)[0]).join(' ');
+  } catch (e) { return e.message; } finally {
+    if (db) { try { db.close(); } catch (e) { /* già chiuso */ } }
+  }
 }
 
 /* Seconda cartella lenta come un disco di rete carico: ogni file copiato in sottofondo aspetta ms millisecondi. */
