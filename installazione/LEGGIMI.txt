@@ -1,156 +1,466 @@
-GESTIONALE FARMACIA - CLINICA POSILLIPO (LONGEVITY INSTITUTE)
-Versione server multiutente 2.1
+NEFROCENTER PHARMACY 3.0 - CLINICA POSILLIPO (GRUPPO NEFROCENTER)
+Gestionale della farmacia ospedaliera - server multiutente
 ==============================================================
 
-Il programma è un solo file, GestionaleFarmacia.exe. Si installa sul server
-virtuale; le postazioni della clinica lo usano dal browser (Edge o Chrome),
-senza installare niente.
+Farmacia centrale e magazzini di piano, richieste, DDT interni con
+trasporto e ricezione, armadi, previsioni del fabbisogno, verifica in due
+passaggi e una base dati che si controlla e si cura da sola.
+
+Il programma è un solo file, GestionaleFarmacia.exe. Si installa sul
+server; le postazioni, i tablet e i telefoni della clinica lo usano dal
+browser (Edge o Chrome), senza installare niente.
+
+PERCHÉ IL FILE SI CHIAMA ANCORA GestionaleFarmacia.exe
+Il nome che si vede nel programma (NefroCenter Pharmacy) si cambia da
+Configura. Il nome del file invece resta quello della versione 2, come il
+nome dell'attività pianificata ("Gestionale Farmacia"), la regola del
+firewall, la cartella C:\GestionaleFarmacia e i file dati\farmacia.db e
+dati\accessi.db: così l'aggiornamento dalla 2.x è la sola sostituzione
+dell'exe, e restano valide le eccezioni dell'antivirus e i collegamenti.
 
 
-REQUISITI
----------
-- Server Windows a 64 bit (Windows Server 2016 o successivi, oppure Windows 10/11).
+INDICE
+------
+  1. Requisiti
+  2. Installazione sul server
+  3. Aggiornamento dalla versione 2.x (avviene da solo)
+  4. Dalle postazioni
+  5. Utenti e ruoli
+  6. Verifica in due passaggi (2FA): ora del server, chiave, telefono perso
+  7. Accesso d'emergenza (--reimposta-password)
+  8. Dati, giornale e copie di sicurezza
+  9. Seconda cartella delle copie (disco esterno o di rete)
+ 10. Se la base dati si rovina: la cura automatica e la pagina Sistema
+ 11. Spostare il programma su un altro server
+ 12. HTTPS (e fotocamera di telefoni e tablet)
+ 13. Lettore di codici a barre
+ 14. Guide
+ 15. Dalla versione per un solo PC
+ 16. Problemi frequenti
+
+
+1. REQUISITI
+------------
+- Server Windows a 64 bit (Windows Server 2016 o successivi, oppure
+  Windows 10/11), acceso sempre.
 - Una porta TCP libera (predefinita 8080) raggiungibile dalle postazioni.
+- Ora del server giusta e sincronizzata da sola (NTP): serve alla verifica
+  in due passaggi (vedi capitolo 6).
+- Spazio sul disco: almeno 2 GB liberi oltre alla base dati. Le copie
+  orarie verificate e il giornale delle modifiche occupano spazio; la
+  pagina Sistema dice quanto e avvisa quando il disco è quasi pieno.
+- Facoltativi: un disco esterno o una cartella di rete per la seconda
+  copia; un certificato HTTPS (necessario per la fotocamera dei telefoni).
 
 
-INSTALLAZIONE SUL SERVER
-------------------------
+2. INSTALLAZIONE SUL SERVER
+---------------------------
 1. Copia la cartella "GestionaleFarmacia" in C:\GestionaleFarmacia
-   (non in "Programmi": il programma scrive i dati nella sottocartella "dati").
+   (non in "Programmi": il programma scrive i dati nella sottocartella
+   "dati").
 2. Tasto destro su "Installa servizio.bat" > "Esegui come amministratore".
    Lo script:
-   - crea un'attività pianificata "Gestionale Farmacia" che avvia il programma
-     all'accensione del server, anche senza nessuno collegato, e ogni 5 minuti
-     controlla che sia in funzione (se si è fermato lo riavvia);
-   - lascia la cartella accessibile solo ad amministratori e SYSTEM;
+   - crea un'attività pianificata "Gestionale Farmacia" che avvia il
+     programma all'accensione del server, anche senza nessuno collegato,
+     come utente SYSTEM, e ogni 5 minuti controlla che sia in funzione
+     (se si è fermato lo riavvia);
+   - lascia la cartella accessibile SOLO ad amministratori e SYSTEM: dentro
+     ci sono i dati, le copie e la chiave della verifica in due passaggi
+     (vedi capitolo 6);
    - apre la porta 8080 nel firewall di Windows;
    - avvia il programma e mostra gli indirizzi da usare.
-   Per un'altra porta: apri il "Prompt dei comandi" come amministratore, vai
-   nella cartella e scrivi
+   Per un'altra porta: apri il "Prompt dei comandi" come amministratore e
+   scrivi
        cd C:\GestionaleFarmacia
        "Installa servizio.bat" -Porta 8443
 3. Sul server stesso apri http://localhost:8080/ e crea l'AMMINISTRATORE
    (si può fare solo dal server, per sicurezza).
-4. Entra come amministratore: in "Configura" controlla struttura e reparti,
-   in "Utenti" crea gli utenti delle persone che useranno il programma.
+4. Entra come amministratore e prepara il programma, in quest'ordine:
+   - "Configura" > "Marchio e nome del programma": nome, struttura, logo,
+     colore, tema predefinito; "Previsioni e ordini": giorni di consegna
+     del fornitore e ogni quanti giorni si ordina;
+   - "Magazzini e assortimento": la farmacia centrale e un magazzino per
+     ogni piano o reparto, con piano e livello (-1 seminterrato, 0 piano
+     terra, 1, 2...); per ognuno gli armadi (armadio, frigorifero,
+     cassettiera, carrello, cassaforte);
+   - "Articoli": crea gli articoli o importali da Excel;
+   - "Magazzini e assortimento" > "Assortimento": gli articoli di ogni
+     magazzino con scorta minima, punto di riordino e scorta massima
+     (il farmacista può farlo per te);
+   - "Utenti": un utente per persona, con il ruolo e, per i responsabili
+     di magazzino, i magazzini di cui sono responsabili;
+   - "Sicurezza": per chi è obbligatoria la verifica in due passaggi;
+   - "Sistema": controlla che il semaforo sia verde e, se puoi, imposta
+     la seconda cartella delle copie (capitolo 9).
 
-Per provarlo senza installare: doppio clic su GestionaleFarmacia.exe. Si apre
-una finestra con gli indirizzi; chiudendola il programma si ferma.
+Per provarlo senza installare: doppio clic su GestionaleFarmacia.exe. Si
+apre una finestra con gli indirizzi; chiudendola il programma si ferma.
 
-Windows potrebbe mostrare "Windows ha protetto il PC" perché il file non ha
-una firma digitale: "Ulteriori informazioni" > "Esegui comunque". Se l'antivirus
-lo blocca, aggiungi un'eccezione per C:\GestionaleFarmacia\GestionaleFarmacia.exe.
+Windows potrebbe mostrare "Windows ha protetto il PC" perché il file non
+ha una firma digitale: "Ulteriori informazioni" > "Esegui comunque". Se
+l'antivirus lo blocca, aggiungi un'eccezione per
+C:\GestionaleFarmacia\GestionaleFarmacia.exe.
 
 
-DALLE POSTAZIONI
-----------------
+3. AGGIORNAMENTO DALLA VERSIONE 2.x (AVVIENE DA SOLO)
+----------------------------------------------------
+1. Avvisa i colleghi e, se vuoi, da Configura fai "Crea una copia adesso".
+2. "Ferma servizio.bat" (tasto destro > Esegui come amministratore).
+3. Sostituisci GestionaleFarmacia.exe con quello nuovo e copia accanto
+   anche i file nuovi dello zip (LEGGIMI.txt, script, licenze).
+   NON toccare la cartella "dati".
+4. "Avvia servizio.bat" (oppure aspetta: entro 5 minuti riparte da solo).
+
+Al primo avvio, da solo e senza perdere niente, il programma:
+- controlla farmacia.db e accessi.db;
+- porta la base dati alla versione 3 (schema 3): i reparti diventano
+  MAGAZZINI, quello che era la "Farmacia" (centrale) diventa la FARMACIA
+  CENTRALE, gli altri magazzini di piano; aggiunge il magazzino di sistema
+  "In transito" (non compare negli elenchi: è la merce in viaggio con un
+  DDT); tutti i movimenti, gli articoli e gli utenti restano;
+- prepara la verifica in due passaggi: è spenta per tutti finché
+  l'amministratore non decide altrimenti; la chiave dati\chiave-2fa.key
+  si crea alla prima attivazione;
+- inizia il giornale delle modifiche (dati\giornale\) e le copie orarie
+  verificate;
+- verifica a poco a poco le copie della 2.x già presenti in dati\backup\
+  (una ogni 5 minuti) e le tiene secondo le nuove regole (capitolo 8).
+I ruoli restano gli stessi, con nomi nuovi: Reparto è ora "Responsabile
+di magazzino", Consultazione è "Direzione (sola lettura)"; gli utenti di
+reparto restano sui loro reparti, che ora sono magazzini.
+
+Dopo l'aggiornamento l'amministratore:
+- in "Magazzini e assortimento" controlla nome, piano e livello di ogni
+  magazzino (i reparti di serie hanno già un piano), crea gli armadi e,
+  con il farmacista, l'assortimento ("Proponi dai consumi" aiuta);
+- in "Sicurezza" sceglie per chi è obbligatoria la 2FA;
+- in "Sistema" guarda il semaforo.
+I browser già aperti si aggiornano da soli; se una pagina sembra strana,
+basta ricaricarla (F5).
+Una copia della 2.x ripristinata da Configura si aggiorna da sola allo
+schema 3 come all'avvio.
+
+Tornare alla 2.x non è previsto e non va fatto: la 2.x non conosce
+magazzini, richieste e DDT. Per sicurezza tieni da parte la copia fatta al
+punto 1.
+
+
+4. DALLE POSTAZIONI
+-------------------
 Apri con Edge o Chrome l'indirizzo del server, per esempio
     http://192.168.1.20:8080/
 (l'indirizzo esatto lo mostra l'installazione). Conviene salvarlo nei
-preferiti o creare un collegamento sul desktop.
+preferiti o creare un collegamento sul desktop. Sui telefoni e tablet si
+può "aggiungere alla schermata Home" dal menu del browser.
 
 
-UTENTI E RUOLI
---------------
-- Amministratore: tutto, compresi utenti, impostazioni, reparti e copie di sicurezza.
-- Farmacista: carichi, trasferimenti, consumi, perdite, inventario, articoli,
-  correzioni del registro mensile, annullo di qualsiasi movimento, registro attività.
-- Reparto: consumi e perdite solo dei propri reparti; consulta tutto il resto.
-- Consultazione: solo lettura, stampe ed Excel (per esempio la direzione).
+5. UTENTI E RUOLI
+-----------------
+- Amministratore: tutto, compresi utenti, magazzini e armadi, sicurezza,
+  Sistema, copie di sicurezza e impostazioni.
+- Farmacista (farmacia centrale): carichi dai fornitori, richieste da
+  evadere, DDT, consumi, perdite, inventario, articoli, assortimenti e
+  scorte, previsioni e proposta d'ordine, registro attività; annulla
+  qualsiasi movimento.
+- Responsabile di magazzino: solo nei magazzini assegnati registra
+  consumi e perdite, chiede merce alla farmacia, riceve i DDT, fa i resi,
+  dispone gli articoli negli armadi; consulta tutto il resto.
+- Direzione (sola lettura): vede tutto, stampa ed esporta in Excel.
 
-Ogni persona ha il proprio utente: ogni movimento porta il nome di chi l'ha
-registrato e il "Registro attività" conserva accessi e operazioni.
-Le password date dall'amministratore vanno cambiate al primo accesso.
+Ogni persona ha il proprio utente: ogni movimento, richiesta e DDT porta il
+nome di chi l'ha fatto e il "Registro attività" conserva accessi e
+operazioni. Le password date dall'amministratore vanno cambiate al primo
+accesso.
 Dopo 5 password sbagliate, quell'utente da quel computer resta bloccato per
 15 minuti (da altri computer può entrare); l'amministratore può sbloccarlo
 subito dandogli una nuova password. Dal server stesso (http://localhost) non
 si viene mai bloccati.
+Dopo 8 ore senza usarlo il programma chiede di nuovo la password.
+Più persone possono lavorare insieme: le modifiche degli altri compaiono
+da sole.
 
-ACCESSO D'EMERGENZA (password dell'amministratore dimenticata): sul server
-apri il "Prompt dei comandi" come amministratore e scrivi
+
+6. VERIFICA IN DUE PASSAGGI (2FA)
+---------------------------------
+Oltre alla password, chi ha la verifica attiva scrive il codice di 6 cifre
+che un'app del telefono cambia ogni 30 secondi (Google Authenticator,
+Microsoft Authenticator, FreeOTP, Aegis...). Ognuno la attiva dal proprio
+menu (le iniziali in alto a destra) > "Sicurezza dell'account" e salva i
+suoi 10 codici di recupero. L'amministratore, nella pagina "Sicurezza",
+sceglie per chi è obbligatoria (nessuno, amministratori, amministratori e
+farmacisti, tutti): chi deve averla viene guidato ad attivarla al primo
+accesso. La guida "Verifica in due passaggi" nella pagina Guida spiega
+tutto passo per passo.
+
+ORA DEL SERVER (IMPORTANTE)
+I codici dipendono dall'ora: se l'ora del server e quella del telefono
+sono diverse di oltre un minuto circa, i codici risultano sbagliati.
+- Il server deve sincronizzare l'ora da solo (NTP). In un dominio Windows
+  lo fa già con il controller di dominio. Altrimenti, nel "Prompt dei
+  comandi" come amministratore:
+      w32tm /config /manualpeerlist:"pool.ntp.org" /syncfromflags:manual /update
+      w32tm /resync
+  e per controllare:   w32tm /query /status
+  (nelle macchine virtuali verifica anche la sincronizzazione dell'ora
+  con l'host).
+- I telefoni devono avere "Data e ora automatiche" attivo.
+- Durante l'attivazione, se l'ora del server e del computer differiscono
+  di oltre 90 secondi, il programma mostra "Attenzione all'ora".
+
+LA CHIAVE DELLA 2FA E I PERMESSI DELLA CARTELLA DATI
+I segreti dei telefoni sono cifrati nel file accessi.db con una chiave che
+sta in un file a parte:
+    dati\chiave-2fa.key
+- Chi legge questo file e accessi.db potrebbe generare i codici: per
+  questo "Installa servizio.bat" lascia la cartella C:\GestionaleFarmacia
+  leggibile solo da amministratori e SYSTEM. Non condividere la cartella
+  in rete e non dare permessi ad altri utenti di Windows. Se usi --dati
+  con un'altra cartella, dalle gli stessi permessi (Proprietà >
+  Sicurezza: solo SYSTEM e Administrators), per esempio:
+      icacls "D:\DatiFarmacia" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F
+- Le copie di accessi.db nella cartella dati\backup portano con sé la
+  loro chiave (accessi_....chiave-2fa.key): chi rimette la cartella dati da
+  una copia non perde la 2FA. Nella SECONDA cartella (capitolo 9) la chiave
+  invece NON va, di proposito: lì ci sono solo copie e giornale.
+- Se il backup del server virtuale comprende tutta la cartella
+  C:\GestionaleFarmacia\dati, comprende anche la chiave: va bene così.
+- Se la chiave va persa (cartella dati rimessa senza quel file), all'accesso
+  compare "La chiave del server è cambiata": valgono ancora i codici di
+  recupero, oppure l'amministratore usa "Azzera" nella pagina Sicurezza e
+  l'utente riattiva la verifica. Non creare né modificare quel file a mano.
+
+TELEFONO PERSO O CAMBIATO
+- Telefono nuovo con quello vecchio in mano: "Sicurezza dell'account" >
+  "Cambia telefono".
+- Telefono perso: all'accesso "Usa un codice di recupero", poi "Cambia
+  telefono" (e, se serve, cambia la password).
+- Telefono e codici persi: l'amministratore preme "Azzera" accanto al nome
+  nella pagina Sicurezza.
+- L'amministratore stesso senza telefono né codici: accesso d'emergenza
+  (capitolo 7), che azzera anche la sua 2FA.
+
+
+7. ACCESSO D'EMERGENZA (--reimposta-password)
+---------------------------------------------
+Password dell'amministratore dimenticata, o amministratore senza telefono
+né codici di recupero: sul server apri il "Prompt dei comandi" come
+amministratore e scrivi
     cd C:\GestionaleFarmacia
     GestionaleFarmacia.exe --reimposta-password admin
-(al posto di "admin" il nome utente). Il programma mostra una password
-provvisoria, da cambiare al primo accesso. Funziona anche con il servizio
-in funzione.
-Più persone possono lavorare insieme: le modifiche degli altri compaiono da sole.
+(al posto di "admin" il nome utente). Il programma:
+- mostra una password provvisoria, da cambiare al primo accesso;
+- riattiva l'utente, se era disattivato;
+- AZZERA la sua verifica in due passaggi (con i codici di recupero e i
+  computer ricordati): se il criterio la richiede, al prossimo accesso il
+  programma guida a riattivarla.
+Funziona anche con il servizio in funzione e resta nel registro attività.
+Chi può aprire il Prompt dei comandi come amministratore sul server può
+farlo: anche per questo l'accesso al server va riservato a chi lo gestisce.
 
 
-DATI E COPIE DI SICUREZZA
--------------------------
+8. DATI, GIORNALE E COPIE DI SICUREZZA
+--------------------------------------
 Tutto sta nella cartella "dati" accanto al programma:
-  dati\farmacia.db      magazzino (articoli, reparti, movimenti, impostazioni)
-  dati\accessi.db       utenti, sessioni, registro attività
-  dati\backup\          copie automatiche di ogni giorno (ultime 30) e copie manuali
-  dati\log\             registro del server (server-AAAA-MM.log) ed eventuali
-                        errori di avvio (errori-avvio.log)
+  dati\farmacia.db          magazzino: articoli, magazzini, armadi,
+                            assortimenti, movimenti, richieste, DDT,
+                            impostazioni (con i file -wal e -shm)
+  dati\accessi.db           utenti, sessioni, 2FA, registro attività
+  dati\chiave-2fa.key       chiave che cifra i segreti della 2FA (cap. 6)
+  dati\configurazione.json  facoltativo: HTTPS, seconda cartella, porta
+  dati\salute.json          stato della pagina Sistema: storia di controlli
+                            e cure, crescita, ultima prova di ripristino,
+                            seconda cartella scelta dalla pagina. Se manca
+                            si ricrea (si perde solo la storia).
+  dati\backup\              copie di sicurezza (.db), ognuna con la sua
+                            scheda di verifica (.json); le copie di
+                            accessi.db anche con la loro chiave
+  dati\giornale\            giornale delle modifiche: un file al giorno
+                            (AAAA-MM-GG.jsonl)
+  dati\danneggiati\         c'è solo se una cura è servita: i file
+                            rovinati messi da parte, con la data
+  dati\log\                 registro del server (server-AAAA-MM.log) ed
+                            eventuali errori di avvio (errori-avvio.log)
 
-L'amministratore, da Configura, può creare una copia, scaricarla e ripristinarla.
-Consiglio: includi la cartella C:\GestionaleFarmacia\dati nel backup del server
-virtuale, oppure copia ogni tanto dati\backup su un altro disco.
+Non copiare, aprire o modificare farmacia.db e accessi.db mentre il
+programma è acceso: per avere una copia usa quelle di dati\backup (sono
+già verificate) o "Scarica" in Configura.
+
+GIORNALE DELLE MODIFICHE
+Dopo ogni registrazione il programma scrive le righe cambiate anche nel
+giornale del giorno e le forza sul disco. Se manca la corrente o il file
+del magazzino si rovina, il giornale permette di ricostruire tutto fino
+all'ultima registrazione. I file del giornale si tengono finché serve
+(fino alla copia più vecchia conservata) e poi si tolgono da soli.
+
+COPIE ORARIE A SCAGLIONI
+- Ogni ora, se qualcuno ha lavorato, e comunque una volta al giorno, il
+  programma copia farmacia.db e accessi.db; fa una copia anche alla
+  chiusura ordinata e subito dopo ogni cura o ripristino.
+- Ogni copia si riapre e si controlla ("verificata"); una copia non
+  riuscita non si usa mai e lo dice il semaforo della pagina Sistema.
+- Si conservano:
+      tutte le copie delle ultime 24 ore,
+      poi una al giorno per 14 giorni,
+      una alla settimana per 8 settimane,
+      una al mese per 12 mesi;
+  le copie fatte a mano e quelle "prima del ripristino": le ultime 30.
+  L'ultima copia verificata non si toglie mai.
+- L'amministratore, da Configura, può creare una copia, scaricarla e
+  ripristinarla (scrivendo RIPRISTINA); dalla pagina Sistema può fare
+  "Copia adesso", "Controlla adesso" e "Prova di ripristino".
+Consiglio: includi la cartella C:\GestionaleFarmacia\dati nel backup del
+server virtuale E imposta la seconda cartella delle copie.
 
 
-AGGIORNAMENTO A UNA NUOVA VERSIONE
-----------------------------------
-1. "Ferma servizio.bat" (come amministratore).
-2. Sostituisci GestionaleFarmacia.exe con quello nuovo. NON toccare la cartella "dati".
-3. "Avvia servizio.bat" (oppure aspetta: entro 5 minuti riparte da solo).
-Dopo l'aggiornamento i browser già aperti ricaricano i dati da soli.
+9. SECONDA CARTELLA DELLE COPIE (DISCO ESTERNO O DI RETE)
+---------------------------------------------------------
+Protegge anche dal guasto del disco del server: il programma vi copia, in
+sottofondo, le copie verificate e il giornale (senza la chiave della 2FA),
+con le stesse regole di conservazione.
+Si imposta in uno dei due modi:
+a) dalla pagina Sistema > "Seconda cartella delle copie": scrivi il
+   percorso completo e premi "Salva e prova";
+b) nel file dati\configurazione.json, con la voce "secondaCartella"
+   (c'è un esempio in configurazione-esempio.json):
+       { "secondaCartella": "E:\\CopieFarmacia" }
+   oppure, per una cartella di rete,
+       { "secondaCartella": "\\\\nas-clinica\\copie\\farmacia" }
+   Nel file JSON ogni barra rovesciata \ si scrive doppia (\\).
+   Un percorso relativo vale dalla cartella dati. Poi riavvia il servizio.
+   Se è scritta in configurazione.json, dalla pagina Sistema non si può
+   cambiare (la pagina lo dice).
+Attenzione:
+- non può stare dentro la cartella dati (il programma lo rifiuta);
+- il programma gira come SYSTEM: per una cartella di rete usa il percorso
+  completo \\server\condivisione\cartella (le lettere di unità mappate,
+  come Z:, per SYSTEM non esistono) e dai il permesso di scrittura
+  all'account del computer server (DOMINIO\NOMESERVER$);
+- se il disco esterno è scollegato o la rete non risponde il semaforo
+  diventa giallo ("La seconda cartella delle copie non è raggiungibile"):
+  le copie continuano nella cartella dati e la seconda cartella si
+  riallinea quando torna raggiungibile.
 
 
-LETTORE DI CODICI A BARRE
--------------------------
+10. SE LA BASE DATI SI ROVINA: LA CURA AUTOMATICA E LA PAGINA SISTEMA
+--------------------------------------------------------------------
+Il programma controlla farmacia.db e accessi.db a ogni avvio (controllo
+rapido) e ogni notte fra le 2 e le 6 (controllo completo, con un riordino
+dei file). Se un file è rovinato, troncato o sparito:
+1. lo sposta in dati\danneggiati\ con la data (non si cancella niente);
+2. lo ricostruisce dalla copia buona più recente PIÙ il giornale delle
+   modifiche (o recuperando il file stesso, se così arriva più avanti);
+3. lo controlla, lo scrive nel registro attività (utente "sistema") e nel
+   log, e fa subito una copia verificata.
+Dopo uno spegnimento improvviso riapplica dal giornale le ultime
+registrazioni che non erano ancora nel file.
+
+La pagina Sistema (solo amministratore) mostra un SEMAFORO:
+- VERDE "Tutto in ordine": niente da fare.
+- GIALLO "Da guardare": il programma funziona, ma c'è qualcosa da
+  sistemare con calma (seconda cartella non raggiungibile, ultima copia o
+  ultimo controllo troppo vecchi, prova di ripristino con differenze...).
+- ROSSO "Serve attenzione": leggi i motivi scritti sotto e fai subito
+  quello che dicono. I casi più comuni:
+  * "Il magazzino (farmacia.db) è danneggiato: riavvia il servizio" ->
+    avvisa i colleghi, "Ferma servizio.bat" e poi "Avvia servizio.bat":
+    all'avvio il programma cura il file da solo;
+  * disco quasi pieno, o il giornale non si scrive -> libera spazio sul
+    disco (non nella cartella dati) e controlla i permessi della cartella;
+  * nessuna copia verificata -> "Copia adesso" e leggi l'esito;
+  * "il programma ha curato ... controlla le registrazioni più recenti"
+    -> una cura non è arrivata fino all'ultima registrazione: controlla
+    Movimenti e DDT delle ultime ore e registra di nuovo quello che manca.
+Se il rosso resta o non è chiaro cosa fare, fai "Copia adesso" (se
+riesce), chiama l'assistenza e manda dati\log\server-AAAA-MM.log.
+"Prova di ripristino" ricostruisce per finta la base dati dall'ultima
+copia più il giornale e la confronta con quella vera: se dice che la cura
+funzionerebbe, i dati sono protetti.
+
+
+11. SPOSTARE IL PROGRAMMA SU UN ALTRO SERVER
+--------------------------------------------
+1. Sul vecchio server: "Ferma servizio.bat", poi "Disinstalla servizio.bat".
+2. Copia TUTTA la cartella C:\GestionaleFarmacia, compresa "dati" (con
+   chiave-2fa.key, backup e giornale), nella stessa posizione del nuovo
+   server.
+3. Sul nuovo server: "Installa servizio.bat" come amministratore (rimette
+   i permessi della cartella, il firewall e l'avvio automatico).
+4. Controlla l'ora del nuovo server (capitolo 6), la seconda cartella
+   (capitolo 9) e il semaforo della pagina Sistema.
+Le postazioni useranno il nuovo indirizzo. Il "Ricorda questo computer"
+della 2FA resta valido se l'indirizzo (nome del server) non cambia.
+
+
+12. HTTPS (E FOTOCAMERA DI TELEFONI E TABLET)
+---------------------------------------------
+Di serie il programma usa HTTP, adatto a una rete interna. HTTPS cifra il
+traffico (consigliato se la rete non è solo della clinica) ed è
+NECESSARIO per leggere i codici a barre con la fotocamera di telefoni e
+tablet: i browser permettono la fotocamera solo sulle pagine protette.
+1. Procurati un certificato per il nome del server (per esempio
+   dall'autorità di certificazione interna della clinica). Telefoni e
+   tablet devono riconoscerlo come attendibile: con un certificato non
+   attendibile il browser mostra un avviso e la fotocamera può restare
+   spenta.
+2. Metti certificato e chiave in dati\ e crea dati\configurazione.json
+   (c'è un esempio, configurazione-esempio.json, da copiare in dati\ con
+   quel nome e da adattare) con
+       { "https": { "cert": "certificato.pem", "key": "chiave.pem" } }
+   oppure
+       { "https": { "pfx": "certificato.pfx", "passphrase": "..." } }
+3. Riavvia il servizio e usa https://nome-del-server:8080/
+Se il certificato non è valido il programma non parte: il motivo è
+scritto in dati\log\errori-avvio.log.
+
+
+13. LETTORE DI CODICI A BARRE
+-----------------------------
 Va bene qualsiasi lettore USB o Bluetooth che "scrive come una tastiera"
 (sono quasi tutti): si collega alla postazione e si usa subito, senza
-configurare niente. Meglio se legge anche i codici 2D (Data Matrix): sulle
-confezioni dei farmaci il Data Matrix contiene anche LOTTO e SCADENZA, che
-nel Carico si compilano da soli.
-Nelle pagine dove si registra (Carico, Consumi, Trasferimenti, Perdite,
-Inventario) c'è la barra "Lettore": basta leggere la confezione. Un codice mai
-visto si associa una volta all'articolo giusto, poi lo riconoscono tutti.
+configurare niente. Meglio se legge anche i codici 2D (Data Matrix e QR):
+sulle confezioni dei farmaci il Data Matrix contiene LOTTO e SCADENZA, e
+sul DDT stampato il QR apre il DDT.
+Le pagine dove si registra (Carico, Consumi, Perdite, Inventario, nuova
+richiesta, Trasferimenti, DDT e ricezione) hanno la barra "Lettore"; in
+Armadi una lettura mostra dove si trova l'articolo. Un codice mai visto si
+associa una volta all'articolo giusto, poi lo riconoscono tutti.
 Fotocamera di telefono e tablet: il pulsante "Fotocamera" compare solo con
-Chrome o Edge e con l'indirizzo in HTTPS (vedi sotto), perché i browser
-permettono la fotocamera solo sulle pagine protette.
+Chrome o Edge e con l'indirizzo in HTTPS (capitolo 12).
 
 
-GUIDE
------
-Il pulsante "Guidami" in alto mostra sullo schermo, passo per passo, cosa fare
-nella pagina aperta. Nella pagina Guida ci sono le videoguide con i passi
-scritti. Al primo accesso ogni utente riceve l'invito a un giro di un minuto.
+14. GUIDE
+---------
+Nella pagina Guida (tasto H) c'è una guida scritta dettagliata per ogni
+operazione (a chi serve, quando, i passi con i nomi dei pulsanti, cosa
+succede dopo, gli errori frequenti), con le videoguide dove ci sono.
+Il pulsante "Guidami" in alto, e "Guidami sulla pagina" in ogni guida,
+mostrano sullo schermo, passo per passo, cosa fare nella pagina. Al primo
+accesso ogni utente riceve l'invito a un giro di un minuto.
 
 
-HTTPS (FACOLTATIVO)
--------------------
-Di serie il programma usa HTTP, adatto a una rete interna. Per cifrare il
-traffico (consigliato se la rete non è solo della clinica, e necessario per
-leggere i codici con la fotocamera di telefoni e tablet): metti certificato
-e chiave in dati\ e crea dati\configurazione.json (c'è un esempio,
-configurazione-esempio.json, da copiare in dati\ con quel nome) come
-    { "https": { "cert": "certificato.pem", "key": "chiave.pem" } }
-oppure
-    { "https": { "pfx": "certificato.pfx", "passphrase": "..." } }
-poi riavvia il servizio e usa https://indirizzo-del-server:8080/
-Se il certificato non è valido il programma non parte: il motivo è scritto in
-dati\log\errori-avvio.log.
-
-
-DALLA VERSIONE PER UN SOLO PC
------------------------------
+15. DALLA VERSIONE PER UN SOLO PC
+---------------------------------
 Se usavate la versione che salvava i dati nel browser: su quel PC, in
 Configura, "Salva una copia (.json)". Poi, con il server nuovo ancora vuoto,
 entra come amministratore e in Configura usa "Importa l'archivio della
 versione per un solo PC".
 
 
-PROBLEMI
---------
+16. PROBLEMI FREQUENTI
+----------------------
 - Il programma non parte o il servizio non risponde: guarda
-  dati\log\errori-avvio.log (per esempio porta già usata o certificato non valido).
-- "La porta 8080 è già usata": il programma è già avviato (anche come servizio),
-  oppure un altro programma usa la porta. Reinstalla con -Porta e un altro numero
-  (vedi INSTALLAZIONE).
+  dati\log\errori-avvio.log (per esempio porta già usata, certificato non
+  valido, configurazione.json scritto male).
+- "La porta 8080 è già usata": il programma è già avviato (anche come
+  servizio), oppure un altro programma usa la porta. Reinstalla con -Porta
+  e un altro numero (capitolo 2).
 - Le postazioni non si collegano: controlla che il server risponda su
-  http://localhost:8080/ e che la regola "Gestionale Farmacia" del firewall
-  esista; se c'è un firewall di rete tra postazioni e server, va aperta la porta.
+  http://localhost:8080/ e che la regola "Gestionale Farmacia" del
+  firewall esista; se c'è un firewall di rete tra postazioni e server, va
+  aperta la porta.
+- "Il codice non è giusto" per tutti gli utenti con la 2FA: l'ora del
+  server è sbagliata (capitolo 6).
+- Semaforo giallo o rosso nella pagina Sistema: capitolo 10.
+- Avvio lento dopo un guasto: il programma sta curando la base dati; nel
+  log c'è "Controllo della base dati all'avvio" con l'esito.
 - Registro del server: dati\log\server-AAAA-MM.log

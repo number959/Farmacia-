@@ -2,11 +2,13 @@
  * Prova della guida sullo schermo ("Guidami", js/tour.js) sul server vero, con Playwright e Chromium.
  *
  *   node strumenti/prova-tour.js [--foto <cartella>] [--solo amministratore,reparto] [--schermi desktop,telefono] [--exe <eseguibile>]
+ *                                [--senza-vuoto]
  *
  * Avvia un server di prova (porta libera, dati in una cartella temporanea), crea l'amministratore, carica i dati di prova
  * e crea un utente per ogni ruolo. Poi, con l'API, prepara quello che serve ai giri della 3.0: armadi con le ubicazioni
  * e assortimenti con le scorte (farmacia e Degenza), richieste in ogni stato (bozza, inviata, in lavorazione con DDT da
  * spedire, con DDT in viaggio, evasa con un DDT ricevuto con differenze), un DDT di reso da spedire dalla Degenza,
+ * due consumi di stamattina (amministratore e responsabile di magazzino: c'è sempre un movimento da poter annullare),
  * un utente con la verifica in due passaggi attiva e una copia di sicurezza verificata; lo storico dei consumi per le
  * previsioni è quello dei dati di prova (circa cinque mesi). Per ogni ruolo, a 1440×900 e a 390×800 (telefono):
  * - l'invito al primo accesso (Sì / Non ora / Non chiedere più, ricordato nel browser per utente);
@@ -23,7 +25,9 @@
  * - casi limite (amministratore): il fuoco torna su Guidami anche partendo dall'elenco; finestra ristretta durante il
  *   passo sul menu e rotazione del telefono (l'elemento resta evidenziato); sessione scaduta con il giro o l'elenco
  *   aperti (si chiudono e non rubano il fuoco al campo password); sul telefono l'invito non copre il menu aperto;
- * - nessun giro scrive dati (nessuna richiesta POST/PUT/DELETE, revisione dei dati invariata), niente errori JS o CSP.
+ * - nessun giro scrive dati (nessuna richiesta POST/PUT/DELETE, revisione dei dati invariata), niente errori JS o CSP;
+ * - archivio vuoto (secondo server, installazione nuova; si salta con --senza-vuoto o con --solo senza l'amministratore):
+ *   tutti i giri dell'amministratore arrivano a "Fine" e ogni passo obbligatorio trova il suo elemento.
  * I passi facoltativi saltati (per esempio la barra del lettore se non c'è ancora) sono elencati, non sono errori.
  */
 'use strict';
@@ -42,6 +46,7 @@ const FOTO = arg('--foto');
 const ESEGUIBILE = arg('--exe');
 const SOLO = arg('--solo') ? arg('--solo').split(',') : null;
 const SOLO_SCHERMI = arg('--schermi') ? arg('--schermi').split(',') : null;
+const SENZA_VUOTO = process.argv.includes('--senza-vuoto');
 const PW = 'Password-123';
 const PROVVISORIA = 'Provvisoria1';
 
@@ -104,7 +109,7 @@ function clienteApi(base) {
  * richieste e DDT in ogni stato, un utente con la verifica in due passaggi, una copia verificata.
  * Restituisce un piccolo riassunto (per il resoconto della prova).
  */
-async function preparaDati(admin, base) {
+async function preparaDati(admin, base, clienti) {
   const FARMACIA = 'r-farmacia', DEGENZA = 'r-degenza';
   const stato = await admin('GET', '/api/dati?da=0');
   const giac = Calcoli.tutteLeGiacenze(stato);
@@ -172,6 +177,15 @@ async function preparaDati(admin, base) {
       righe: [{ articoloId: merceD[0].id, quantita: 2 }] });
   }
 
+  /* --- consumi di stamattina in Degenza, uno dell'amministratore e uno del responsabile di magazzino: nella pagina
+         Movimenti (dal primo del mese a oggi) ognuno ha un movimento da poter annullare, anche il primo del mese --- */
+  const d = new Date();
+  const oggi = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const consumo = (cliente, articoloId) => cliente('POST', '/api/movimenti', { movimenti: [{ tipo: 'consumo', data: oggi, articoloId, repartoId: DEGENZA, quantita: 1, note: 'Prova dei giri' }] });
+  const perConsumi = conMerce(DEGENZA, 6).slice(1, 3);
+  if (perConsumi[0]) await consumo(admin, perConsumi[0].id);
+  if (perConsumi[1] && clienti.deg) await consumo(clienti.deg, perConsumi[1].id);
+
   /* --- un utente con la verifica in due passaggi attiva (la pagina Sicurezza mostra «Azzera») --- */
   await admin('POST', '/api/utenti', { username: 'tecnico', nome: 'Paolo Tecnico', ruolo: 'farmacista', reparti: [], password: PROVVISORIA });
   const t = clienteApi(base);
@@ -216,7 +230,7 @@ function leggiPasso() {
   try {
     bersagli.forEach((e) => {
       const b = e.getBoundingClientRect();
-      const fisso = !!e.closest('.testa-fissa, .laterale');
+      const fisso = !!e.closest('.testa-fissa, .laterale, #modale');
       const l = Math.max(b.left, X0), r = Math.min(b.right, X0 + W);
       const t = Math.max(b.top, Y0, fisso ? Y0 : testa), bb = Math.min(b.bottom, Y0 + H);
       if (r - l < 2 || bb - t < 2) { prove.push({ visibile: false, motivo: 'fuori dallo schermo o sotto la barra' }); return; }
@@ -255,6 +269,77 @@ function leggiPasso() {
   };
 }
 
+/*
+ * Archivio vuoto (installazione nuova, nessun dato di prova): per l'amministratore, che vede tutti i giri, ogni giro
+ * parte e arriva a "Fine"; i passi obbligatori trovano il loro elemento (quelli su dati che possono mancare sono
+ * facoltativi e si saltano); niente scritture e niente errori. Un server a parte, con una cartella dati vuota.
+ */
+async function provaArchivioVuoto(browser, errori) {
+  const porta = await portaLibera();
+  const dati = fs.mkdtempSync(path.join(os.tmpdir(), 'gf-tour-vuoto-'));
+  const proc = ESEGUIBILE
+    ? spawn(ESEGUIBILE, ['--porta', String(porta), '--dati', dati], { stdio: 'ignore' })
+    : spawn(process.execPath, [path.join(__dirname, '..', 'server', 'main.js'), '--porta', String(porta), '--dati', dati], { stdio: 'ignore' });
+  const base = 'http://127.0.0.1:' + porta + '/';
+  try {
+    if (!ok(!!(await attendi(async () => { try { return (await fetch(base + 'api/stato')).ok; } catch (e) { return false; } }, 20000)), 'archivio vuoto: il secondo server di prova risponde')) return;
+    await clienteApi(base)('POST', '/api/setup', { username: 'admin', nome: 'Anna Amministratrice', password: PW });
+    for (const schermo of SCHERMI) {
+      const chi = 'archivio vuoto · ' + schermo.nome;
+      const t0 = Date.now();
+      const ctx = await browser.newContext(Object.assign({ locale: 'it-IT', reducedMotion: 'reduce' }, schermo.opz));
+      const p = await ctx.newPage();
+      p.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errori.push(chi + ': ' + m.text()); });
+      p.on('pageerror', (e) => errori.push(chi + ' (eccezione): ' + e.message));
+      const scritture = [];
+      let inGiro = false;
+      p.on('request', (r) => { if (inGiro && r.method() !== 'GET' && r.method() !== 'HEAD') scritture.push(r.method() + ' ' + r.url()); });
+      await p.goto(base);
+      await p.waitForSelector('#acc-form');
+      await p.fill('#acc-user', 'admin');
+      await p.fill('#acc-pw', PW);
+      await p.click('#acc-invia');
+      await p.waitForSelector('#app:not([hidden])', { timeout: 15000 });
+      await p.waitForSelector('.tour-invito', { timeout: 5000 }).catch(() => null);
+      await p.evaluate(() => { const b = document.querySelector('.tour-invito [data-invito="mai"]'); if (b) b.click(); });
+      ok(await p.evaluate(() => App.archivioVuoto()), chi + ': l’archivio è davvero vuoto');
+      const giri = await p.evaluate(() => Tour.elenco().map((g) => g.id));
+      const senza = [];
+      inGiro = true;
+      for (const id of giri) {
+        await p.evaluate(() => { location.hash = '#guida'; });
+        await attendi(async () => (await p.evaluate(() => App.paginaCorrente)) === 'guida', 3000);
+        if (!ok((await p.evaluate((x) => Tour.avvia(x), id)) === true, chi + ': giro "' + id + '" avviato')) continue;
+        let ultimo = null;
+        for (let k = 0; k < 60; k++) {
+          const s = await attendi(() => p.evaluate(() => { const x = Tour.stato(); return x.attivo && !x.inAttesa ? x : null; }), 9000);
+          if (!ok(!!s, chi + ' · ' + id + ': passo pronto entro il tempo')) break;
+          if (s.conElemento && s.centrato) senza.push(id + ' ' + s.indice + '/' + s.totale + ' "' + s.titolo + '" (' + s.selettore + ')');
+          ultimo = s;
+          if (s.indice === s.totale) break;
+          await p.evaluate(() => document.querySelector('.tour-fumetto [data-tour="avanti"]').click());
+          await attendi(() => p.evaluate((i) => { const x = Tour.stato(); return !x.attivo || x.inAttesa || x.indice !== i; }, s.indice), 4000);
+        }
+        if (!ultimo) { await p.evaluate(() => Tour.ferma()); continue; }
+        ok(ultimo.indice === ultimo.totale && /Fine/.test(await p.textContent('.tour-fumetto [data-tour="avanti"]')), chi + ' · ' + id + ': arriva all’ultimo passo, con "Fine"');
+        await p.evaluate(() => document.querySelector('.tour-fumetto [data-tour="avanti"]').click());
+        await attendi(async () => !(await p.evaluate(() => Tour.stato().attivo)), 3000);
+        ok(await p.evaluate(() => !Tour.stato().attivo && document.getElementById('modale').hidden), chi + ' · ' + id + ': "Fine" chiude il giro, niente resta aperto');
+      }
+      inGiro = false;
+      ok(senza.length === 0, chi + ': ogni passo obbligatorio trova il suo elemento' + (senza.length ? ':\n  ' + senza.join('\n  ') : ''));
+      ok(scritture.length === 0, chi + ': i giri non hanno fatto nessuna scrittura' + (scritture.length ? ' (' + scritture.join(', ') + ')' : ''));
+      nota(chi + ': ' + giri.length + ' giri in ' + Math.round((Date.now() - t0) / 1000) + ' s');
+      await ctx.close();
+    }
+  } finally {
+    const uscito = new Promise((fatto) => { if (proc.exitCode !== null) fatto(); else { proc.once('exit', fatto); setTimeout(fatto, 10000); } });
+    proc.kill('SIGTERM');
+    await uscito;
+    try { fs.rmSync(dati, { recursive: true, force: true }); } catch (e) { nota('cartella temporanea non tolta: ' + dati); }
+  }
+}
+
 (async () => {
   const porta = await portaLibera();
   const dati = fs.mkdtempSync(path.join(os.tmpdir(), 'gf-tour-'));
@@ -277,13 +362,15 @@ function leggiPasso() {
     const admin = clienteApi(base);
     await admin('POST', '/api/setup', { username: 'admin', nome: 'Anna Amministratrice', password: PW });
     await admin('POST', '/api/demo', {});
+    const clienti = {};
     for (const u of RUOLI.filter((x) => x.ruolo !== 'amministratore')) {
       await admin('POST', '/api/utenti', { username: u.username, nome: u.nome, ruolo: u.ruolo, reparti: u.reparti, password: PROVVISORIA });
       const c = clienteApi(base);
       await c('POST', '/api/login', { username: u.username, password: PROVVISORIA });
       await c('POST', '/api/password', { attuale: PROVVISORIA, nuova: PW });
+      clienti[u.username] = c;
     }
-    const preparati = await preparaDati(admin, base);
+    const preparati = await preparaDati(admin, base, clienti);
     const revDati = async () => (await admin('GET', '/api/dati?da=0')).rev;
     const rev0 = await revDati();
     ok(true, 'server di prova con dati di prova, un utente per ruolo, armadi, assortimenti (' + preparati.assF + ' + ' + preparati.assD +
@@ -656,6 +743,58 @@ function leggiPasso() {
             }
             await p.keyboard.press('Escape');
             await p.waitForTimeout(250);
+
+            // Previsioni: il giro apre da solo le schede (fabbisogno, ABC-XYZ, proposta d'ordine) e il dettaglio di un
+            // articolo; alla fine (e anche uscendo a metà) torna la scheda che l'utente aveva scelto, senza finestre aperte
+            const sceltaPv = () => p.evaluate(() => {
+              const b = document.querySelector('#pv-schede [role="tab"][aria-selected="true"]');
+              return b ? b.getAttribute('data-scheda') : null;
+            });
+            await p.evaluate(() => { location.hash = '#previsioni'; });
+            await p.waitForSelector('#pv-tab-abc');
+            await attendi(() => p.evaluate(() => { const a = document.getElementById('pv-attesa'); return !!a && a.hidden; }), 15000);
+            await p.click('#pv-tab-abc');
+            await attendi(async () => (await sceltaPv()) === 'abc', 3000);
+            await p.evaluate(() => Tour.avvia('previsioni'));
+            const vistePv = {};
+            for (let i = 0; i < 30; i++) {
+              const s = await pronto();
+              if (!s) break;
+              vistePv[s.titolo] = await p.evaluate(() => ({
+                scheda: (document.querySelector('#pv-schede [role="tab"][aria-selected="true"]') || { getAttribute: () => null }).getAttribute('data-scheda'),
+                dettaglio: !!document.querySelector('#modale:not([hidden]) #pvd-grafico canvas')
+              }));
+              if (s.indice === s.totale) break;
+              await p.evaluate(() => document.querySelector('.tour-fumetto [data-tour="avanti"]').click());
+              await attendi(async () => { const x = await stato(); return x.inAttesa || x.indice !== s.indice ? x : null; }, 3000);
+            }
+            const vistaPv = (t) => vistePv[t] || {};
+            ok(vistaPv('Fabbisogno per articolo').scheda === 'fabbisogno' && !vistaPv('Fabbisogno per articolo').dettaglio, chi + ': Previsioni: il giro apre la scheda del fabbisogno');
+            ok(vistaPv('Consumi e previsione dell’articolo').dettaglio && vistaPv('Giorni della settimana e metodi').dettaglio, chi + ': Previsioni: il giro apre il dettaglio di un articolo, con il grafico');
+            ok(vistaPv('Excel').scheda === 'fabbisogno' && !vistaPv('Excel').dettaglio, chi + ': Previsioni: poi richiude il dettaglio');
+            ok(vistaPv('Classi ABC-XYZ').scheda === 'abc' && vistaPv('Proposta d’ordine').scheda === 'ordine' && vistaPv('Excel e stampa').scheda === 'ordine',
+              chi + ': Previsioni: il giro apre le schede ABC-XYZ e Proposta d’ordine');
+            await p.evaluate(() => document.querySelector('.tour-fumetto [data-tour="avanti"]').click());
+            await attendi(async () => !(await stato()).attivo, 3000);
+            await p.waitForTimeout(300);
+            ok((await sceltaPv()) === 'abc' && (await p.evaluate(() => document.getElementById('modale').hidden)),
+              chi + ': Previsioni: finito il giro torna la scheda scelta prima (ABC-XYZ), nessuna finestra aperta');
+            // uscendo con Esc dal dettaglio dell'articolo
+            await p.evaluate(() => Tour.avvia('previsioni'));
+            for (let i = 0; i < 30; i++) {
+              const s = await pronto();
+              if (!s || s.titolo === 'Consumi e previsione dell’articolo' || s.indice === s.totale) break;
+              await p.evaluate(() => document.querySelector('.tour-fumetto [data-tour="avanti"]').click());
+              await attendi(async () => { const x = await stato(); return x.inAttesa || x.indice !== s.indice ? x : null; }, 3000);
+            }
+            ok((await stato()).titolo === 'Consumi e previsione dell’articolo', chi + ': Previsioni: arrivato al dettaglio dell’articolo');
+            await p.keyboard.press('Escape');
+            await attendi(async () => !(await stato()).attivo, 3000);
+            await p.waitForTimeout(300);
+            ok((await sceltaPv()) === 'abc' && (await p.evaluate(() => document.getElementById('modale').hidden)),
+              chi + ': Previsioni: Esc sul dettaglio chiude la finestra e rimette la scheda ABC-XYZ');
+            await p.click('#pv-tab-fabbisogno');
+            await attendi(async () => (await sceltaPv()) === 'fabbisogno', 3000);
           } else {
             // telefono ruotato durante un passo in fondo alla pagina: l'elemento torna in vista ed evidenziato
             await p.evaluate(() => { location.hash = '#carico'; });
@@ -794,6 +933,7 @@ function leggiPasso() {
       }
     }
     ok((await revDati()) === rev0, 'nessun giro ha cambiato i dati del magazzino');
+    if (!SENZA_VUOTO && (!SOLO || SOLO.includes('amministratore'))) await provaArchivioVuoto(browser, errori);
     ok(errori.length === 0, 'nessun errore JavaScript o di sicurezza (CSP) nei browser' + (errori.length ? ':\n  ' + errori.join('\n  ') : ''));
   } catch (e) {
     ok(false, 'eccezione: ' + (e && e.stack || e));

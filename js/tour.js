@@ -31,7 +31,7 @@
  *
  * Il giro non scrive niente: apre le pagine e le loro viste (App.vai), le porta in vista, sul telefono apre il menu
  * laterale quando il passo è lì; preme solo i pulsanti che cambiano quello che si vede (il menu del tuo utente, la
- * modalità Disponi degli armadi) e alla fine li rimette come erano.
+ * modalità Disponi degli armadi, le schede delle Previsioni e il dettaglio di un articolo) e alla fine li rimette come erano.
  */
 (function (root) {
   'use strict';
@@ -254,6 +254,93 @@
     chiudi: function () { if (MODO_DISPONI.aperto()) document.getElementById('ar-disponi').click(); }
   };
 
+  /* ---------- pagina Previsioni: le sue schede e la finestra di dettaglio di un articolo (solo la vista cambia) ---------- */
+
+  // due elementi uno accanto all'altro (computer) e non uno sotto l'altro (telefono)
+  function affiancati(a, b) {
+    var x = document.querySelector(a), y = document.querySelector(b);
+    if (!x || !y) return root.innerWidth > 700;
+    var rx = x.getBoundingClientRect(), ry = y.getBoundingClientRect();
+    return Math.abs(rx.top - ry.top) < Math.min(rx.height, ry.height) / 2;
+  }
+
+  function schedaPrevisioniScelta() {
+    var b = document.querySelector('#pv-schede [role="tab"][aria-selected="true"]');
+    return b ? b.getAttribute('data-scheda') : null;
+  }
+
+  // il calcolo delle previsioni è finito: indicatori e scheda aperta sono disegnati (prima i clic sulle schede non valgono)
+  function previsioniPronte() {
+    var att = document.getElementById('pv-attesa');
+    var pan = document.getElementById('pv-pannello');
+    return !!att && att.hidden && !!pan && pan.children.length > 0;
+  }
+
+  function apriSchedaPrevisioni(id) {
+    var b = document.getElementById('pv-tab-' + id);
+    if (!b || b.hidden) return false;
+    if (b.getAttribute('aria-selected') !== 'true') b.click();
+    return true;
+  }
+
+  // la scheda "id" (fabbisogno, abc, ordine); chiudendo torna quella che l'utente aveva aperto
+  function schedaPrevisioni(id) {
+    var a = {
+      id: 'previsioni-' + id,
+      prima: null,
+      aperto: function () { return previsioniPronte() && schedaPrevisioniScelta() === id; },
+      apri: function () {
+        if (!document.getElementById('pv-tab-' + id)) return null;
+        return aspettaChe(previsioniPronte, ATTESA_MAX).then(function (pronte) {
+          if (!pronte) return;
+          a.prima = schedaPrevisioniScelta();
+          if (!apriSchedaPrevisioni(id)) return;
+          return aspettaChe(a.aperto, 1500);
+        });
+      },
+      chiudi: function () {
+        var prima = a.prima;
+        a.prima = null;
+        if (prima && prima !== id) apriSchedaPrevisioni(prima);
+      }
+    };
+    return a;
+  }
+
+  var SCHEDA_FABBISOGNO = schedaPrevisioni('fabbisogno');
+  var SCHEDA_ABC = schedaPrevisioni('abc');
+  var SCHEDA_ORDINE = schedaPrevisioni('ordine');
+
+  // la finestra di dettaglio del primo articolo della tabella del fabbisogno (grafico, giorni della settimana, modelli)
+  var DETTAGLIO_PREVISIONE = {
+    id: 'previsioni-dettaglio',
+    scheda: null,
+    aperto: function () {
+      var m = document.getElementById('modale');
+      return !!m && !m.hidden && !!m.querySelector('#pvd-grafico');
+    },
+    apri: function () {
+      if (!document.getElementById('pv-schede')) return null;
+      return aspettaChe(previsioniPronte, ATTESA_MAX).then(function (pronte) {
+        if (!pronte) return;
+        var prima = schedaPrevisioniScelta();
+        if (prima !== 'fabbisogno' && apriSchedaPrevisioni('fabbisogno')) DETTAGLIO_PREVISIONE.scheda = prima;
+        var b = document.querySelector('#pv-tabella .an-art-btn');
+        if (!b) return;
+        b.click();
+        // aspetto il grafico dell'articolo e che la finestra abbia finito di comparire (e di prendere il fuoco)
+        return aspettaChe(function () { return document.querySelector('#modale:not([hidden]) #pvd-grafico canvas'); }, ATTESA_MAX)
+          .then(function () { return pausa(rid() ? 80 : 320); });
+      });
+    },
+    chiudi: function () {
+      if (DETTAGLIO_PREVISIONE.aperto()) App.chiudiModale();
+      var prima = DETTAGLIO_PREVISIONE.scheda;
+      DETTAGLIO_PREVISIONE.scheda = null;
+      if (prima) apriSchedaPrevisioni(prima);
+    }
+  };
+
   /* ======================= i giri ======================= */
 
   var BARRA_LETTORE = {
@@ -289,7 +376,7 @@
         { titolo: function () { return 'Benvenuto in ' + nomeProdotto(); },
           testo: 'In un minuto ti mostro dove sono le cose. Vai avanti con <b>Avanti</b> o con la freccia <kbd>→</kbd>; esci quando vuoi con <kbd>Esc</kbd>.' },
         { el: '#menu', posizione: 'destra', riparo: 'fondo', titolo: 'Il menu',
-          testo: 'Qui ci sono tutte le pagine che il tuo ruolo può usare, divise per argomento. Il numero accanto a una voce dice quante cose ti aspettano (richieste, DDT, scadenze). La lettera a destra è il <b>tasto rapido</b>: premila (fuori dai campi) per aprire la pagina.' },
+          testo: 'Qui ci sono tutte le pagine che il tuo ruolo può usare, divise per argomento. Il numero accanto a una voce dice quante cose ti aspettano (richieste, DDT, scadenze). La lettera a destra è il <b>tasto rapido</b>: con la tastiera, premila (fuori dai campi) per aprire la pagina.' },
         { el: '.azioni-rapide', facoltativo: true, posizione: 'sotto', titolo: 'Il lavoro di ogni giorno',
           testo: 'I pulsanti per le operazioni più frequenti del tuo ruolo, con il loro tasto rapido.' },
         { el: '#cr-vista', facoltativo: true, posizione: 'sotto', titolo: 'Quale magazzino guardare',
@@ -489,7 +576,7 @@
         copia(BARRA_LETTORE, { vista: V_RICEZIONE, titolo: 'Conta con il lettore',
           testo: 'Leggi le confezioni una per una: la quantità ricevuta diventa quella letta, e quelle che non leggi risultano mancanti.' }),
         { el: '.log-tab-ricezione .rc-esito', vista: V_RICEZIONE, facoltativo: true, posizione: 'sotto', titolo: 'Se manca qualcosa',
-          testo: 'Scegli se la differenza <b>rientra</b> nel magazzino che l’ha spedita o se è <b>persa in viaggio</b> (rotta, smarrita). Accanto puoi scrivere una nota.' },
+          testo: 'Scegli se la differenza <b>rientra</b> nel magazzino che l’ha spedita o se è <b>persa in viaggio</b> (rotta, smarrita). Nella <b>Nota</b> puoi scrivere cosa è successo.' },
         { el: '#rc-conferma', vista: V_RICEZIONE, facoltativo: true, posizione: 'sopra', titolo: 'Conferma la ricezione',
           testo: 'La merce entra nel tuo magazzino e il DDT va in archivio come ricevuto, o ricevuto con differenze. Chi l’ha spedito lo vede subito.' },
         { el: '.log-schede', vista: V_DDT, posizione: 'sotto', titolo: 'Tutto tracciato',
@@ -567,9 +654,9 @@
         { el: '.st-sommario', posizione: 'sotto', titolo: 'In breve',
           testo: 'Quanti magazzini e piani ci sono, gli articoli sotto scorta in tutta la struttura e i DDT in viaggio adesso.' },
         { el: '#st-corpo', posizione: 'sopra', titolo: 'Lo spaccato dell’edificio',
-          testo: 'Ogni piano con i suoi magazzini, dal più basso al più alto. La farmacia centrale ha la croce ✚.' },
+          testo: 'Ogni piano con i suoi magazzini, come in un disegno dell’edificio: i piani alti in alto, il piano terra (e il seminterrato) in basso. La farmacia centrale ha la croce ✚.' },
         { el: '.st-stanza', posizione: 'sotto', titolo: 'Un magazzino',
-          testo: 'Nome, articoli sotto scorta e in scadenza, quanti armadi e quanti articoli ha. Toccalo per vedere i suoi armadi.' },
+          testo: 'Nome, articoli sotto scorta, lotti in scadenza, richieste e DDT in arrivo, quanti armadi e articoli ha e chi ne è responsabile. Toccalo per vedere i suoi armadi.' },
         { el: '.st-viaggio', facoltativo: true, posizione: 'sopra', titolo: 'DDT in viaggio',
           testo: 'Ogni DDT partito e non ancora ricevuto, con chi lo sta portando. Sulla mappa è un punto che va dal magazzino che spedisce a quello che riceve, passando dal vano scale. <b>Apri</b> mostra il DDT.' },
         { el: '#st-gestisci', se: puo('struttura'), facoltativo: true, posizione: 'sotto', titolo: 'Gestisci magazzini',
@@ -677,7 +764,7 @@
     {
       id: 'previsioni', gruppo: 'analisi', perPagina: 'previsioni', pagina: 'previsioni', ico: '📈',
       titolo: 'Previsioni e fabbisogno',
-      descrizione: 'Filtri, indicatori, grafico con la previsione, fabbisogno per articolo, classi ABC-XYZ e proposta d’ordine con Excel.',
+      descrizione: 'Filtri, indicatori, grafico con la previsione, fabbisogno e dettaglio di un articolo, classi ABC-XYZ, proposta d’ordine con Excel.',
       passi: [
         { el: '#pv-rep', posizione: 'sotto', titolo: 'Per quale magazzino',
           testo: function () {
@@ -687,28 +774,49 @@
         { el: '#pv-cat, #pv-cerca', insieme: true, posizione: 'sotto', titolo: 'Categoria e ricerca',
           testo: 'Solo farmaci o solo presidi, oppure un articolo per nome o principio attivo.' },
         { el: 'input[name="pv-orizzonte"]', risali: '.an-segmenti', posizione: 'sotto', titolo: 'Quanto lontano guardare',
-          testo: 'Previsione a 7, 30 o 90 giorni. Accanto, <b>Vista</b> raggruppa il grafico per giorno, settimana o mese.' },
+          testo: 'Previsione a 7, 30 o 90 giorni. Con <b>Vista</b> raggruppi il grafico per giorno, settimana o mese.' },
         { el: '#pv-ind', posizione: 'sotto', titolo: 'Gli indicatori',
           testo: 'Consumo previsto nel periodo e il suo valore, articoli al punto di riordino, quelli che finiranno prima della prossima consegna e quanti ce ne sono da ordinare.' },
         { el: '#pv-grafico', posizione: 'sopra', titolo: 'Consumi e previsione',
-          testo: 'Linea piena: i consumi veri. Linea tratteggiata: la previsione, con la fascia in cui il consumo cadrà 9 volte su 10 (più si guarda lontano, più si allarga). In alto a destra scegli pezzi o euro.' },
+          testo: 'Linea piena: i consumi veri. Linea tratteggiata: la previsione, con la fascia in cui il consumo cadrà 9 volte su 10 (più si guarda lontano, più si allarga). Sopra il grafico scegli pezzi o euro.' },
         { el: '#pv-schede', posizione: 'sotto', titolo: 'Le schede',
           testo: function () {
-            return '<b>Fabbisogno per articolo</b>, <b>Classi ABC-XYZ</b>' + (App.puo('ordini') ? ' e <b>Proposta d’ordine</b>' : '') + ': toccane una per aprirla.';
+            return '<b>Fabbisogno per articolo</b>, <b>Classi ABC-XYZ</b>' + (App.puo('ordini') ? ' e <b>Proposta d’ordine</b>' : '') +
+              ': toccane una per aprirla. Te le mostro una per una.';
           } },
-        { el: '#pv-tabella thead', facoltativo: true, posizione: 'sotto', titolo: 'Fabbisogno per articolo',
+        { el: '#pv-tabella thead', ambiente: SCHEDA_FABBISOGNO, facoltativo: true, posizione: 'sotto', titolo: 'Fabbisogno per articolo',
           testo: function () {
             return 'Per ogni articolo: consumo medio, tendenza, per quanti giorni basta, quando finirà, scorta di sicurezza, punto di riordino e quanto ' +
-              (eFarmacia() ? 'ordinare' : 'chiedere alla farmacia') + '. Tocca un’intestazione per ordinare la tabella.';
+              (eFarmacia() ? 'ordinare' : 'chiedere alla farmacia') + '. Di base in cima ci sono gli articoli che finiscono prima; tocca un’intestazione per ordinare la tabella in un altro modo.';
           } },
-        { el: '#pv-tabella .an-art-btn', facoltativo: true, posizione: 'sotto', titolo: 'Il dettaglio di un articolo',
-          testo: 'Il nome apre una finestra con il grafico dell’articolo, i consumi per giorno della settimana e il confronto dei metodi di previsione: il programma usa quello che ha sbagliato meno nelle ultime 4 settimane.' },
-        { el: '#pv-excel', facoltativo: true, posizione: 'sotto', titolo: 'Excel',
+        { el: '#pv-tabella .an-art-btn', ambiente: SCHEDA_FABBISOGNO, facoltativo: true, posizione: 'sotto', titolo: 'Il dettaglio di un articolo',
+          testo: 'Tocca il nome di un articolo per vedere il suo dettaglio. Te lo apro io.' },
+        { el: '#modale .an-mini-griglia', ambiente: DETTAGLIO_PREVISIONE, facoltativo: true, posizione: 'sotto', titolo: 'I numeri dell’articolo',
+          testo: 'Consumo medio al giorno, a settimana e al mese, quanto ce n’è (anche in viaggio), per quanti giorni basta, punto di riordino, quanto ordinare e il metodo di previsione usato, con la sua affidabilità.' },
+        { el: '#pvd-grafico', ambiente: DETTAGLIO_PREVISIONE, facoltativo: true, posizione: 'sotto', titolo: 'Consumi e previsione dell’articolo',
+          testo: 'Come nel grafico grande, ma per questo articolo solo: i consumi veri, la previsione tratteggiata e la sua fascia. Sopra scegli se vederli per giorno, per settimana o per mese.' },
+        { el: '#modale .an-dett-due', ambiente: DETTAGLIO_PREVISIONE, facoltativo: true, posizione: 'sopra', titolo: 'Giorni della settimana e metodi',
+          testo: function () {
+            // sul computer i due grafici stanno uno accanto all'altro, sul telefono uno sotto l'altro
+            var lato = affiancati('#pvd-calore', '#pvd-modelli');
+            return (lato ? 'A sinistra' : 'Sopra') + ' i consumi per giorno della settimana nelle ultime 12 settimane: più scuro, più consumo. ' +
+              (lato ? 'A destra' : 'Sotto') + ' il confronto dei metodi di previsione: il programma usa quello che ha sbagliato meno nelle ultime 4 settimane. Chiudo io la finestra.';
+          } },
+        { el: '#pv-excel', ambiente: SCHEDA_FABBISOGNO, facoltativo: true, posizione: 'sotto', titolo: 'Excel',
           testo: 'Esporta la tabella del fabbisogno, con gli stessi filtri.' },
-        { el: '#pv-tab-abc', posizione: 'sotto', titolo: 'Classi ABC-XYZ',
-          testo: '<b>A, B, C</b>: quanto pesa l’articolo sul valore dei consumi (gli A fanno l’80%). <b>X, Y, Z</b>: quanto è regolare il consumo (X costante, Z a sbalzi). Nella matrice tocca una casella per filtrare la tabella: gli <b>AX</b> si seguono da vicino, i <b>CZ</b> si tengono al minimo.' },
-        { el: '#pv-tab-ordine', se: puo('ordini'), facoltativo: true, posizione: 'sotto', titolo: 'Proposta d’ordine',
-          testo: 'Quanto ordinare ai fornitori per tutta la struttura: consumo previsto fino al prossimo ordine più la scorta di sicurezza, meno quello che c’è già (anche in viaggio), arrotondato a confezioni intere e diviso per fornitore. Puoi cambiare le confezioni, poi <b>Excel</b> (un foglio per fornitore) o <b>Stampa</b>.' }
+        { el: '#pv-pannello .an-abc-griglia', ambiente: SCHEDA_ABC, facoltativo: true, posizione: 'destra', titolo: 'Classi ABC-XYZ',
+          testo: '<b>A, B, C</b>: quanto pesa l’articolo sul valore dei consumi (gli A fanno l’80% della spesa). <b>X, Y, Z</b>: quanto è regolare il consumo da una settimana all’altra (X costante, Z a sbalzi). Tocca una casella per vedere quegli articoli nella tabella del fabbisogno: gli <b>AZ</b> si seguono da vicino, i <b>CZ</b> si tengono al minimo.' },
+        { el: '#pv-pareto', ambiente: SCHEDA_ABC, facoltativo: true, posizione: 'sinistra', titolo: 'Curva ABC',
+          testo: 'Gli articoli che pesano di più sulla spesa, dal più caro, e la quota cumulata: le linee all’80% e al 95% separano gli A, i B e i C.' },
+        { el: function () {
+            return document.querySelector('#pv-proposta .an-fornitore') ? '#pv-proposta .an-fornitore' : document.querySelector('#pv-proposta') ? '#pv-proposta' : '#pv-pannello';
+          },
+          ambiente: SCHEDA_ORDINE, se: puo('ordini'), facoltativo: true, posizione: 'sopra', riparo: 'cima', titolo: 'Proposta d’ordine',
+          testo: 'Quanto ordinare ai fornitori per tutta la struttura, diviso per fornitore: consumo previsto fino al prossimo ordine più la scorta di sicurezza, meno quello che c’è già (anche in viaggio), arrotondato a confezioni intere.' },
+        { el: '#pv-proposta .an-conf', ambiente: SCHEDA_ORDINE, se: puo('ordini'), facoltativo: true, posizione: 'sinistra', titolo: 'Confezioni da ordinare',
+          testo: 'Puoi cambiare le confezioni: importi e totali si aggiornano subito e la proposta le ricorda finché resti collegato. <b>Ripristina la proposta</b> torna ai numeri calcolati.' },
+        { el: '#pv-ordine-stampa, #pv-ordine-excel', insieme: true, ambiente: SCHEDA_ORDINE, se: puo('ordini'), facoltativo: true, posizione: 'sotto', titolo: 'Excel e stampa',
+          testo: '<b>Excel</b> crea un foglio per ogni fornitore, pronto da mandare; <b>Stampa</b> mette la proposta su carta. Nessun ordine parte da solo: decidi tu.' }
       ]
     },
     {
@@ -807,10 +915,10 @@
           } },
         { el: '#as-tab', vista: V_MG_ASSORTIMENTO, facoltativo: true, posizione: 'sopra', titolo: 'Assortimento e scorte',
           testo: 'Gli articoli che il magazzino tiene, con <b>scorta minima</b>, <b>punto di riordino</b> e <b>scorta massima</b>, la giacenza e per quanti giorni basta. Le scorte servono agli avvisi «sotto scorta» e a «Proponi le quantità» delle richieste.' },
-        { el: '#as-nuovo, #as-agg', insieme: true, vista: V_MG_ASSORTIMENTO, se: puo('assortimento'), facoltativo: true, posizione: 'sotto', titolo: 'Aggiungi articoli',
+        { el: '#as-nuovo, #as-agg, #as-usati', insieme: true, vista: V_MG_ASSORTIMENTO, se: puo('assortimento'), facoltativo: true, posizione: 'sotto', titolo: 'Aggiungi articoli',
           testo: 'Scrivi il nome e premi <b>Aggiungi</b>, oppure aggiungi in un colpo quelli usati dal magazzino negli ultimi 90 giorni.' },
         { el: '#as-proponi', vista: V_MG_ASSORTIMENTO, se: puo('assortimento'), facoltativo: true, posizione: 'sotto', titolo: 'Proponi dai consumi',
-          testo: 'Propone le scorte dai consumi medi degli ultimi 90 giorni: minima circa 3 giorni, riordino circa 7, massima circa 14. Controlla e correggi.' },
+          testo: 'Per gli articoli dell’assortimento propone le scorte dal consumo medio degli ultimi 90 giorni: scorta minima pari a circa 3 giorni di consumo, punto di riordino 7 giorni, scorta massima 14 giorni. Puoi scegliere se toccare solo gli articoli senza scorte o tutti; poi controlla e correggi.' },
         { el: '#as-salva', vista: V_MG_ASSORTIMENTO, se: puo('assortimento'), facoltativo: true, posizione: 'sopra', titolo: 'Salva assortimento',
           testo: 'Le modifiche restano da parte (anche se cambi scheda) finché non premi <b>Salva assortimento</b>; <b>Annulla le modifiche</b> le toglie.' }
       ]
@@ -879,7 +987,7 @@
       descrizione: 'Semaforo, controllo, copia, prova di ripristino e seconda cartella delle copie.',
       passi: [
         { el: '#sis-semaforo, #sis-stato-titolo, #sis-spiega', insieme: true, posizione: 'sotto', titolo: 'Il semaforo',
-          testo: '<b>Verde</b>: tutto a posto. <b>Giallo</b>: qualcosa da guardare, per esempio una copia vecchia o poco spazio sul disco. <b>Rosso</b>: un problema; accanto c’è scritto cosa fare. Il programma controlla la base dati all’avvio e ogni notte e, se serve, si ripara da solo.' },
+          testo: '<b>Verde</b>: tutto a posto. <b>Giallo</b>: qualcosa da guardare, per esempio una copia vecchia o poco spazio sul disco. <b>Rosso</b>: un problema, e il riquadro dice cosa fare. Il programma controlla la base dati all’avvio e ogni notte e, se serve, si ripara da solo.' },
         { el: '#sis-controlla', posizione: 'sotto', titolo: 'Controlla adesso',
           testo: 'Controllo completo di magazzino e utenti. Si può fare anche mentre gli altri lavorano.' },
         { el: '#sis-copia', posizione: 'sotto', titolo: 'Copia adesso',
@@ -1059,8 +1167,9 @@
     return lista(cont.querySelectorAll('input, textarea')).some(function (i) {
       var t = (i.getAttribute('type') || 'text').toLowerCase();
       if (['text', 'number', 'month'].indexOf(t) < 0 && i.tagName !== 'TEXTAREA') return false;
-      // filtri, quantità tenute da parte dalle pagine, caselle del registro (si salvano da sole), lettore
-      if (i.closest('.strumenti, .barra-scanner') || i.matches('input.q[data-art], td.g input')) return false;
+      // filtri, quantità tenute da parte dalle pagine (consumi, confezioni della proposta d'ordine), caselle del registro
+      // (si salvano da sole), lettore
+      if (i.closest('.strumenti, .barra-scanner') || i.matches('input.q[data-art], input.an-conf, td.g input')) return false;
       if (i.value === i.defaultValue) return false;
       // un valore proposto dalla pagina fra i suggerimenti del campo (per esempio la causale di un DDT): niente di scritto
       if (i.list && lista(i.list.options).some(function (o) { return o.value === i.value; })) return false;
@@ -1204,6 +1313,9 @@
     c.passi.splice(i, 1);
     if (!c.passi.length) { Tour.ferma(); return; }
     if (verso < 0) vaiAlPasso(Math.max(0, i - 1), i > 0 ? -1 : 1);
+    // mancavano gli ultimi passi (per esempio nessun armadio da disporre): il passo di prima diventa l'ultimo e mostra
+    // "Fine ✓" (e "Altri giri"), invece di chiudere il giro di colpo
+    else if (i >= c.passi.length && i > 0) vaiAlPasso(i - 1, -1);
     else vaiAlPasso(i, 1);
   }
 
@@ -1336,8 +1448,9 @@
     // niente scrollIntoView: su una pagina più larga dello schermo sposterebbe di lato anche la vista del telefono
     scorriContenitori(primo);
     liberaDalleColonneFisse(primo);
-    // gli elementi fissi (barra in alto, menu laterale) non si spostano scorrendo la pagina
-    if (elementi.some(function (e) { return e.closest('.testa-fissa, .laterale'); })) return;
+    // gli elementi fissi (barra in alto, menu laterale, finestre) non si spostano scorrendo la pagina: dentro una
+    // finestra basta lo scorrimento del suo corpo (scorriContenitori)
+    if (elementi.some(function (e) { return e.closest('.testa-fissa, .laterale, #modale'); })) return;
     var r = rettangoloDi(elementi);
     var v = vista();
     var alto = Math.max(v.y, altezzaTesta());

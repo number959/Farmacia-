@@ -1,7 +1,8 @@
 {
-  "nota": "Esempio per HTTPS. Copia questo file nella cartella dati con il nome configurazione.json, togli questa riga di nota e metti nella cartella dati i file del certificato. La porta si sceglie con l'installazione (Installa servizio.bat -Porta 8443), non qui.",
+  "nota": "Esempio. Copia questo file nella cartella dati con il nome configurazione.json, tieni solo le voci che ti servono e riavvia il servizio. Questa nota può restare: il programma la ignora. https: metti nella cartella dati i file del certificato (oppure usa \"pfx\" e \"passphrase\"); senza certificato togli tutta la voce https, altrimenti il programma non parte. secondaCartella: disco esterno o cartella di rete per una seconda copia delle copie verificate e del giornale; nel JSON ogni barra rovesciata si scrive doppia; per una cartella di rete usa il percorso completo, per esempio \\\\nas-clinica\\copie\\farmacia (le lettere di unità mappate non valgono per il servizio). La porta si sceglie con l'installazione (Installa servizio.bat -Porta 8443), non qui.",
   "https": {
     "cert": "certificato.pem",
     "key": "chiave.pem"
-  }
+  },
+  "secondaCartella": "E:\\CopieFarmacia"
 }

@@ -16,7 +16,10 @@
  *            Nei testi «…» è il nome di un pulsante, di un campo o di una pagina: nella guida scritta diventa grassetto
  *            (nelle didascalie dei video si possono lasciare le virgolette o toglierle).
  *   serve(g)          true se la guida riguarda le pagine che l'utente collegato può usare
- *   controlla(g)      Promise → { video: bool, passi: [{ inizio, fine, testo }], durata: secondi | null } (con memoria)
+ *   controlla(g)      Promise → { video: bool, aggiornato: bool, passi: [{ inizio, fine, testo }], durata: secondi | null }
+ *                     (con memoria). aggiornato = le didascalie del video (.vtt) sono proprio i passi di adesso: un video
+ *                     girato per una versione precedente (passi cambiati) resta guardabile, ma la guida scritta passa
+ *                     davanti e il video dice che è della versione precedente. Rigenerato il video, l'avviso sparisce.
  *   apriVideo(id)     finestra con il video, i passi a fianco (cliccabili), Guidami e la guida scritta
  *   apriScritta(id)   finestra con la guida scritta completa, Guidami sulla pagina e il collegamento alla pagina
  *
@@ -450,7 +453,10 @@
         '«✨ Disposizione automatica» sistema da sola gli articoli senza posto, per categoria e nome; «Svuota» toglie tutto dall’armadio.',
         'Ogni spostamento si salva subito. Quando hai finito premi «✓ Fine disposizione».'
       ],
-      dopo: 'Le posizioni le vedono subito tutti, anche nella scheda dell’articolo. Gli articoli da frigorifero vanno nel frigorifero e gli stupefacenti nella cassaforte quando usi la disposizione automatica.',
+      dopo: [
+        'Le posizioni le vedono subito tutti, anche nella scheda dell’articolo e nella ricerca «Dove si trova?».',
+        'La disposizione automatica mette nel frigorifero solo gli articoli segnati come da frigorifero e nella cassaforte gli stupefacenti: controlla sempre a occhio dove finiscono questi farmaci e spostali a mano se serve.'
+      ],
       errori: [
         ['Il pulsante «Disponi» non c’è', 'Puoi disporre solo negli armadi dei tuoi magazzini (responsabile di magazzino) o con il ruolo di farmacia. La direzione vede soltanto.'],
         ['“Nessun armadio” nel magazzino', 'Gli armadi li crea l’amministratore in «Magazzini e assortimento» → scheda «Armadi» → «+ Nuovo armadio».'],
@@ -527,7 +533,7 @@
     /* ======================= analisi e registri ======================= */
     guida({
       id: 'previsioni-ordini', ico: '📈', gruppo: 'analisi', permesso: 'previsioni', giro: 'previsioni', pagina: 'previsioni', perChi: 'Farmacia · Magazzini · Direzione',
-      dove: 'Menu → «Previsioni e fabbisogno» (tasto E). Le impostazioni sono in «Configura» → «Previsioni e ordini».',
+      dove: 'Le impostazioni (giorni di consegna, livello di servizio…) sono in «Configura» → «Previsioni e ordini».',
       titolo: 'Previsioni, fabbisogno e proposta d’ordine',
       descrizione: 'Quanto si consumerà nei prossimi giorni, per quanto basta la merce, il punto di riordino e quanto ordinare ai fornitori.',
       aChi: 'Alla farmacia centrale per preparare gli ordini ai fornitori; ai responsabili di magazzino per sapere cosa chiedere alla farmacia; alla direzione per seguire i consumi.',
@@ -553,6 +559,7 @@
         ['La proposta chiede di passare a tutta la struttura', 'La proposta d’ordine si calcola sempre su tutta la struttura (consumi di tutti i magazzini, giacenze ovunque e merce in viaggio): premi «Passa a tutta la struttura».'],
         ['Un articolo che si ordina non compare', 'Senza consumi negli ultimi mesi non c’è niente da prevedere: spunta «Anche senza consumi» per vederlo comunque.'],
         ['La proposta conta merce già ordinata e non arrivata', 'Il programma non conosce gli ordini già mandati ai fornitori: correggi a mano le confezioni di quegli articoli.'],
+        ['Un articolo è sotto «Senza fornitore abituale»', 'Il fornitore si prende dall’ultimo carico dell’articolo: quando registri un carico scrivi sempre il «Fornitore».'],
         ['I giorni di consegna non sono giusti', 'L’amministratore li cambia in «Configura» → «Previsioni e ordini» («Giorni di consegna del fornitore»).']
       ],
       approfondimenti: [
@@ -712,6 +719,33 @@
           '«Responsabile di magazzino»: nei suoi magazzini registra consumi e perdite, chiede merce alla farmacia, riceve i DDT, fa i resi e dispone gli articoli negli armadi; il resto lo consulta.',
           '«Direzione (sola lettura)»: vede tutto, stampa ed esporta in Excel, non modifica niente.'
         ] }
+      ]
+    }),
+    guida({
+      id: 'attivita', ico: '📜', gruppo: 'amministrazione', permesso: 'attivita', giro: 'attivita', pagina: 'attivita', perChi: 'Amministratore · Farmacia',
+      titolo: 'Registro attività',
+      descrizione: 'Chi ha fatto cosa e quando: accessi, verifica in due passaggi, movimenti, richieste, DDT, struttura e cure della base dati.',
+      aChi: 'All’amministratore e alla farmacia centrale, per controllare accessi e operazioni o ricostruire cosa è successo.',
+      quando: 'Quando un dato non torna e vuoi sapere chi l’ha cambiato, dopo un accesso sospetto (tentativi sbagliati, utente bloccato), o per un controllo periodico richiesto dalla direzione.',
+      passi: [
+        'Apri «Attività» (tasto V). All’inizio vedi l’ultima settimana, dal più recente.',
+        'Scegli il periodo in «Dal» e «Al»: l’elenco si aggiorna da solo.',
+        'In «Utente» scrivi il nome utente (per esempio m.rossi) per vedere solo quello che ha fatto lui.',
+        'In «Azione» scegli un argomento: Accessi e uscite, Verifica in due passaggi, Movimenti, Richieste, DDT e consegne, Magazzini, Assortimento e scorte, Base dati e copie (Sistema)…',
+        'Ogni riga dice «Quando», «Utente», «Azione», «Dettagli» (per esempio articolo, quantità, numero del DDT) e «Indirizzo IP» del computer.',
+        'Le azioni scritte in rosso sono accessi non riusciti o blocchi: se sono tante per lo stesso utente, parlane con lui ed eventualmente dagli una nuova password.',
+        '«Excel» salva l’elenco che vedi, con gli stessi filtri. «Aggiorna» lo rilegge dal server.'
+      ],
+      dopo: [
+        'Il registro non si modifica e non si cancella da qui: è la traccia di tutto quello che succede nel programma.',
+        'Le operazioni fatte dal programma da solo (controlli notturni, cure della base dati) compaiono con l’utente «sistema».',
+        'Le date scelte valgono per la giornata: il giorno dopo la pagina riparte dall’ultima settimana.'
+      ],
+      errori: [
+        ['“Nessuna attività”', 'Nel periodo o con quei filtri non c’è niente: allarga le date, svuota «Utente» e scegli «Tutte» in «Azione».'],
+        ['Accanto al numero degli eventi c’è “i più recenti: restringi le date”', 'La pagina mostra al massimo 2000 eventi: scegli un periodo più corto o un’azione sola.'],
+        ['Non trovi la pagina «Attività»', 'La vedono solo l’amministratore e la farmacia centrale.'],
+        ['Un movimento risulta fatto da un collega che dice di non averlo fatto', 'Controlla l’«Indirizzo IP» e l’ora: se qualcuno usa l’utente di un altro, cambiate la password e attivate la verifica in due passaggi. Ricorda a tutti di uscire a fine turno.']
       ]
     }),
     guida({
@@ -891,24 +925,34 @@
     });
   }
 
+  // il video è stato girato con i passi di adesso? (genera-videoguide.js scrive nel .vtt proprio il testo dei passi)
+  function pulito(t) { return String(t || '').replace(/[«»]/g, '').replace(/\s+/g, ' ').trim(); }
+  function videoAggiornato(g, passiVideo) {
+    if (passiVideo.length !== g.passi.length) return false;
+    return g.passi.every(function (p, i) { return pulito(p) === pulito(passiVideo[i].testo); });
+  }
+
+  var AVVISO_VECCHIO = 'Questo video è della versione precedente del programma: alcune schermate e alcuni passi sono cambiati. ' +
+    'Segui la guida scritta, che è aggiornata.';
+
   var stato = {}; // id → Promise del controllo (una volta per sessione della pagina)
 
   Guide.controlla = function (g) {
     if (!stato[g.id]) {
       var prova = esiste(g.video).then(function (c) {
-        if (!c) return { video: false, passi: [], durata: null };
+        if (!c) return { video: false, aggiornato: false, passi: [], durata: null };
         return fetch(g.sottotitoli, { cache: 'no-cache' }).then(function (r) {
           return r.ok ? r.text() : '';
         }).catch(function () { return ''; }).then(function (vtt) {
           var passi = leggiVtt(vtt);
-          return { video: true, passi: passi, durata: passi.length ? passi[passi.length - 1].fine : null };
+          return { video: true, aggiornato: videoAggiornato(g, passi), passi: passi, durata: passi.length ? passi[passi.length - 1].fine : null };
         });
       });
       stato[g.id] = prova;
       // dopo un errore (per esempio la rete) non lo ricordo: si riprova la volta dopo
       prova.catch(function () { if (stato[g.id] === prova) delete stato[g.id]; });
     }
-    return stato[g.id].catch(function () { return { video: false, passi: [], durata: null }; });
+    return stato[g.id].catch(function () { return { video: false, aggiornato: false, passi: [], durata: null }; });
   };
 
   // ferma il video e libera il lettore (memoria e collegamento): il solo pause() lascia tutto il video in memoria
@@ -936,7 +980,8 @@
       App.apriModale({
         titolo: g.ico + ' ' + g.titolo,
         largo: true,
-        corpo: '<div class="guide-lettore">' +
+        corpo: (st.aggiornato ? '' : '<div class="banda attenzione guide-video-vecchio" role="note" style="margin-bottom:12px"><p>' + h(AVVISO_VECCHIO) + '</p></div>') +
+          '<div class="guide-lettore">' +
           '<div class="guide-video"><video controls playsinline preload="auto" poster="' + h(g.copertina) + '" src="' + h(g.video) + '">' +
           '<track kind="subtitles" srclang="it" label="Italiano" src="' + h(g.sottotitoli) + '">' +
           'Il browser non riesce a mostrare il video.</video></div>' +
@@ -1066,7 +1111,11 @@
         });
         var bv = m.querySelector('#guide-scritta-video');
         bv.addEventListener('click', function () { App.chiudiModale(); Guide.apriVideo(g.id); });
-        Guide.controlla(g).then(function (st) { if (st.video && bv.isConnected) bv.hidden = false; });
+        Guide.controlla(g).then(function (st) {
+          if (!st.video || !bv.isConnected) return;
+          bv.hidden = false;
+          if (!st.aggiornato) bv.textContent = '▶ Video (versione precedente)';
+        });
       }
     });
   };
@@ -1161,8 +1210,20 @@
       if (st.durata) { d.textContent = durata(st.durata); d.hidden = false; }
       var b = art.querySelector('[data-video]');
       b.hidden = false;
-      if (st.durata) b.setAttribute('aria-label', 'Guarda il video: ' + g.titolo + ' (durata ' + durata(st.durata) + ')');
-      // con il video, la guida scritta diventa il pulsante secondario
+      if (st.durata) b.setAttribute('aria-label', 'Guarda il video: ' + g.titolo + ' (durata ' + durata(st.durata) + ')' + (st.aggiornato ? '' : ', versione precedente'));
+      if (!st.aggiornato) {
+        // video della versione precedente: la guida scritta resta il pulsante principale
+        art.classList.add('video-vecchio');
+        b.classList.remove('primario');
+        var leggi = art.querySelector('[data-leggi]');
+        leggi.parentNode.insertBefore(leggi, b); // prima la guida scritta, poi il video
+        b.textContent = '▶ Video (versione precedente)';
+        var n = art.querySelector('.guide-solo-testo');
+        n.textContent = 'Il video è della versione precedente: la guida scritta è aggiornata.';
+        n.hidden = false;
+        return;
+      }
+      // con il video aggiornato, la guida scritta diventa il pulsante secondario
       art.querySelector('[data-leggi]').classList.remove('primario');
     });
   }
@@ -1278,7 +1339,7 @@
       if (art) { art.scrollIntoView({ block: 'center' }); art.classList.add('guide-evidenziata'); }
       Guide.controlla(richiesta).then(function (st) {
         if (!document.body.contains(cont)) return;
-        if (st.video && !par.scritta) Guide.apriVideo(richiesta.id);
+        if (st.video && st.aggiornato && !par.scritta) Guide.apriVideo(richiesta.id);
         else Guide.apriScritta(richiesta.id);
       });
     }
