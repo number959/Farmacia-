@@ -129,7 +129,7 @@
       azione(this, 'Copia in corso…', '/api/sistema/copia', function (r) {
         var buone = r.copie.filter(function (c) { return c.verificata === true; });
         if (buone.length === r.copie.length) {
-          return { testo: 'Copie fatte e verificate: ' + r.copie.map(function (c) { return FILE_COPIA[c.prefisso] + ' (' + App.fmtDimensione(c.dimensione) + ')'; }).join(' e ') + '.', tipo: 'ok', nuove: r.copie.map(function (c) { return c.nome; }) };
+          return { testo: 'Copie fatte e verificate: ' + r.copie.map(function (c) { return FILE_COPIA[c.prefisso] + ' (' + App.fmtDimensione(c.dimensione) + ')'; }).join(' e ') + '.' + notaSeconda(r), tipo: 'ok', nuove: r.copie.map(function (c) { return c.nome; }) };
         }
         return { testo: 'Copia fatta ma NON verificata: ' + r.copie.filter(function (c) { return c.verificata !== true; }).map(function (c) { return c.errore || c.nome; }).join('; '), tipo: 'errore' };
       });
@@ -141,6 +141,15 @@
         return { testo: 'La prova ha trovato differenze: ' + p.messaggi.join(' '), tipo: 'errore', prova: true };
       });
     });
+
+    /* Dopo "Copia adesso": le copie sono arrivate anche nella seconda cartella? (il server risponde dopo averci provato) */
+    function notaSeconda(r) {
+      var sc = r.sistema && r.sistema.secondaCartella;
+      if (!sc || !sc.percorso) return '';
+      if (r.copie.every(function (c) { return c.seconda; })) return ' Copiate anche nella seconda cartella.';
+      if (sc.raggiungibile === false) return ' La seconda cartella non è raggiungibile: le copie restano nella cartella dati.';
+      return ' La seconda cartella si sta ancora aggiornando: ci arriveranno fra poco.';
+    }
 
     /* Un pulsante d'azione: scrive, aspetta, mostra l'esito e ridisegna con lo stato nuovo. */
     function azione(btn, testoAttesa, percorso, esito) {
@@ -437,9 +446,11 @@
 
     function voceCura(c) {
       var buona = c.esito === 'curato';
+      var titolo = c.metodo === 'linea-nuova' ? 'Magazzino più indietro del giornale: ' + (c.perse === 1 ? '1 modifica persa' : (c.perse || 'qualche') + ' modifiche perse')
+        : 'Cura di ' + c.file + (buona ? ': nessun dato perso' : c.esito === 'curato-con-perdite' ? ': qualche dato perso' : ': ripartito da vuoto');
       return {
         quando: c.quando, livello: buona ? 'cura' : 'problema',
-        titolo: 'Cura di ' + c.file + (buona ? ': nessun dato perso' : c.esito === 'curato-con-perdite' ? ': qualche dato perso' : ': ripartito da vuoto'),
+        titolo: titolo,
         dettaglio: c.messaggio || ''
       };
     }

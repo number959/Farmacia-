@@ -56,6 +56,13 @@
   function intero(v) { return Math.round(Number(v) || 0).toLocaleString('it-IT'); }
   function euro0(v) { return (Number(v) || 0).toLocaleString('it-IT', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }); }
   function fmtMisura(misura) { return misura === 'valore' ? euro0 : n1; }
+
+  // singolare con 1: "1 articolo", "3 articoli"
+  function quanti(n, uno, tanti) { return intero(n) + ' ' + (Math.round(Number(n) || 0) === 1 ? uno : tanti); }
+  function giorni(n) { return quanti(n, 'giorno', 'giorni'); }
+  function testoGiaChiesto(q) { return App.fmtNum(q) + (Number(q) === 1 ? ' già chiesto' : ' già chiesti'); }
+  function ogniGiorni(n) { return Number(n) === 1 ? 'ogni giorno' : 'ogni ' + giorni(n); }
+  function prossimiGiorni(n) { return Number(n) === 1 ? 'nel prossimo giorno' : 'nei prossimi ' + giorni(n); }
   function dataBreve(d) { return d ? App.fmtData(d) : '—'; }
 
   function scheda(titolo, corpo, extraTesta, stretto, id) {
@@ -201,7 +208,8 @@
     var k = storia.length - 1;
     var p2 = prossime.map(function (v, i) { return punto(v, k + 1 + i); });
     if (storia.length) p2.unshift(punto(storia[k], k));
-    var testo = 'Ultime ' + storia.length + ' settimane: ' + storia.map(n1).join(', ') + '. Prossime ' + prossime.length + ' previste: ' + prossime.map(n1).join(', ');
+    var testo = (storia.length === 1 ? 'Ultima settimana: ' : 'Ultime ' + storia.length + ' settimane: ') + storia.map(n1).join(', ') +
+      (prossime.length === 1 ? '. Prossima prevista: ' : '. Prossime ' + prossime.length + ' previste: ') + prossime.map(n1).join(', ');
     return '<svg class="an-spark" viewBox="0 0 ' + L + ' ' + A + '" width="' + L + '" height="' + A + '" role="img" aria-label="' + h(nome + '. ' + testo) + '"><title>' + h(testo) + '</title>' +
       (p1 ? '<polyline class="an-spark-storia" points="' + p1 + '"/>' : '') +
       (p2.length > 1 ? '<polyline class="an-spark-prev" points="' + p2.join(' ') + '"/>' : '') + '</svg>';
@@ -477,11 +485,11 @@
         if (r.totaleStorico > 0) t.conConsumi++;
       });
       var voci = [
-        { id: 'pv-k-previsto', titolo: 'Consumo previsto nei prossimi ' + p.orizzonte + ' giorni', valore: t.valore, formato: euro0, nota: n1(t.previsto) + ' pezzi in tutto' },
-        { id: 'pv-k-articoli', titolo: 'Articoli con consumi', valore: t.conConsumi, formato: intero, nota: 'su ' + intero(righe.length) + ' mostrati · storia di ' + p.storico + ' giorni' },
+        { id: 'pv-k-previsto', titolo: 'Consumo previsto ' + prossimiGiorni(p.orizzonte), valore: t.valore, formato: euro0, nota: n1(t.previsto) + ' pezzi in tutto' },
+        { id: 'pv-k-articoli', titolo: 'Articoli con consumi', valore: t.conConsumi, formato: intero, nota: 'su ' + intero(righe.length) + ' mostrati · storia di ' + giorni(p.storico) },
         { id: 'pv-k-sotto', titolo: 'Al punto di riordino o sotto', valore: t.sotto, formato: intero, classe: t.sotto ? 'pericolo' : 'ok', nota: 'merce disponibile ≤ consumo durante la consegna + scorta di sicurezza' },
-        { id: 'pv-k-esaurimento', titolo: 'In esaurimento entro ' + p.leadTime + ' giorni', valore: t.esaurimento, formato: intero, classe: t.esaurimento ? 'attenzione' : 'ok', nota: 'prima che arrivi un ordine fatto oggi' },
-        { id: 'pv-k-ordine', titolo: daChiedere() ? 'Articoli da chiedere alla farmacia' : 'Articoli da ordinare', valore: t.daOrdinare, formato: intero, nota: 'per circa ' + euro0(t.valoreOrdine) + ' · copre ' + p.leadTime + ' + ' + p.revisione + ' giorni' }
+        { id: 'pv-k-esaurimento', titolo: 'In esaurimento entro ' + giorni(p.leadTime), valore: t.esaurimento, formato: intero, classe: t.esaurimento ? 'attenzione' : 'ok', nota: 'prima che arrivi un ordine fatto oggi' },
+        { id: 'pv-k-ordine', titolo: daChiedere() ? 'Articoli da chiedere alla farmacia' : 'Articoli da ordinare', valore: t.daOrdinare, formato: intero, nota: 'per circa ' + euro0(t.valoreOrdine) + ' · copre ' + p.leadTime + ' + ' + p.revisione + (p.leadTime + p.revisione === 1 ? ' giorno' : ' giorni') }
       ];
       var box = cont.querySelector('#pv-ind');
       box.innerHTML = htmlIndicatori(voci);
@@ -496,11 +504,11 @@
       var misura = st.misura;
       var d = datiAndamento(righe, { vista: st.vista, orizzonte: p.orizzonte, fine: p.fine, storico: p.storico,
         fattore: function (r) { return misura === 'valore' ? r.prezzo : 1; } });
-      var nota = righe.length === 1 ? righe[0].nome : righe.length + ' articoli';
+      var nota = righe.length === 1 ? righe[0].nome : quanti(righe.length, 'articolo', 'articoli');
       cont.querySelector('#pv-andamento-nota').textContent = nota + ' · ' + (misura === 'valore' ? 'valore in euro' : 'pezzi');
       var fmt = fmtMisura(misura);
       var tot = righe.reduce(function (s, r) { return s + r.previstoOrizzonte * (misura === 'valore' ? r.prezzo : 1); }, 0);
-      el.setAttribute('aria-label', 'Consumi registrati e previsti (' + nota + '): previsti ' + fmt(tot) + ' nei prossimi ' + p.orizzonte + ' giorni.');
+      el.setAttribute('aria-label', 'Consumi registrati e previsti (' + nota + '): previsti ' + fmt(tot) + ' ' + prossimiGiorni(p.orizzonte) + '.');
       if (!righe.length) { el.innerHTML = vuoto('Nessun articolo da mostrare', 'Cambia i filtri.'); return; }
       grafico(el, opzioniAndamento(d, misura, stile(), stretto(), st.vista));
     }
@@ -522,7 +530,7 @@
       { col: 'mediaMese', titolo: 'Al mese', tit: 'Consumo medio al mese (storia)' },
       { col: 'tendenza', titolo: 'Tendenza', tit: 'Ultime 4 settimane rispetto alle 4 prima' },
       { col: null, titolo: 'Andamento', tit: 'Ultime 12 settimane e prossime 4 previste' },
-      { col: 'disponibile', titolo: 'Disponibile', tit: 'Giacenza più la merce in viaggio' },
+      { col: 'disponibile', titolo: 'Disponibile', tit: 'Giacenza più la merce in viaggio e, per un magazzino, quella già chiesta alla farmacia (richieste aperte)' },
       { col: 'copertura', titolo: 'Copertura', tit: 'Per quanti giorni basta la merce disponibile e quando finisce' },
       { col: 'puntoRiordino', titolo: 'Punto di riordino', tit: 'Consumo previsto durante la consegna + scorta di sicurezza' },
       { col: 'daOrdinare', titolo: 'Da ordinare', tit: 'Per coprire consegna e periodo fino al prossimo ordine, a confezioni intere' },
@@ -584,7 +592,8 @@
         '<td class="n">' + n1(r.mediaGiorno) + '</td><td class="n">' + n1(r.mediaSettimana) + '</td><td class="n">' + n1(r.mediaMese) + '</td>' +
         '<td class="n">' + tend + '</td>' +
         '<td class="an-c-spark">' + sparkline(r.settimane, r.totaleStorico > 0 ? r.prossime : [], r.nome) + '</td>' +
-        '<td class="n">' + App.fmtNum(r.disponibile) + (r.inViaggio ? '<span class="an-sotto" title="Partito con un DDT e non ancora ricevuto">🚚 ' + App.fmtNum(r.inViaggio) + ' in viaggio</span>' : '') + '</td>' +
+        '<td class="n">' + App.fmtNum(r.disponibile) + (r.inViaggio ? '<span class="an-sotto" title="Partito con un DDT e non ancora ricevuto">🚚 ' + App.fmtNum(r.inViaggio) + ' in viaggio</span>' : '') +
+          (r.giaChiesto ? '<span class="an-sotto" title="Richieste aperte alla farmacia: chiesto o approvato e non ancora partito">📝 ' + testoGiaChiesto(r.giaChiesto) + '</span>' : '') + '</td>' +
         '<td class="n">' + chipCopertura(r) + (r.totaleStorico > 0 && r.esaurimento ? '<span class="an-sotto">finisce il ' + dataBreve(r.esaurimento) + '</span>' : '') + '</td>' +
         '<td class="n">' + (r.totaleStorico > 0 ? n1(r.puntoRiordino) : '<span class="tenue">—</span>') + '</td>' +
         '<td class="n">' + testoOrdine(r) + '</td>' +
@@ -614,9 +623,9 @@
           '<thead><tr>' + testa + '</tr></thead><tbody>' + mostrate.map(rigaHtml).join('') + '</tbody></table></div>' +
           (tante ? '<div class="an-piede"><button type="button" class="btn" id="pv-tutte">Mostra tutti gli articoli (' + righe.length + ')</button></div>' : '')
           : vuoto('Nessun articolo da mostrare', st.anche ? 'Cambia i filtri.' : 'Cambia i filtri o spunta “Anche senza consumi”.')) +
-        '<p class="piccolo tenue an-nota-tabella">Consegna in <b>' + p.leadTime + ' giorni</b> (o quelli dell’articolo), un ordine ogni <b>' + p.revisione + ' giorni</b>, ' +
+        '<p class="piccolo tenue an-nota-tabella">Consegna in <b>' + giorni(p.leadTime) + '</b> (o quelli dell’articolo), un ordine <b>' + ogniGiorni(p.revisione) + '</b>, ' +
         'livello di servizio <b>' + n1(p.servizio * 100) + '%</b> (si cambiano in Configura). Clic sul nome per il dettaglio con i grafici.</p>',
-        '<span class="nota">' + righe.length + ' articoli</span>' + filtroClasse +
+        '<span class="nota">' + quanti(righe.length, 'articolo', 'articoli') + '</span>' + filtroClasse +
         '<label class="spunta"><input type="checkbox" id="pv-anche"' + (st.anche ? ' checked' : '') + '> Anche senza consumi</label>' +
         '<button type="button" class="btn piccolo" id="pv-excel">Excel</button>', true);
       if (root.Motion && !ridotto()) root.Motion.entra(pan.querySelectorAll('#pv-tabella tbody tr:nth-child(-n+20)'), { ritardo: 18, distanza: 6 });
@@ -626,14 +635,14 @@
       var righe = ordinate(filtrate(ultima));
       var colonne = [{ titolo: 'Articolo', larghezza: 40 }, { titolo: 'Categoria', larghezza: 11 }, { titolo: 'Classe', larghezza: 8 },
         { titolo: 'Medio al giorno', larghezza: 12 }, { titolo: 'Medio a settimana', larghezza: 12 }, { titolo: 'Medio al mese', larghezza: 12 },
-        { titolo: 'Tendenza %', larghezza: 11 }, { titolo: 'Giacenza', larghezza: 11 }, { titolo: 'In viaggio', larghezza: 11 },
+        { titolo: 'Tendenza %', larghezza: 11 }, { titolo: 'Giacenza', larghezza: 11 }, { titolo: 'In viaggio', larghezza: 11 }, { titolo: 'Già chiesto', larghezza: 11 },
         { titolo: 'Copertura (giorni)', larghezza: 12 }, { titolo: 'Esaurimento', larghezza: 12 }, { titolo: 'Scorta di sicurezza', larghezza: 12 },
         { titolo: 'Punto di riordino', larghezza: 12 }, { titolo: 'Fabbisogno', larghezza: 12 }, { titolo: 'Confezioni da ordinare', larghezza: 12 },
         { titolo: 'Unità da ordinare', larghezza: 12 }, { titolo: 'Modello', larghezza: 22 }, { titolo: 'Affidabilità', larghezza: 11 }];
       var r1 = function (v) { return Math.round((Number(v) || 0) * 10) / 10; };
       var dati = righe.map(function (r) {
         return [r.nome, r.categoria, r.abc + (r.xyz || ''), r1(r.mediaGiorno), r1(r.mediaSettimana), r1(r.mediaMese), r.tendenza === null ? '' : r.tendenza,
-          r.giacenza, r.inViaggio, r.totaleStorico > 0 ? (r.copertura === Infinity ? 'oltre un anno' : r1(r.copertura)) : '', r.esaurimento ? App.fmtData(r.esaurimento) : '',
+          r.giacenza, r.inViaggio, r.giaChiesto || 0, r.totaleStorico > 0 ? (r.copertura === Infinity ? 'oltre un anno' : r1(r.copertura)) : '', r.esaurimento ? App.fmtData(r.esaurimento) : '',
           r1(r.scortaSicurezza), r1(r.puntoRiordino), r1(r.fabbisogno), r.confezioni, r.daOrdinare, r.nomeModello, r.affidabilita.testo];
       });
       root.ExcelFarmacia.esportaElenco('Fabbisogno', colonne, dati).then(function (b) {
@@ -665,7 +674,7 @@
           var intensita = Math.min(1, 0.08 + quota * 1.6);
           var sel = st.classe === x + y;
           celle += '<button type="button" class="an-abc-cella' + (sel ? ' scelta' : '') + (intensita > 0.55 ? ' scura' : '') + '" data-classe="' + x + y + '" style="--quota:' + intensita.toFixed(3) + '"' +
-            ' aria-pressed="' + sel + '" aria-label="Classe ' + x + y + ': ' + c.n + ' articoli, ' + n1(quota * 100) + '% della spesa. Mostra nella tabella"' + (c.n ? '' : ' disabled') + '>' +
+            ' aria-pressed="' + sel + '" aria-label="Classe ' + x + y + ': ' + quanti(c.n, 'articolo', 'articoli') + ', ' + n1(quota * 100) + '% della spesa. Mostra nella tabella"' + (c.n ? '' : ' disabled') + '>' +
             '<span class="an-abc-sigla">' + x + y + '</span><span class="an-abc-n">' + c.n + '</span><span class="an-abc-quota">' + n1(quota * 100) + '% della spesa</span></button>';
         });
       });
@@ -673,7 +682,7 @@
         scheda('Matrice ABC-XYZ', '<div class="an-abc-griglia">' + celle + '</div>' +
           '<div class="guida piccolo an-abc-guida"><p><b>ABC</b>: valore dei consumi (pezzi × prezzo) dello storico; gli articoli <b>A</b> fanno l’80% della spesa, i <b>B</b> il 15%, i <b>C</b> il 5%.</p>' +
           '<p><b>XYZ</b>: quanto varia il consumo da una settimana all’altra. Gli <b>AX</b> si ordinano con fiducia e scorte basse; gli <b>AZ</b> vanno seguiti da vicino; i <b>CZ</b> si possono tenere a scorta minima.</p>' +
-          '<p>Clic su una casella per vedere quegli articoli nella tabella del fabbisogno.</p></div>', '<span class="nota">' + righe.length + ' articoli con consumi</span>') +
+          '<p>Clic su una casella per vedere quegli articoli nella tabella del fabbisogno.</p></div>', '<span class="nota">' + quanti(righe.length, 'articolo con consumi', 'articoli con consumi') + '</span>') +
         scheda('Curva ABC (Pareto)', '<div class="an-grafico" id="pv-pareto" role="img" aria-label="Valore dei consumi per articolo, dal più alto, con la quota cumulata"></div>' +
           '<p class="piccolo tenue an-legenda">Barre: valore dei consumi degli articoli più costosi; linea: quota cumulata della spesa. Le linee all’80% e al 95% separano A, B e C.</p>') +
         '</div>';
@@ -756,7 +765,7 @@
         }).join('');
         totale += parziale;
         return '<section class="an-fornitore" data-gruppo="' + gi + '"><div class="an-fornitore-testa"><h3>' + h(g.fornitore || 'Senza fornitore abituale') + '</h3>' +
-          '<span class="nota">' + g.righe.length + ' articoli · <b class="an-parziale">' + App.fmtEuro(parziale) + '</b></span></div>' +
+          '<span class="nota">' + quanti(g.righe.length, 'articolo', 'articoli') + ' · <b class="an-parziale">' + App.fmtEuro(parziale) + '</b></span></div>' +
           '<div class="tabella-contenitore"><table class="tabella an-ordine"><thead><tr><th scope="col" class="an-art">Articolo</th><th scope="col" class="n">Disponibile</th>' +
           '<th scope="col" class="n" title="Consumo previsto su consegna + periodo fino al prossimo ordine, più la scorta di sicurezza">Fabbisogno</th>' +
           '<th scope="col" class="n">Proposta (conf.)</th><th scope="col" class="n">Confezioni</th><th scope="col" class="n">Unità</th>' +
@@ -765,12 +774,12 @@
       var imp = App.S.impostazioni || {};
       pan.innerHTML = '<section class="scheda an-proposta" id="pv-proposta">' +
         '<div class="an-solo-stampa an-stampa-testa"><b>Proposta d’ordine</b> — ' + h(imp.struttura || '') + ' · ' + App.fmtData(App.oggi()) + '</div>' +
-        '<div class="scheda-testa"><h2>Proposta d’ordine della farmacia centrale</h2><span class="nota" id="pv-ordine-tot">' + nArt + ' articoli · ' + App.fmtEuro(totale) + '</span>' +
+        '<div class="scheda-testa"><h2>Proposta d’ordine della farmacia centrale</h2><span class="nota" id="pv-ordine-tot">' + quanti(nArt, 'articolo', 'articoli') + ' · ' + App.fmtEuro(totale) + '</span>' +
         '<button type="button" class="btn piccolo" id="pv-ordine-ripristina"' + (Object.keys(mem.ordine).length ? '' : ' disabled') + '>Ripristina la proposta</button>' +
         '<button type="button" class="btn piccolo" id="pv-ordine-stampa">Stampa</button>' +
         '<button type="button" class="btn piccolo primario" id="pv-ordine-excel">Excel</button></div>' +
         '<div class="scheda-corpo">' +
-        '<p class="piccolo tenue an-nota-ordine">Quantità = consumo previsto per ' + p.leadTime + ' giorni di consegna + ' + p.revisione + ' giorni fino al prossimo ordine + scorta di sicurezza, ' +
+        '<p class="piccolo tenue an-nota-ordine">Quantità = consumo previsto per ' + giorni(p.leadTime) + ' di consegna + ' + giorni(p.revisione) + ' fino al prossimo ordine + scorta di sicurezza, ' +
         'meno quello che c’è già in tutta la struttura e in viaggio, arrotondato a confezioni intere. Il fornitore è quello dell’articolo o dell’ultimo carico. ' +
         'Puoi cambiare le confezioni: la proposta le ricorda finché resti collegato.</p>' +
         (gruppi.length ? corpo : vuoto('Niente da ordinare', 'Con le scorte attuali e la merce in viaggio il fabbisogno è coperto.')) +
@@ -796,7 +805,7 @@
         totale += parziale;
       });
       var t = pan.querySelector('#pv-ordine-tot');
-      if (t) t.textContent = nArt + ' articoli · ' + App.fmtEuro(totale);
+      if (t) t.textContent = quanti(nArt, 'articolo', 'articoli') + ' · ' + App.fmtEuro(totale);
       var rip = pan.querySelector('#pv-ordine-ripristina');
       if (rip) rip.disabled = !Object.keys(mem.ordine).length;
     }
@@ -821,7 +830,7 @@
       var imp = App.S.impostazioni || {};
       root.ExcelOrdini.propostaOrdine({
         struttura: imp.struttura || '', data: App.oggi(), gruppi: gruppi,
-        note: 'Consegna ' + p.leadTime + ' giorni · un ordine ogni ' + p.revisione + ' giorni · livello di servizio ' + n1(p.servizio * 100) + '%' + (st.cat ? ' · ' + (st.cat === 'FARMACI' ? 'solo farmaci' : 'solo presidi') : '')
+        note: 'Consegna ' + giorni(p.leadTime) + ' · un ordine ' + ogniGiorni(p.revisione) + ' · livello di servizio ' + n1(p.servizio * 100) + '%' + (st.cat ? ' · ' + (st.cat === 'FARMACI' ? 'solo farmaci' : 'solo presidi') : '')
       }).then(function (b) {
         App.scarica(b, 'Proposta_ordine_' + App.oggi() + '.xlsx');
       }, function (e) { App.avviso('Esportazione non riuscita: ' + (e && e.message ? e.message : e), 'errore'); });
@@ -841,7 +850,7 @@
     function apriDettaglio(id) {
       var r = rigaDi(id);
       if (!r) return;
-      dettaglioArticolo(r, ultima.parametri, st.vista);
+      dettaglioArticolo(r, ultima.parametri, st.vista, daChiedere());
     }
 
     /* ---------- eventi ---------- */
@@ -930,24 +939,44 @@
 
   /* ======================= finestra di dettaglio di un articolo ======================= */
 
-  function dettaglioArticolo(r, p, vista) {
+  /* Testo sotto "Disponibile" nel dettaglio: in viaggio e già chiesto. */
+  function notaDisponibile(r) {
+    var parti = [];
+    if (r.inViaggio) parti.push('🚚 ' + App.fmtNum(r.inViaggio) + ' in viaggio');
+    if (r.giaChiesto) parti.push('📝 ' + testoGiaChiesto(r.giaChiesto) + ' alla farmacia');
+    return parti.length ? 'di cui ' + parti.join(' e ') : 'giacenza, nessun DDT in viaggio';
+  }
+
+  /* Giorni insoliti contati come la soglia nella previsione (js/previsioni.js, limitaAnomali). */
+  function notaAnomali(r) {
+    var l = r.anomali || [];
+    if (!l.length) return '';
+    var u = r.unita || 'pz';
+    var dett = l.map(function (x) { return 'il ' + App.fmtData(x.data) + ' sono registrati ' + App.fmtNum(x.valore) + ' ' + h(u) + ', contati come ' + n1(x.contato); }).join('; ');
+    return '<p class="piccolo an-anomali" role="note"><b>' + (l.length === 1 ? 'Un giorno insolito' : l.length + ' giorni insoliti') + '</b>: ' + dett +
+      '. La previsione e la scorta non si gonfiano; il grafico mostra il dato registrato. Se è un errore di battitura, annulla il movimento nella pagina Movimenti e registralo giusto.</p>';
+  }
+
+  // chiedere: l'ambito è di magazzini periferici ("Da chiedere alla farmacia" invece di "Da ordinare")
+  function dettaglioArticolo(r, p, vista, chiedere) {
     var st = r.stima;
     var u = r.unita || 'pz';
     function kpi(t, v, nota) { return '<div class="an-mini"><span>' + h(t) + '</span><b>' + v + '</b>' + (nota ? '<small>' + nota + '</small>' : '') + '</div>'; }
-    var copertura = !(r.totaleStorico > 0) ? '—' : (r.copertura === Infinity ? 'oltre un anno' : n1(r.copertura) + ' giorni');
+    var copertura = !(r.totaleStorico > 0) ? '—' : (r.copertura === Infinity ? 'oltre un anno' : n1(r.copertura) + (n1(r.copertura) === '1' ? ' giorno' : ' giorni'));
     var vistaD = vista || 'settimana';
     var corpo =
       '<div class="an-mini-griglia">' +
       kpi('Consumo medio', n1(r.mediaGiorno) + ' ' + h(u) + '/giorno', n1(r.mediaSettimana) + ' a settimana · ' + n1(r.mediaMese) + ' al mese') +
-      kpi('Disponibile', App.fmtNum(r.disponibile) + ' ' + h(u), r.inViaggio ? 'di cui 🚚 ' + App.fmtNum(r.inViaggio) + ' in viaggio' : 'giacenza, nessun DDT in viaggio') +
+      kpi('Disponibile', App.fmtNum(r.disponibile) + ' ' + h(u), notaDisponibile(r)) +
       kpi('Copertura', copertura, r.esaurimento ? 'finisce verso il ' + App.fmtData(r.esaurimento) : '') +
       kpi('Punto di riordino', n1(r.puntoRiordino) + ' ' + h(u), 'scorta di sicurezza ' + n1(r.scortaSicurezza) + ' (consegna ' + r.leadTime + ' gg)') +
-      kpi('Da ordinare', r.confezioni > 0 ? (r.pezziConfezione > 1 ? intero(r.confezioni) + ' conf. (' + App.fmtNum(r.daOrdinare) + ' ' + h(u) + ')' : App.fmtNum(r.daOrdinare) + ' ' + h(u)) : 'niente',
-        'fabbisogno ' + n1(r.fabbisogno) + ' per ' + (r.leadTime + r.revisione) + ' giorni') +
+      kpi(chiedere ? 'Da chiedere' : 'Da ordinare', r.confezioni > 0 ? (r.pezziConfezione > 1 ? intero(r.confezioni) + ' conf. (' + App.fmtNum(r.daOrdinare) + ' ' + h(u) + ')' : App.fmtNum(r.daOrdinare) + ' ' + h(u)) : 'niente',
+        'fabbisogno ' + n1(r.fabbisogno) + ' per ' + giorni(r.leadTime + r.revisione)) +
       kpi('Modello', h(st.breve), (st.affidabilita ? 'affidabilità ' + h(st.affidabilita.testo).toLowerCase() : '') + (st.mae !== null && st.mae !== undefined ? ' · errore medio ±' + n1(st.mae) + ' al giorno' : '')) +
       '</div>' +
       '<div class="an-dett-testa"><h3>Consumi e previsione</h3>' + segmenti('pvd-vista', 'Vista', VISTE, vistaD, true) + '</div>' +
       '<div class="an-grafico" id="pvd-grafico" role="img" aria-label="Consumi registrati e previsione di ' + h(r.nome) + '"></div>' +
+      notaAnomali(r) +
       '<div class="an-dett-due">' +
       '<div><h3>Consumi per giorno della settimana</h3><div class="an-grafico an-grafico-calore" id="pvd-calore" role="img" aria-label="Mappa di calore dei consumi per giorno della settimana nelle ultime 12 settimane"></div>' +
       '<p class="piccolo tenue" id="pvd-calore-nota"></p></div>' +
@@ -955,10 +984,12 @@
       '<div id="pvd-modelli-tab"></div></div>' +
       '</div>' +
       '<details class="an-come"><summary>Come si legge</summary><div class="guida piccolo">' +
-      '<p>La previsione usa i consumi e le perdite degli ultimi ' + (p ? p.storico : 180) + ' giorni (i trasferimenti fra magazzini non sono consumi). ' +
+      '<p>La previsione usa i consumi e le perdite degli ultimi ' + giorni(p ? p.storico : 180) + ' (i trasferimenti fra magazzini non sono consumi). ' +
       'Il programma prova più modelli: fa finta di essere 4 settimane fa, prevede le 4 settimane successive e controlla quale sbaglia meno (errore medio assoluto). Vince il più preciso; a parità, il più semplice.</p>' +
       '<p><b>Scorta di sicurezza</b> = z × σ × √(giorni di consegna): σ è l’errore tipico della previsione di un giorno, z dipende dal livello di servizio. ' +
       '<b>Punto di riordino</b> = consumo previsto durante la consegna + scorta di sicurezza. <b>Da ordinare</b> = consumo previsto per consegna e periodo fino al prossimo ordine + scorta − merce disponibile, a confezioni intere.</p>' +
+      '<p><b>Merce disponibile</b> = giacenza + merce in viaggio; per un magazzino anche quella già chiesta alla farmacia e non ancora partita (richieste aperte), così non si chiede due volte. ' +
+      'Un <b>giorno insolito</b> (un consumo molto più alto del solito in un giorno solo, per esempio 500 scritto al posto di 5) nella previsione e nella scorta conta come la soglia del solito: il grafico mostra sempre il dato registrato.</p>' +
       '</div></details>';
     App.apriModale({
       titolo: r.nome,
@@ -1064,7 +1095,7 @@
     });
     var righe = st.candidati.slice().sort(function (a, b) { return a.mae - b.mae; });
     tab.innerHTML = '<table class="tabella an-modelli"><caption class="an-sr">Errore dei modelli nella retro-verifica</caption><thead><tr><th scope="col">Modello</th>' +
-      '<th scope="col" class="n" title="Errore assoluto medio al giorno sulle ultime ' + H + ' giorni">Errore al giorno</th>' +
+      '<th scope="col" class="n" title="Errore assoluto medio al giorno sugli ultimi ' + giorni(H) + '">Errore al giorno</th>' +
       '<th scope="col" class="n" title="Errore medio sulle somme di 7 giorni, riportato al giorno">Sulla settimana</th></tr></thead><tbody>' +
       righe.map(function (c) {
         var scelto = c.id === st.id;
@@ -1348,7 +1379,7 @@
         figli.sort(function (x, y) { return y.value - x.value; });
         if (figli.length > 24) {
           var altri = figli.slice(24).reduce(function (t, x) { return t + x.value; }, 0);
-          figli = figli.slice(0, 24).concat([{ name: 'Altri ' + (figli.length - 24) + ' articoli', value: Math.round(altri * 100) / 100 }]);
+          figli = figli.slice(0, 24).concat([{ name: figli.length - 24 === 1 ? 'Un altro articolo' : 'Altri ' + (figli.length - 24) + ' articoli', value: Math.round(altri * 100) / 100 }]);
         }
         var tot = figli.reduce(function (t, x) { return t + x.value; }, 0);
         if (tot > 0) {
@@ -1432,7 +1463,7 @@
           '<thead>' + t1 + t2 + '</thead><tbody>' + corpo + '</tbody></table></div>' +
           (tante ? '<div class="an-piede"><button type="button" class="btn" id="ds-tutte">Mostra tutti gli articoli (' + righe.length + ')</button></div>' : '')
           : vuoto('Nessun articolo nel periodo', 'Cambia il periodo o i filtri.'),
-        '<span class="nota">' + righe.length + ' articoli · ' + (st.misura === 'valore' ? 'valori in euro' : 'pezzi') + ' · Dato = dalla farmacia centrale, Cons. = consumi e perdite, Giac. = adesso</span>', true);
+        '<span class="nota">' + quanti(righe.length, 'articolo', 'articoli') + ' · ' + (st.misura === 'valore' ? 'valori in euro' : 'pezzi') + ' · Dato = dalla farmacia centrale, Cons. = consumi e perdite, Giac. = adesso</span>', true);
     }
 
     function esporta() {

@@ -12,6 +12,13 @@
  * "base" è la revisione dell'ultimo ripristino (meta rev_base): le voci di una base diversa appartengono a un'altra
  * "linea" della storia e non si mescolano. Un ripristino o una cura che riparte da una revisione nuova scrivono una
  * voce di segnalazione { rev, base, tipo: 'ripristino' | 'nuova-linea', … } senza cambiamenti.
+ * Segnalazioni anche all'avvio e all'arresto ordinato ({ tipo: 'avvio' | 'chiusura' }): con durevole: true il
+ * magazzino era tutto nel file principale (WAL riversato con un checkpoint completo) a quella revisione. Servono a
+ * distinguere le ultime scritture perse in uno spegnimento improvviso (si riapplicano) da un file rimesso a mano da
+ * una copia vecchia (non si riporta avanti): vedi server/salute.js, recuperaCoda.
+ * "evento" è l'ultimo numero del registro attività (accessi.db, eventi.id) quando la voce si scrive: l'evento della
+ * scrittura viene subito dopo. Una cura confronta così il giornale con il registro attività (scritture registrate
+ * nel registro ma non nel giornale = modifiche che nessuna cura può recuperare).
  *
  * Con una copia di sicurezza (che conosce la propria revisione) e il giornale si ricostruisce il magazzino fino
  * all'ultima scrittura: lo fa server/salute.js quando un file è danneggiato.
@@ -97,6 +104,7 @@ Giornale.prototype.scriviRevisione = function (rev) {
       base: Number(this.database.meta('rev_base') || 0),
       storia: this.database.storia,
       quando: new Date().toISOString(),
+      evento: this.ultimoEvento(),
       cambiamenti: this.cambiamentiRevisione(rev)
     };
   } catch (e) {
@@ -106,13 +114,31 @@ Giornale.prototype.scriviRevisione = function (rev) {
   this.scrivi(voce);
 };
 
-/* Voce di segnalazione: da qui comincia una linea nuova (ripristino di una copia o cura con dati persi). */
+/* Ultimo numero del registro attività (null se accessi.db non si legge): vedi "evento" in testa al file. */
+Giornale.prototype.ultimoEvento = function () {
+  var acc = this.database.accessi;
+  if (!acc) return null;
+  try {
+    if (this.connessioneAccessi !== acc) {
+      this.istEvento = acc.prepare('SELECT MAX(id) m FROM eventi');
+      this.connessioneAccessi = acc;
+    }
+    var r = this.istEvento.get();
+    return r && typeof r.m === 'number' ? r.m : 0;
+  } catch (e) { return null; }
+};
+
+/*
+ * Voce di segnalazione (senza cambiamenti): 'ripristino' e 'nuova-linea' (da qui comincia una linea nuova),
+ * 'avvio' e 'chiusura' (inizio e fine ordinata di una sessione di lavoro).
+ */
 Giornale.prototype.segnaLinea = function (tipo, dettagli) {
   var voce = Object.assign({
     rev: this.database.rev(),
     base: Number(this.database.meta('rev_base') || 0),
     storia: this.database.storia,
     quando: new Date().toISOString(),
+    evento: this.ultimoEvento(),
     tipo: tipo
   }, dettagli || {});
   this.scrivi(voce);
@@ -135,7 +161,8 @@ Giornale.prototype.scrivi = function (voce) {
     fs.fsyncSync(this.fd);
     if (this.errore) this.log('Il giornale delle modifiche si scrive di nuovo.');
     this.errore = null;
-    this.ultima = { rev: voce.rev, base: voce.base, storia: voce.storia, quando: voce.quando };
+    this.ultima = { rev: voce.rev, base: voce.base, storia: voce.storia, quando: voce.quando, tipo: voce.tipo, evento: voce.evento };
+    if (!voce.tipo) this.ultimaModifica = voce.quando;
     this.scritteSessione++;
   } catch (e) {
     this.chiudi();
@@ -228,6 +255,30 @@ function leggi(cartella, opz) {
 Giornale.prototype.leggi = function (opz) { return leggi(this.cartella, opz); };
 
 /*
+ * Coda del giornale: le voci con rev >= daRev (segnalazioni comprese), leggendo i file dal più recente e fermandosi
+ * al primo file che ha anche voci più vecchie (non si rilegge un anno di giornale per le ultime scritture).
+ * Ordine: per revisione, a parità nell'ordine in cui sono scritte. Risposta { voci, illeggibili }.
+ */
+function coda(cartella, daRev) {
+  daRev = Number(daRev) || 0;
+  var files = elencoFile(cartella);
+  var conta = { illeggibili: 0 };
+  var perFile = [];
+  for (var i = files.length - 1; i >= 0; i--) {
+    var tutte = leggiFile(files[i].percorso, conta);
+    perFile.unshift(tutte.filter(function (v) { return v.rev >= daRev; }));
+    if (tutte.some(function (v) { return v.rev < daRev; })) break;
+  }
+  var voci = [].concat.apply([], perFile);
+  voci.forEach(function (v, k) { v._i = k; });
+  voci.sort(function (a, b) { return a.rev - b.rev || a._i - b._i; });
+  voci.forEach(function (v) { delete v._i; });
+  return { voci: voci, illeggibili: conta.illeggibili };
+}
+
+Giornale.prototype.coda = function (daRev) { return coda(this.cartella, daRev); };
+
+/*
  * Catena da riapplicare a un file che è alla revisione daRev della linea "base": le voci della stessa base con
  * rev > daRev, una per revisione e senza buchi. Si ferma al primo buco (una voce mancante: dopo non si può
  * riapplicare niente senza rischiare dati incoerenti).
@@ -269,17 +320,20 @@ function nextOltre(perRev, finoA) {
   return revs.length ? revs[0] - 1 : finoA + 1;
 }
 
-/* Ultima voce del file più recente (letta dalla coda del file, senza leggerlo tutto). */
-function ultimaVoce(cartella) {
+/*
+ * Ultima voce del file più recente (letta dalla coda del file, senza leggerlo tutto).
+ * soloModifiche: salta le segnalazioni (avvio, chiusura, ripristino…) e dà l'ultima voce con dei cambiamenti.
+ */
+function ultimaVoce(cartella, soloModifiche) {
   var files = elencoFile(cartella).sort(function (a, b) { return a.modificato - b.modificato || (a.nome < b.nome ? -1 : 1); });
   for (var i = files.length - 1; i >= 0; i--) {
-    var v = ultimaVoceFile(files[i].percorso);
+    var v = ultimaVoceFile(files[i].percorso, soloModifiche);
     if (v) return v;
   }
   return null;
 }
 
-function ultimaVoceFile(percorso) {
+function ultimaVoceFile(percorso, soloModifiche) {
   var fd;
   try { fd = fs.openSync(percorso, 'r'); } catch (e) { return null; }
   try {
@@ -299,7 +353,7 @@ function ultimaVoceFile(percorso) {
         if (!righe[k].trim()) continue;
         try {
           var v = JSON.parse(righe[k]);
-          if (v && typeof v.rev === 'number') return { rev: v.rev, base: v.base, storia: v.storia, quando: v.quando, tipo: v.tipo };
+          if (v && typeof v.rev === 'number' && !(soloModifiche && v.tipo)) return { rev: v.rev, base: v.base, storia: v.storia, quando: v.quando, tipo: v.tipo, evento: v.evento };
         } catch (e) { /* riga scritta a metà: si guarda la precedente */ }
       }
     }
@@ -318,13 +372,18 @@ Giornale.prototype.ultimaVoce = function () {
 Giornale.prototype.stato = function () {
   var files = this.file();
   var ultima = this.ultimaVoce();
+  // ora dell'ultima modifica (non delle segnalazioni di avvio e chiusura): letta una volta, poi tenuta da scrivi()
+  if (this.ultimaModifica === undefined) {
+    var m = ultimaVoce(this.cartella, true);
+    this.ultimaModifica = m ? m.quando : null;
+  }
   return {
     cartella: this.cartella,
     file: files.length,
     dimensione: files.reduce(function (s, f) { return s + f.dimensione; }, 0),
     dal: files.length ? files[0].nome.slice(0, 10) : null,
     ultimaRevisione: ultima ? ultima.rev : null,
-    ultimaScrittura: ultima ? ultima.quando : null,
+    ultimaScrittura: this.ultimaModifica || (ultima ? ultima.quando : null),
     scritteSessione: this.scritteSessione,
     errore: this.errore
   };
@@ -351,6 +410,7 @@ Giornale.prototype.pulisci = function (limiteMs) {
 module.exports = {
   Giornale: Giornale,
   leggi: leggi,
+  coda: coda,
   catena: catena,
   ultimaVoce: ultimaVoce,
   elencoFile: elencoFile,

@@ -8,8 +8,14 @@
  *      3. (magazzino) archivio vuoto più tutto il giornale, se il giornale c'è dall'inizio;
  *    si tiene la ricostruzione che arriva più avanti (a parità, copia + giornale: è fatta solo di dati verificati),
  *    poi controllo di integrità completo, evento nel registro attività e messaggio nel registro del server;
- *  - dopo uno spegnimento improvviso il magazzino può aver perso le ultime scritture (WAL non ancora sul disco):
- *    si riapplicano dal giornale, che si scrive con fsync;
+ *  - dopo uno spegnimento improvviso il magazzino può aver perso le ultime scritture (WAL non ancora sul disco,
+ *    perso o con la testata rovinata): si riapplicano dal giornale, che si scrive con fsync. Il giornale è la fonte di
+ *    verità: le segnalazioni 'avvio' e 'chiusura' (WAL riversato nel file) dicono fin dove il file era sicuramente
+ *    arrivato, così una coda persa si distingue da un file rimesso a mano da una copia vecchia;
+ *  - quello che il giornale ha e il magazzino no (e non si può riapplicare) è una cura "con perdite" (semaforo rosso),
+ *    mai un silenzio; i numeri di richieste e DDT già dati non tornano liberi;
+ *  - il resoconto di una cura si confronta anche con il registro attività: scritture registrate lì ma assenti dal
+ *    giornale sono perdite da controllare;
  *  - ogni notte: controllo completo (integrity_check), PRAGMA optimize, pulizia del WAL; se il magazzino risulta
  *    danneggiato mentre il programma è acceso si ricostruisce subito (copia + giornale), se si può farlo senza perdite;
  *  - copie automatiche orarie (server/backup.js), "prova di ripristino" su richiesta, stato per la pagina Sistema.
@@ -39,6 +45,8 @@ var MAX_CRESCITA = 400;
 var GIORNO_MS = 24 * 60 * 60 * 1000;
 var GIRO_MS = 5 * 60 * 1000;
 var ORE_NOTTE = [2, 3, 4, 5]; // il controllo completo si fa di notte (alla prima occasione fra le 2 e le 6)
+// azioni del registro attività che scrivono nel magazzino (le altre: accessi, utenti, copie, sistema…)
+var AZIONI_MAGAZZINO = /^(articoli|movimenti|registro|impostazioni|reparti|magazzini|armadi|assortimento|ubicazioni|richieste|ddt|archivio)\.|^accesso\.2fa\.criterio$/;
 
 function due(n) { return String(n).padStart(2, '0'); }
 function marcaTempo(d) {
@@ -305,7 +313,9 @@ function Salute(opz) {
   this.cartellaDanneggiati = path.join(this.cartella, 'danneggiati');
   this.statoSalvato = this.carica();
   this.daRegistrare = [];    // eventi per il registro attività, scritti appena gli accessi sono aperti
-  this.dopoApertura = null;  // { codaDa: { rev, base, sessione } | null, copia: bool } (vedi collega)
+  // dopo curaAllAvvio, per collega: { copia: bool (fare una copia), cura: cura del magazzino di questo avvio,
+  // ultimaGiornale: ultima voce del giornale vista dalla cura, controllo: controllo d'avvio }
+  this.dopoApertura = null;
   this.problemaAttivo = null; // danno trovato a programma acceso e non ancora curato
 }
 
@@ -317,6 +327,8 @@ Salute.prototype.carica = function () {
   if (!Array.isArray(s.controlli)) s.controlli = [];
   if (!Array.isArray(s.crescita)) s.crescita = [];
   if (!s.impostazioni || typeof s.impostazioni !== 'object') s.impostazioni = {};
+  // ultima revisione del magazzino vista dal programma acceso (ogni 5 minuti e all'arresto): { rev, base, quando }
+  if (!s.ultimaVista || typeof s.ultimaVista.rev !== 'number') s.ultimaVista = null;
   return s;
 };
 
@@ -414,30 +426,26 @@ Salute.prototype.curaAllAvvio = function () {
   this.togliAvanzi();
   var controllo = { quando: new Date().toISOString(), tipo: 'avvio', esito: 'ok', file: {}, durataMs: 0 };
   var inizio = Date.now();
-  this.dopoApertura = { codaDa: null, copia: false };
+  this.dopoApertura = { copia: false, cura: null, ultimaGiornale: null, controllo: controllo };
   FILE.forEach(function (nome) {
     var file = path.join(self.cartella, nome + '.db');
-    var walPrima = esiste(file + '-wal') && dimensione(file + '-wal') > 0;
-    var modificato = 0;
-    try { modificato = fs.statSync(file).mtimeMs; } catch (e) { modificato = 0; }
     var c = controllaFile(file, 'rapido', nome === 'farmacia');
     // file sparito: si guarda anche nella seconda cartella (un server nuovo dopo la rottura del disco del vecchio)
     var copie = c.esito === 'mancante' ? self.copieUtilizzabili(nome, true)
       : c.esito === 'ok' && dimensione(file) === 0 ? self.copieUtilizzabili(nome, false) : [];
+    // del magazzino resta anche il giornale delle modifiche: con il giornale non è un'installazione nuova
+    var traccia = copie.length > 0 || (nome === 'farmacia' && (c.esito === 'mancante' || dimensione(file) === 0) && self.giornalePresente());
     if (c.esito === 'mancante') {
-      // installazione nuova: niente da curare. Se però ci sono copie, il file è sparito (cancellato per errore,
-      // messo in quarantena dall'antivirus, disco del server sostituito…) e si ricostruisce.
-      if (!copie.length) { controllo.file[nome] = { esito: 'nuovo' }; return; }
-    } else if (c.esito === 'ok' && dimensione(file) === 0 && copie.length) {
-      // un file vuoto (troncato a zero) sembra un archivio nuovo: con delle copie è un danno
+      // installazione nuova: niente da curare. Se però ci sono copie o il giornale, il file è sparito (cancellato per
+      // errore, messo in quarantena dall'antivirus, disco del server sostituito…) e si ricostruisce.
+      if (!traccia) { controllo.file[nome] = { esito: 'nuovo' }; return; }
+    } else if (c.esito === 'ok' && dimensione(file) === 0 && traccia) {
+      // un file vuoto (troncato a zero) sembra un archivio nuovo: con delle copie o il giornale è un danno
       c.esito = 'danneggiato';
       c.messaggi = ['il file è vuoto'];
     }
     controllo.file[nome] = { esito: c.esito, messaggi: c.messaggi.slice(0, 5), durataMs: c.durataMs };
-    if (c.esito === 'ok') {
-      if (nome === 'farmacia' && walPrima && c.rev !== null) self.dopoApertura.codaDa = { rev: c.rev, base: c.base, sessione: c.sessione, modificato: modificato };
-      return;
-    }
+    if (c.esito === 'ok') return;
     controllo.esito = 'danneggiato';
     var motivo = c.esito === 'mancante' ? 'il file non c’è più' : (c.messaggi.slice(0, 2).join(' · ') || 'danneggiato');
     self.log('ATTENZIONE: ' + nome + '.db ' + (c.esito === 'mancante' ? 'non c’è più' : 'è danneggiato (' + motivo + ')') + ': provo a curarlo.');
@@ -447,6 +455,14 @@ Salute.prototype.curaAllAvvio = function () {
   controllo.durataMs = Date.now() - inizio;
   this.registraControllo(controllo);
   return controllo;
+};
+
+/* C'è un giornale delle modifiche (nella cartella dati o nella seconda cartella)? */
+Salute.prototype.giornalePresente = function () {
+  if (G.ultimaVoce(this.cartellaGiornale)) return true;
+  var seconda = this.secondaCartella();
+  if (!seconda) return false;
+  try { return !!G.ultimaVoce(path.join(seconda, 'giornale')); } catch (e) { return false; }
 };
 
 /* Cartelle di lavoro rimaste da una cura o da una prova di ripristino interrotte (programma fermato a metà). */
@@ -559,6 +575,14 @@ Salute.prototype.curaMagazzino = function (file, motivo) {
     fs.renameSync(scelto.file, file);
     // con modifiche perse, all'apertura il magazzino riparte da una linea nuova sopra il giornale (allineaLinea)
     cura.perse = Math.max(lineaDiversa ? 1 : 0, ultimaNota - scelto.finoA);
+    // il programma acceso aveva visto il magazzino più avanti di dove arriva la ricostruzione (salute.json): le
+    // modifiche fra le due revisioni non sono nel giornale (scritte mentre il giornale non funzionava)
+    var vista = this.statoSalvato.ultimaVista;
+    if (vista && vista.base === scelto.base && vista.rev > scelto.finoA) {
+      cura.perse = Math.max(cura.perse, vista.rev - scelto.finoA);
+      messaggi.push('Il ' + dataOra(new Date(vista.quando).getTime()) + ' il magazzino era già alla revisione ' + vista.rev +
+        ', la ricostruzione arriva alla ' + scelto.finoA + ': le modifiche in mezzo non sono nel giornale.');
+    }
     cura.esito = cura.perse > 0 ? 'curato-con-perdite' : 'curato';
   } else {
     // niente da cui ripartire: archivio vuoto (il file danneggiato resta in dati/danneggiati per un recupero a mano)
@@ -566,7 +590,11 @@ Salute.prototype.curaMagazzino = function (file, motivo) {
   }
   try { fs.rmSync(lavoro, { recursive: true, force: true }); } catch (e) { /* resta la cartella di lavoro */ }
   this.dopoApertura.copia = true;
+  // collega() confronta la cura con il registro attività (accessi.db è aperto solo dopo) e non ne registra un'altra
+  this.dopoApertura.cura = cura;
+  this.dopoApertura.ultimaGiornale = ultima;
   cura.durataMs = Date.now() - inizio;
+  cura.dataCopia = scelto && scelto.copiaData || null;
   cura.messaggio = descriviCura(cura, scelto);
   this.log((cura.esito === 'curato' ? '' : 'ATTENZIONE: ') + cura.messaggio);
   messaggi.forEach(function (m) { self.log('  ' + m); });
@@ -625,8 +653,12 @@ Salute.prototype.curaAccessi = function (file, motivo) {
   }
   if (!fatto) {
     this.provaCopie('accessi', function (copie) { return copie; }, function (c) {
+      // prima una copia accanto, poi la sostituzione in un colpo solo: mai un accessi.db copiato a metà
+      var tmp2 = file + '.ripristino';
+      togliDb(tmp2);
+      fs.copyFileSync(c.percorso, tmp2);
       togliDb(file);
-      fs.copyFileSync(c.percorso, file);
+      fs.renameSync(tmp2, file);
       cura.metodo = 'copia';
       cura.copia = c.nome;
       cura.copiaData = c.data;
@@ -644,6 +676,11 @@ Salute.prototype.curaAccessi = function (file, motivo) {
 };
 
 function descriviCura(c, scelto) {
+  if (c.metodo === 'linea-nuova') {
+    return 'Il magazzino è più indietro del giornale delle modifiche: ' + plurale(c.perse, 'modifica registrata nel giornale non è', 'modifiche registrate nel giornale non sono') +
+      ' nel magazzino' + (c.riassunto ? ' (' + c.riassunto + ')' : '') + '. Il file è stato rimesso da una copia vecchia o il disco ha perso le ultime scritture: ' +
+      'controlla le registrazioni più recenti. Il dettaglio resta nel giornale (cartella dati, giornale).';
+  }
   var chi = c.file + (c.motivo === 'il file non c’è più' ? ' non c’era più' : ' era danneggiato');
   if (c.file === 'accessi.db') {
     if (c.metodo === 'recupero') return chi + ': recuperato dal file stesso, utenti e registro attività sono al loro posto.';
@@ -653,17 +690,20 @@ function descriviCura(c, scelto) {
   }
   if (c.metodo === 'vuoto') return chi + ' e non c’era niente da cui ricostruirlo: il programma riparte con un archivio vuoto. ' +
     'Il file danneggiato è in ' + (c.spostatoIn || 'dati/danneggiati') + ': chiedi assistenza prima di lavorare.';
-  var come = c.metodo === 'copia' ? 'ricostruito dalla copia del ' + dataOra(new Date(scelto.copiaData).getTime())
+  var dataCopia = scelto && scelto.copiaData || c.dataCopia;
+  var come = c.metodo === 'copia' ? 'ricostruito dalla copia del ' + dataOra(new Date(dataCopia).getTime())
     : c.metodo === 'recupero' ? 'recuperato dal file stesso' : 'ricostruito dal giornale delle modifiche';
-  var mod = c.riapplicate ? ' più ' + plurale(c.riapplicate, 'modifica', 'modifiche') + ' riapplicate dal giornale' : '';
+  var mod = !c.riapplicate ? '' : c.metodo === 'giornale' ? ' (' + plurale(c.riapplicate, 'modifica riapplicata', 'modifiche riapplicate') + ' su un archivio vuoto)'
+    : ' più ' + plurale(c.riapplicate, 'modifica', 'modifiche') + ' riapplicate dal giornale';
   var perdite = c.perse > 0 ? ' ATTENZIONE: ' + plurale(c.perse, 'modifica non si è potuta', 'modifiche non si sono potute') +
     ' recuperare: controlla le registrazioni più recenti.' : ': nessun dato perso.';
   return chi + ': ' + come + mod + perdite;
 }
 
 /*
- * Dopo l'apertura del database: riapplica le scritture perse in uno spegnimento improvviso, segna la sessione,
- * scrive nel registro attività gli eventi della cura, fa una copia se c'è stata una cura.
+ * Dopo l'apertura del database: riapplica le scritture perse in uno spegnimento improvviso, completa il giornale,
+ * riparte da una linea nuova se il magazzino è più indietro del giornale (cura con perdite), confronta la cura con il
+ * registro attività, scrive nel registro attività gli eventi della cura, fa una copia se c'è stata una cura.
  * oggetti: { database, accessi, backup, giornale }
  */
 Salute.prototype.collega = function (oggetti) {
@@ -678,11 +718,13 @@ Salute.prototype.collega = function (oggetti) {
     if (seconda && !this.backup.seconda.percorso) this.backup.impostaSeconda(seconda, this.secondaConfigurazione ? 'configurazione' : 'pagina');
   }
   var dopo = this.dopoApertura || {};
-  if (dopo.codaDa) this.recuperaCoda(dopo.codaDa);
   if (this.giornale) {
+    if (this.recuperaCoda()) dopo.copia = true;
     this.completaGiornale();
     if (this.allineaLinea()) dopo.copia = true;
   }
+  // una cura (o una coda riapplicata) dice "nessun dato perso" solo se anche il registro attività è d'accordo
+  if (dopo.cura) this.verificaRegistro(dopo.cura, dopo.ultimaGiornale);
   if (dopo.copia && this.backup) {
     try { this.backup.automatica({ forza: true }); } catch (e) { this.log('Copia dopo la cura non riuscita: ' + e.message); }
   }
@@ -693,11 +735,23 @@ Salute.prototype.collega = function (oggetti) {
 
 /*
  * Il server ascolta: da qui il file del magazzino appartiene a questa sessione (un secondo avvio sulla stessa
- * cartella, che si ferma perché la porta è occupata, non arriva fin qui). Poi copie orarie e controllo notturno.
+ * cartella, che si ferma perché la porta è occupata, non arriva fin qui). Il WAL si riversa nel file principale e il
+ * giornale segna l'avvio: fin qui il magazzino è sicuramente nel file. Poi copie orarie e controllo notturno.
  */
 Salute.prototype.avviato = function () {
   try { this.database.segnaSessione(); } catch (e) { this.log('Sessione non segnata nel magazzino: ' + e.message); }
+  this.segnaDurevole('avvio');
   this.pianifica();
+};
+
+/* Checkpoint completo del magazzino e segnalazione nel giornale (avvio, chiusura). */
+Salute.prototype.segnaDurevole = function (tipo, dettagli) {
+  if (!this.giornale || !this.database || !this.database.dati) return false;
+  var durevole = this.database.fissaSulDisco();
+  try {
+    this.giornale.segnaLinea(tipo, Object.assign({}, dettagli || {}, durevole ? { durevole: true } : {}));
+  } catch (e) { this.log('Segnalazione «' + tipo + '» non scritta nel giornale: ' + e.message); }
+  return durevole;
 };
 
 /* Eventi della cura nel registro attività (come "sistema", senza utente). */
@@ -709,19 +763,83 @@ Salute.prototype.registraEventi = function () {
 };
 
 /*
- * Scritture perse in uno spegnimento improvviso: il magazzino è integro ma più indietro del giornale (che si scrive
- * con fsync). Si riapplicano solo le voci della stessa linea, senza buchi, scritte dalla stessa sessione che aveva
- * aperto il file: un file sostituito a mano con una copia vecchia NON viene "riportato avanti".
+ * Scritture del magazzino registrate nel registro attività DOPO l'ultima voce del giornale "ultima": il giornale non
+ * le ha, quindi nessuna cura le può riapplicare. L'evento di una scrittura si registra subito dopo la sua voce nel
+ * giornale (voce.evento = ultimo numero del registro in quel momento): il primo evento dopo una voce di scrittura è
+ * il suo e non conta. Senza il numero (giornale più vecchio) si confrontano le ore.
+ * Risposta: [{ id, quando, username, azione }] (al massimo 200).
  */
-Salute.prototype.recuperaCoda = function (da) {
-  if (!this.giornale) return 0;
+Salute.prototype.scrittureDopo = function (ultima) {
+  var acc = this.accessi ? this.accessi.db() : (this.database && this.database.accessi);
+  if (!ultima || !ultima.quando || !acc) return [];
+  var righe;
+  var conNumero = typeof ultima.evento === 'number';
+  try {
+    righe = conNumero
+      ? acc.prepare('SELECT id, quando, username, azione FROM eventi WHERE id > ? AND quando >= ? ORDER BY id LIMIT 1000').all(ultima.evento, ultima.quando)
+      : acc.prepare('SELECT id, quando, username, azione FROM eventi WHERE quando > ? ORDER BY id LIMIT 1000').all(ultima.quando);
+  } catch (e) { return []; }
+  var scritture = righe.filter(function (r) { return AZIONI_MAGAZZINO.test(r.azione); });
+  if (!ultima.tipo && scritture.length) {
+    var primo = scritture[0];
+    var suo = conNumero ? primo.id === ultima.evento + 1 : Date.parse(primo.quando) - Date.parse(ultima.quando) < 5000;
+    if (suo) scritture = scritture.slice(1);
+  }
+  return scritture.slice(0, 200);
+};
+
+/*
+ * Confronta una cura del magazzino fatta in questo avvio con il registro attività: se ci sono scritture registrate
+ * dopo l'ultima voce del giornale, quelle modifiche non sono tornate. La cura diventa "con perdite" e le elenca.
+ */
+Salute.prototype.verificaRegistro = function (cura, ultima) {
+  if (!cura || cura.esito === 'ricreato') return;
+  var dopo = this.scrittureDopo(ultima);
+  if (!dopo.length) return;
+  var elenco = dopo.slice(0, 5).map(function (e) { return dataOra(Date.parse(e.quando)) + ' ' + (e.username || '?') + ' ' + e.azione; }).join('; ');
+  cura.perse = Math.max(cura.perse || 0, dopo.length);
+  cura.esito = 'curato-con-perdite';
+  cura.scrittureSenzaGiornale = dopo.length;
+  cura.messaggi = (cura.messaggi || []).concat(['Dopo l’ultima riga del giornale delle modifiche (' + dataOra(Date.parse(ultima.quando)) + ') il registro attività ha ' +
+    plurale(dopo.length, 'scrittura', 'scritture') + ' che non si sono potute recuperare: ' + elenco + (dopo.length > 5 ? '…' : '') + '.']);
+  cura.messaggio = ridescrivi(cura);
+  this.salva();
+  if (this.dopoApertura && this.dopoApertura.controllo && this.dopoApertura.controllo.file.farmacia) this.dopoApertura.controllo.file.farmacia.cura = cura.esito;
+  this.log('ATTENZIONE: ' + cura.messaggio);
+  this.log('  ' + cura.messaggi[cura.messaggi.length - 1]);
+};
+
+function ridescrivi(c) { return c.metodo === 'coda' ? descriviCoda(c) : descriviCura(c, null); }
+
+function descriviCoda(c) {
+  return 'Dopo uno spegnimento improvviso mancavano le ultime scritture del magazzino: ' +
+    plurale(c.riapplicate, 'modifica riapplicata', 'modifiche riapplicate') + ' dal giornale' +
+    (c.perse ? '; ATTENZIONE: ' + plurale(c.perse, 'modifica non si è potuta', 'modifiche non si sono potute') + ' recuperare: controlla le registrazioni più recenti.' : ', nessun dato perso.');
+}
+
+/*
+ * Scritture perse in uno spegnimento improvviso: il magazzino è integro ma più indietro del giornale (che si scrive
+ * con fsync), sulla stessa linea. Il WAL può essere sparito, vuoto (dopo il checkpoint notturno) o con la testata
+ * rovinata: per questo si guarda sempre il giornale, non il WAL.
+ * Si riapplicano le voci successive, senza buchi, SE il file non era già stato riversato su disco più avanti di
+ * così: una segnalazione 'avvio', 'chiusura', 'ripristino' o 'nuova-linea' durevole oltre la revisione del file vuol
+ * dire che il file è stato sostituito a mano con uno più vecchio (o il disco ha perso dati già al sicuro). Allora non
+ * si riporta avanti: ci pensa allineaLinea (linea nuova, cura con perdite).
+ * Restituisce il numero di voci riapplicate.
+ */
+Salute.prototype.recuperaCoda = function () {
   var ultima = this.giornale.ultimaVoce();
-  if (!ultima || ultima.base !== da.base || ultima.rev <= da.rev) return 0;
+  if (!ultima) return 0;
   var rev = this.database.rev();
-  // le scritture perse sono successive all'ultima volta che il file è stato scritto sul disco
-  var letti = this.giornale.leggi({ daRev: rev, dopo: da.modificato || 0 });
-  var c = G.catena(letti.voci, rev, da.base);
-  if (!c.voci.length || c.voci[0].storia !== da.sessione) return 0;
+  var base = Number(this.database.meta('rev_base') || 0);
+  if (ultima.base !== base || ultima.rev <= rev) return 0;
+  var letti = this.giornale.coda(rev);
+  var sostituito = letti.voci.some(function (v) {
+    return v.tipo && v.durevole === true && v.base === base && v.rev > rev;
+  });
+  if (sostituito) return 0;
+  var c = G.catena(letti.voci, rev, base);
+  if (!c.voci.length) return 0;
   var inizio = Date.now();
   try {
     riapplica(this.database.dati, c.voci);
@@ -731,14 +849,17 @@ Salute.prototype.recuperaCoda = function (da) {
   }
   var cura = {
     quando: new Date().toISOString(), file: 'farmacia.db', motivo: 'spegnimento improvviso: mancavano le ultime scritture',
-    metodo: 'giornale', esito: c.buco ? 'curato-con-perdite' : 'curato', copia: null, revCopia: rev, riapplicate: c.voci.length,
+    metodo: 'coda', esito: c.buco ? 'curato-con-perdite' : 'curato', copia: null, revCopia: rev, riapplicate: c.voci.length,
     revFinale: c.finoA, perse: c.buco ? c.ultimaNota - c.finoA : 0, spostatoIn: null, messaggi: [], durataMs: Date.now() - inizio
   };
-  cura.messaggio = 'Dopo uno spegnimento improvviso mancavano le ultime scritture del magazzino: ' +
-    plurale(c.voci.length, 'modifica riapplicata', 'modifiche riapplicate') + ' dal giornale' +
-    (cura.perse ? '; ' + plurale(cura.perse, 'non recuperabile', 'non recuperabili') + '.' : ', nessun dato perso.');
-  this.log(cura.messaggio);
+  if (c.buco) cura.messaggi.push('Nel giornale mancano le revisioni da ' + c.buco.da + ' a ' + c.buco.a + '.');
+  cura.messaggio = descriviCoda(cura);
+  this.log((cura.perse ? 'ATTENZIONE: ' : '') + cura.messaggio);
   this.registraCura(cura);
+  if (this.dopoApertura) {
+    this.dopoApertura.cura = cura;
+    this.dopoApertura.ultimaGiornale = this.dopoApertura.ultimaGiornale || ultima;
+  }
   return c.voci.length;
 };
 
@@ -757,25 +878,102 @@ Salute.prototype.completaGiornale = function () {
   return rev - ultima.rev;
 };
 
+/* Righe diverse per tabella nelle voci (per descrivere le modifiche perse: "2 articoli, 10 movimenti…"). */
+var NOMI_TABELLE = {
+  reparti: ['magazzino', 'magazzini'], articoli: ['articolo', 'articoli'], movimenti: ['movimento', 'movimenti'],
+  armadi: ['armadio', 'armadi'], assortimento: ['riga di assortimento', 'righe di assortimento'],
+  richieste: ['richiesta', 'richieste'], richiesteRighe: ['riga di richiesta', 'righe di richieste'], ddt: ['DDT', 'DDT'],
+  ddtRighe: ['riga di DDT', 'righe di DDT']
+};
+function riassuntoVoci(voci) {
+  var ids = {};
+  var canc = {};
+  var imp = {};
+  function conta(k, id) { if (!ids[k]) ids[k] = {}; ids[k][id] = true; }
+  voci.forEach(function (v) {
+    var c = v.cambiamenti || {};
+    Object.keys(NOMI_TABELLE).forEach(function (k) { (Array.isArray(c[k]) ? c[k] : []).forEach(function (r) { if (r && r.id !== undefined) conta(k, String(r.id)); }); });
+    (Array.isArray(c.cancellati) ? c.cancellati : []).forEach(function (x) { canc[x.tabella + ':' + x.id] = true; });
+    if (c.impostazioni && typeof c.impostazioni === 'object') Object.keys(c.impostazioni).forEach(function (k) { imp[k] = true; });
+  });
+  var parti = Object.keys(NOMI_TABELLE).filter(function (k) { return ids[k]; }).map(function (k) {
+    return plurale(Object.keys(ids[k]).length, NOMI_TABELLE[k][0], NOMI_TABELLE[k][1]);
+  });
+  if (Object.keys(canc).length) parti.push(plurale(Object.keys(canc).length, 'cancellazione', 'cancellazioni'));
+  if (Object.keys(imp).length) parti.push(plurale(Object.keys(imp).length, 'impostazione', 'impostazioni'));
+  return parti.join(', ');
+}
+
+/* Contatori dei numeri (prog_ric_AAAA, prog_ddt_AAAA) usati nelle voci del giornale: { chiave: progressivo più alto }. */
+function contatoriDaVoci(voci) {
+  var out = {};
+  voci.forEach(function (v) {
+    var c = v.cambiamenti || {};
+    [['ric', c.richieste], ['ddt', c.ddt]].forEach(function (x) {
+      (Array.isArray(x[1]) ? x[1] : []).forEach(function (r) {
+        if (!r || typeof r.anno !== 'number' || typeof r.progressivo !== 'number') return;
+        var k = 'prog_' + x[0] + '_' + r.anno;
+        if (r.progressivo > (out[k] || 0)) out[k] = r.progressivo;
+      });
+    });
+  });
+  return out;
+}
+
 /*
- * Il magazzino è più indietro del giornale (modifiche perse in una cura, oppure il file sostituito a mano con uno più
- * vecchio): le revisioni successive esistono già nel giornale e non devono ripetersi. Il magazzino riparte da una
- * linea nuova sopra l'ultima revisione nota (come dopo un ripristino): i browser ricaricano tutto e il giornale resta
- * coerente. Restituisce true se ha cambiato linea.
+ * Il magazzino è più indietro del giornale (modifiche perse in una cura, il WAL perso dopo un file già riversato più
+ * avanti, oppure il file sostituito a mano con uno più vecchio): le revisioni successive esistono già nel giornale e
+ * non devono ripetersi. Il magazzino riparte da una linea nuova sopra l'ultima revisione nota (come dopo un
+ * ripristino): i browser ricaricano tutto e il giornale resta coerente. Quello che il giornale ha e il magazzino no
+ * è una cura "con perdite" (semaforo rosso), con il riassunto di cosa manca; i contatori dei numeri di richieste e DDT
+ * salgono oltre quelli già usati. Restituisce true se ha cambiato linea.
  */
 Salute.prototype.allineaLinea = function () {
   var ultima = this.giornale.ultimaVoce();
   if (!ultima) return false;
-  var rev = this.database.rev();
-  var base = Number(this.database.meta('rev_base') || 0);
+  var db = this.database;
+  var rev = db.rev();
+  var base = Number(db.meta('rev_base') || 0);
   if (ultima.rev <= rev && ultima.base <= base) return false;
+  // le modifiche del giornale che il magazzino non ha
+  var letti = this.giornale.coda(rev);
+  var mancanti = letti.voci.filter(function (v) { return !v.tipo && v.rev > rev; });
+  var revs = {};
+  mancanti.forEach(function (v) { revs[v.rev + ':' + v.base] = true; });
+  var perse = Object.keys(revs).length;
   var nuova = Math.max(ultima.rev, rev) + 1;
-  this.database.impostaMeta('rev', nuova);
-  this.database.impostaMeta('rev_base', nuova);
-  this.giornale.segnaLinea('nuova-linea', { revFile: rev, revGiornale: ultima.rev });
+  db.impostaMeta('rev', nuova);
+  db.impostaMeta('rev_base', nuova);
+  var contatori = B.portaContatori(db, contatoriDaVoci(mancanti));
+  var durevole = db.fissaSulDisco();
+  this.giornale.segnaLinea('nuova-linea', Object.assign({ revFile: rev, revGiornale: ultima.rev, perse: perse }, durevole ? { durevole: true } : {}));
   this.log('Il magazzino è alla revisione ' + rev + ' ma il giornale arriva alla ' + ultima.rev + ': riparto da una linea nuova (revisione ' + nuova + '). ' +
-    'Le modifiche del giornale successive alla revisione ' + rev + ' non sono nel magazzino.');
-  this.daRegistrare.push({ azione: 'sistema.linea-nuova', dettagli: { revFile: rev, revGiornale: ultima.rev, nuova: nuova } });
+    'Le modifiche del giornale successive alla revisione ' + rev + ' non sono nel magazzino' + (perse ? ' (' + plurale(perse, 'modifica', 'modifiche') + ')' : '') + '.');
+  if (Object.keys(contatori).length) this.log('Numeri di richieste e DDT già usati nel giornale: i prossimi ripartono da ' + Object.keys(contatori).map(function (k) { return k + ' = ' + contatori[k]; }).join(', ') + '.');
+  this.daRegistrare.push({ azione: 'sistema.linea-nuova', dettagli: { revFile: rev, revGiornale: ultima.rev, nuova: nuova, perse: perse } });
+  var giaCurato = this.dopoApertura && this.dopoApertura.cura;
+  if (perse && giaCurato && perse > (giaCurato.perse || 0)) {
+    // la cura di questo avvio ha già detto quante modifiche mancano: se il giornale ne mostra di più, vale il giornale
+    giaCurato.perse = perse;
+    giaCurato.esito = 'curato-con-perdite';
+    giaCurato.messaggio = ridescrivi(giaCurato);
+    this.salva();
+  }
+  if (perse && !giaCurato) {
+    var cura = {
+      quando: new Date().toISOString(), file: 'farmacia.db', motivo: 'il magazzino è più indietro del giornale delle modifiche',
+      metodo: 'linea-nuova', esito: 'curato-con-perdite', copia: null, revCopia: rev, riapplicate: 0, revFinale: rev, perse: perse,
+      revGiornale: ultima.rev, riassunto: riassuntoVoci(mancanti), spostatoIn: null, messaggi: [], durataMs: 0
+    };
+    cura.messaggio = descriviCura(cura, null);
+    this.log('ATTENZIONE: ' + cura.messaggio);
+    this.registraCura(cura);
+    // anche qui il resoconto si confronta con il registro attività (collega, verificaRegistro)
+    if (this.dopoApertura) {
+      this.dopoApertura.cura = cura;
+      this.dopoApertura.ultimaGiornale = ultima;
+    }
+  }
   return true;
 };
 
@@ -793,6 +991,7 @@ Salute.prototype.campionaCrescita = function () {
   try {
     c.movimenti = this.database.dati.prepare('SELECT COUNT(*) n FROM movimenti').get().n;
     c.rev = this.database.rev();
+    this.statoSalvato.ultimaVista = { rev: c.rev, base: Number(this.database.meta('rev_base') || 0), quando: new Date().toISOString() };
   } catch (e) { /* magazzino chiuso un attimo */ }
   var cr = this.statoSalvato.crescita;
   if (cr.length && cr[cr.length - 1].giorno === oggi) cr[cr.length - 1] = c;
@@ -853,6 +1052,13 @@ Salute.prototype.curaACaldo = function (motivo) {
   try { obiettivo = db.rev(); } catch (e) { obiettivo = 0; }
   var ultima = this.giornale ? this.giornale.ultimaVoce() : null;
   if (ultima && ultima.rev > obiettivo) obiettivo = ultima.rev;
+  // scritture registrate nel registro attività ma non nel giornale: copia + giornale non arriverebbero fin lì
+  var senzaGiornale = this.scrittureDopo(ultima);
+  if (senzaGiornale.length) {
+    this.problemaAttivo = { quando: new Date().toISOString(), file: 'farmacia.db', testo: 'Il magazzino (farmacia.db) è danneggiato: riavvia il servizio, all’avvio il programma lo cura da solo.' };
+    this.log('ATTENZIONE: farmacia.db è danneggiato e il giornale non ha le ultime ' + plurale(senzaGiornale.length, 'scrittura', 'scritture') + ' del registro attività: niente cura a programma acceso, riavvia il servizio.');
+    return null;
+  }
   var lavoro = fs.mkdtempSync(path.join(this.cartella, 'cura-'));
   var scelto = null;
   try {
@@ -1013,8 +1219,10 @@ Salute.prototype.giro = function () {
       this.log('Copia automatica non riuscita: ' + e.message);
     }
     try { this.backup.verificaUnaVecchia(); } catch (e) { this.log('Verifica di una copia vecchia non riuscita: ' + e.message); }
-    if (this.backup.seconda.percorso && this.backup.seconda.raggiungibile !== true && !this.backup.seconda.inCorso) {
-      this.backup.sincronizzaSeconda(); // ritenta una cartella di rete che prima non rispondeva
+    // ritenta una cartella di rete che prima non rispondeva; porta il giornale nuovo anche fra una copia e l'altra
+    // (se il disco del server si rompe, nella seconda cartella mancano al massimo 5 minuti di lavoro)
+    if (this.backup.seconda.percorso && !this.backup.seconda.inCorso && (this.backup.seconda.raggiungibile !== true || this.backup.giornaleDaPortare())) {
+      this.backup.sincronizzaSeconda();
     }
   }
   try { this.campionaCrescita(); } catch (e) { /* non indispensabile */ }
@@ -1032,11 +1240,19 @@ Salute.prototype.ferma = function () {
   this.timer = null;
 };
 
-/* All'arresto ordinato: copia finale se dall'ultima è cambiato qualcosa, poi chiude il giornale. */
+/*
+ * All'arresto ordinato: copia finale se dall'ultima è cambiato qualcosa, WAL riversato nel file principale e
+ * segnalazione 'chiusura' nel giornale (al prossimo avvio un file più indietro di così è stato rimesso a mano),
+ * poi chiude il giornale.
+ */
 Salute.prototype.chiusura = function () {
   this.ferma();
   if (this.backup && this.database && this.database.dati) {
     try { this.backup.copiaFinale(); } catch (e) { this.log('Copia di chiusura non riuscita: ' + e.message); }
+  }
+  if (this.database && this.database.dati) {
+    try { this.campionaCrescita(); } catch (e) { /* non indispensabile */ }
+    this.segnaDurevole('chiusura');
   }
   if (this.giornale) this.giornale.chiudi();
 };
@@ -1150,7 +1366,9 @@ function valutaSemaforo(st, adesso) {
   var etaCura = ultimaCura ? adesso - new Date(ultimaCura.quando).getTime() : Infinity;
   if (etaCura < 7 * GIORNO_MS) {
     // una cura con perdite è rossa per un giorno (bisogna controllare le ultime registrazioni), poi gialla
-    m(ultimaCura.esito === 'curato' || etaCura > GIORNO_MS ? 'attenzione' : 'problema', 'Il ' + dataOra(new Date(ultimaCura.quando).getTime()) + ' il programma ha curato ' + ultimaCura.file + ': ' + (ultimaCura.esito === 'curato' ? 'nessun dato perso.' : 'controlla le registrazioni più recenti.'));
+    m(ultimaCura.esito === 'curato' || etaCura > GIORNO_MS ? 'attenzione' : 'problema', ultimaCura.metodo === 'linea-nuova'
+      ? 'Il ' + dataOra(new Date(ultimaCura.quando).getTime()) + ' il magazzino era più indietro del giornale delle modifiche: ' + plurale(ultimaCura.perse || 0, 'modifica non è tornata', 'modifiche non sono tornate') + '. Controlla le registrazioni più recenti.'
+      : 'Il ' + dataOra(new Date(ultimaCura.quando).getTime()) + ' il programma ha curato ' + ultimaCura.file + ': ' + (ultimaCura.esito === 'curato' ? 'nessun dato perso.' : 'controlla le registrazioni più recenti.'));
   }
   var completo = st.controllo.ultimoCompleto;
   if (!completo || adesso - new Date(completo.quando).getTime() > 3 * GIORNO_MS) m('attenzione', 'Il controllo completo non si fa da più di tre giorni.');
@@ -1193,6 +1411,17 @@ function inviaJson(res, stato, oggetto) {
   var corpo = Buffer.from(JSON.stringify(oggetto));
   res.writeHead(stato, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': corpo.length, 'Cache-Control': 'no-store' });
   res.end(corpo);
+}
+
+var ATTESA_COPIA_MS = 20 * 1000;
+
+/* La promessa, o niente dopo ms millisecondi (non fallisce mai). */
+function entro(promessa, ms) {
+  var timer;
+  return Promise.race([
+    Promise.resolve(promessa).catch(function () { return null; }),
+    new Promise(function (ok) { timer = setTimeout(ok, ms); if (timer.unref) timer.unref(); })
+  ]).then(function (x) { clearTimeout(timer); return x; });
 }
 
 /* Risposta di una rotta che finisce dopo (promessa): http.js non risponde se il gestore restituisce undefined. */
@@ -1240,9 +1469,13 @@ module.exports.rotte = function (server) {
     var s = salute();
     if (!server.backup) throw errore(409, 'Copie di sicurezza non disponibili.');
     var nomi = server.backup.creaTutte('manuale');
-    var copie = server.backup.elencoCompleto().filter(function (c) { return nomi.indexOf(c.nome) >= 0; });
-    server.accessi.evento(ctx, 'sistema.copia', { copie: nomi, verificate: copie.every(function (c) { return c.verificata === true; }) });
-    return { copie: copie, sistema: s.stato() };
+    function copie() { return server.backup.elencoCompleto().filter(function (c) { return nomi.indexOf(c.nome) >= 0; }); }
+    function risposta() { return { copie: copie(), sistema: s.stato() }; }
+    server.accessi.evento(ctx, 'sistema.copia', { copie: nomi, verificate: copie().every(function (c) { return c.verificata === true; }) });
+    if (!server.backup.seconda.percorso) return risposta();
+    // con la seconda cartella si risponde quando le copie sono arrivate anche lì (al massimo dopo ATTESA_COPIA_MS:
+    // una cartella di rete lenta non tiene fermo il pulsante; lo stato dice se si sta ancora aggiornando)
+    return rispondiPoi(server, ctx, entro(server.backup.attesaSeconda || server.backup.sincronizzaSeconda(), ATTESA_COPIA_MS).then(risposta));
   });
 
   server.rotta('POST', '/api/sistema/prova-ripristino', SISTEMA, function (ctx) {

@@ -137,6 +137,9 @@ th[aria-sort] .an-freccia { opacity: 1; }
 .an-dett-testa h3, .an-dett-due h3 { font-size: 14px; flex: 1; font-family: var(--carattere-titoli, inherit); }
 .an-dett-due { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .an-dett-due > * { min-width: 0; display: grid; gap: 6px; align-content: start; }
+/* giorni insoliti contati come la soglia nella previsione */
+.an-anomali { margin: 0; padding: 8px 12px; border-radius: 8px; background: var(--attenzione-chiaro); color: var(--testo); border: 1px solid color-mix(in srgb, var(--attenzione) 24%, transparent); overflow-wrap: anywhere; }
+.an-anomali b { color: var(--attenzione); }
 .an-modelli { font-size: 12.5px; }
 .an-modelli th, .an-modelli td { padding: 5px 8px; }
 .an-modelli tr.an-scelto td { background: var(--ok-chiaro); }

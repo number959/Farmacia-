@@ -243,11 +243,109 @@ test('nota consumi con i DDT: l\'origine esce alla partenza, il destinatario ent
   assert.equal(novDeg.carichi, 18);
   assert.equal(novDeg.residui, 18);
   assert.equal(novDeg.scadenza, '2027-03');
+  // la differenza rientrata non è un carico: toglie l'uscita; la partenza era a ottobre, quindi conta il giorno del rientro
   const novFar = C.registroMensile(s, { repartoId: 'far', anno: 2026, mese: 11, categoria: 'FARMACI' }).righe[0];
-  assert.equal(novFar.carichi, 1, 'la differenza rientrata è un carico per l\'origine');
+  assert.equal(novFar.carichi, 0, 'il rientro non è un carico per l\'origine');
+  assert.equal(novFar.consumi[1], -1);
+  assert.equal(novFar.trasferiti[1], -1);
+  assert.equal(novFar.residui, 31);
+  assert.equal(novFar.residui, C.giacenza(s, 'a1', 'far', '2026-11-30'));
   assert.equal(C.giacenza(s, 'a1', T, '2026-10-31'), 20);
   assert.equal(C.giacenza(s, 'a1', T), 0);
   assert.deepEqual(C.lotti(s, 'a1', 'deg'), [{ lotto: 'A', scadenza: '2027-03', quantita: 18 }]);
+});
+
+test('nota consumi: la merce che rientra all\'origine non è un carico e toglie l\'uscita (DDT annullato, differenza "rientra")', () => {
+  const T = 'r-transito';
+  const s = stato([
+    mov('carico', '2026-10-01', 40, { lotto: 'E', scadenza: '2027-05' }),
+    // DDT 1: 15 partiti il 3, ricevuti 12 il 4 (3 persi in viaggio)
+    mov('trasferimento', '2026-10-03', 15, { repartoDestId: T, lotto: 'E', scadenza: '2027-05', ddtId: 'D1' }),
+    mov('trasferimento', '2026-10-04', 12, { repartoId: T, repartoDestId: 'deg', lotto: 'E', scadenza: '2027-05', ddtId: 'D1' }),
+    mov('perdita', '2026-10-04', 3, { repartoId: T, lotto: 'E', scadenza: '2027-05', ddtId: 'D1' }),
+    // DDT 2: 5 partiti il 5, ricevuti 3 il 6, 2 rientrano in farmacia
+    mov('trasferimento', '2026-10-05', 5, { repartoDestId: T, lotto: 'E', scadenza: '2027-05', ddtId: 'D2' }),
+    mov('trasferimento', '2026-10-06', 3, { repartoId: T, repartoDestId: 'deg', lotto: 'E', scadenza: '2027-05', ddtId: 'D2' }),
+    mov('trasferimento', '2026-10-06', 2, { repartoId: T, repartoDestId: 'far', lotto: 'E', scadenza: '2027-05', ddtId: 'D2' }),
+    // DDT 3: 4 partiti il 7 e annullati in viaggio l'8 (rientra tutto)
+    mov('trasferimento', '2026-10-07', 4, { repartoDestId: T, lotto: 'E', scadenza: '2027-05', ddtId: 'D3' }),
+    mov('trasferimento', '2026-10-08', 4, { repartoId: T, repartoDestId: 'far', lotto: 'E', scadenza: '2027-05', ddtId: 'D3' }),
+    mov('consumo', '2026-10-08', 1)
+  ]);
+  const far = C.registroMensile(s, { repartoId: 'far', anno: 2026, mese: 10, categoria: 'FARMACI' }).righe[0];
+  assert.equal(far.carichi, 40, 'i rientri non sono carichi');
+  assert.equal(far.consumi[2], 15, 'il 3: partiti 15 (i 3 persi in viaggio restano usciti)');
+  assert.equal(far.consumi[4], 3, 'il 5: partiti 5, 2 rientrati');
+  assert.equal(far.consumi[6], 0, 'il 7: il DDT annullato sparisce dal modulo');
+  assert.equal(far.consumi[7], 1, 'l\'8 resta solo il consumo vero');
+  assert.equal(far.totaleConsumo, 19);
+  assert.equal(far.importoScarico, 9.5);
+  assert.equal(far.residui, C.giacenza(s, 'a1', 'far', '2026-10-31'));
+  assert.equal(far.residui, 21);
+  assert.deepEqual([far.trasferiti[2], far.trasferiti[4], far.trasferiti[6], far.trasferiti[7]], [15, 3, 0, 0], 'parte delle caselle che non è un consumo');
+  const deg = C.registroMensile(s, { repartoId: 'deg', anno: 2026, mese: 10, categoria: 'FARMACI' }).righe[0];
+  assert.equal(deg.carichi, 15);
+  assert.equal(deg.totaleConsumo, 0);
+  // senza i movimenti di partenza nello stato basta la lista dei DDT per riconoscere l'origine
+  const soloRientro = { articoli: s.articoli, ddt: [{ id: 'D9', origineId: 'far', destinazioneId: 'deg' }],
+    movimenti: [mov('carico', '2026-10-01', 5), mov('trasferimento', '2026-10-09', 2, { repartoId: T, repartoDestId: 'far', ddtId: 'D9' })] };
+  const r9 = C.registroMensile(soloRientro, { repartoId: 'far', anno: 2026, mese: 10, categoria: 'FARMACI' }).righe[0];
+  assert.deepEqual([r9.carichi, r9.consumi[8], r9.residui], [5, -2, 7]);
+  // gli stessi aiuti per chi conta le uscite altrove (previsioni, proposte di scorta)
+  const p = C.partenzeDdt(s, 'far');
+  assert.deepEqual(p.data, { D1: '2026-10-03', D2: '2026-10-05', D3: '2026-10-07' });
+  assert.deepEqual(s.movimenti.filter((m) => C.rientroAllOrigine(m, 'far', p)).map((m) => [m.ddtId, m.quantita]), [['D2', 2], ['D3', 4]]);
+  assert.equal(s.movimenti.filter((m) => C.rientroAllOrigine(m, 'deg', C.partenzeDdt(s, 'deg'))).length, 0, 'l\'arrivo a destinazione non è un rientro');
+});
+
+test('uscita registrata in ritardo: non prende un lotto che dopo quella data è già uscito', () => {
+  const s = stato([
+    mov('carico', '2026-10-01', 10, { lotto: 'PRIMO', scadenza: '2026-12' }),
+    mov('carico', '2026-10-01', 10, { lotto: 'SECONDO', scadenza: '2027-12' }),
+    // il 5 parte un DDT con tutto il PRIMO
+    mov('trasferimento', '2026-10-05', 10, { repartoDestId: 'r-transito', lotto: 'PRIMO', scadenza: '2026-12', ddtId: 'D' })
+  ]);
+  // consumo del 4 registrato il 6: alla data c'era ancora PRIMO, ma oggi non più
+  assert.deepEqual(C.allocaUscita(s, 'a1', 'far', '2026-10-04', 4), [{ lotto: 'SECONDO', scadenza: '2027-12', quantita: 4 }]);
+  assert.equal(C.disponibilitaLotto(s, 'a1', 'far', '2026-10-04', 'PRIMO'), 0);
+  assert.equal(C.disponibilitaLotto(s, 'a1', 'far', '2026-10-04', 'SECONDO'), 10);
+  assert.deepEqual(C.lottiDisponibili(s, 'a1', 'far', '2026-10-04').map((l) => [l.lotto, l.quantita]), [['SECONDO', 10]]);
+  // e non prende più di quanto c'era alla data (un carico successivo non conta)
+  const s2 = stato([mov('carico', '2026-10-01', 2, { lotto: 'A', scadenza: '2027-01' }), mov('carico', '2026-10-09', 8, { lotto: 'A', scadenza: '2027-01' })]);
+  assert.deepEqual(C.allocaUscita(s2, 'a1', 'far', '2026-10-04', 5), [{ lotto: 'A', scadenza: '2027-01', quantita: 2 }, { lotto: '', scadenza: '', quantita: 3 }]);
+});
+
+test('lotti scaduti: la scelta automatica di consumi e trasferimenti li salta, la perdita li prende', () => {
+  const s = stato([
+    mov('carico', '2026-08-01', 5, { lotto: 'VECCHIO', scadenza: '2026-09' }),
+    mov('carico', '2026-08-01', 10, { lotto: 'NUOVO', scadenza: '2027-06' })
+  ]);
+  assert.equal(C.scaduto('2026-09', '2026-09-30'), false, 'vale fino all\'ultimo giorno del mese');
+  assert.equal(C.scaduto('2026-09', '2026-10-01'), true);
+  assert.equal(C.scaduto('', '2026-10-01'), false);
+  // a settembre il lotto vale ancora: FEFO normale
+  assert.deepEqual(C.allocaUscita(s, 'a1', 'far', '2026-09-15', 6), [{ lotto: 'VECCHIO', scadenza: '2026-09', quantita: 5 }, { lotto: 'NUOVO', scadenza: '2027-06', quantita: 1 }]);
+  // a ottobre è scaduto: il consumo prende il NUOVO
+  assert.deepEqual(C.allocaUscita(s, 'a1', 'far', '2026-10-15', 6), [{ lotto: 'NUOVO', scadenza: '2027-06', quantita: 6 }]);
+  // la perdita ("Scaduto") lo prende per primo
+  assert.deepEqual(C.allocaUscita(s, 'a1', 'far', '2026-10-15', 5, '', { ancheScaduti: true }), [{ lotto: 'VECCHIO', scadenza: '2026-09', quantita: 5 }]);
+  // scelto a mano si usa anche se scaduto
+  assert.deepEqual(C.allocaUscita(s, 'a1', 'far', '2026-10-15', 2, 'VECCHIO'), [{ lotto: 'VECCHIO', scadenza: '2026-09', quantita: 2 }]);
+  // se resta solo lo scaduto l'uscita lo usa invece di lasciare un debito "senza lotto"
+  assert.deepEqual(C.allocaUscita(s, 'a1', 'far', '2026-10-15', 12), [{ lotto: 'NUOVO', scadenza: '2027-06', quantita: 10 }, { lotto: 'VECCHIO', scadenza: '2026-09', quantita: 2 }]);
+});
+
+test('richiesta: la merce rientrata alla ricezione torna nel residuo, quella persa in viaggio no', () => {
+  const s = {
+    richiesteRighe: [{ id: 'rr1', richiestaId: 'R', articoloId: 'a1', quantita: 10, approvata: 10, ordine: 0 }],
+    ddt: [{ id: 'D1', richiestaId: 'R', stato: 'ricevuto_con_differenze' }, { id: 'D2', richiestaId: 'R', stato: 'ricevuto_con_differenze' }],
+    ddtRighe: [
+      { id: 'x1', ddtId: 'D1', richiestaRigaId: 'rr1', articoloId: 'a1', quantita: 6, ricevuta: 2, esito: 'rientro' },
+      { id: 'x2', ddtId: 'D2', richiestaRigaId: 'rr1', articoloId: 'a1', quantita: 4, ricevuta: 3, esito: 'perdita' }
+    ]
+  };
+  const r = C.avanzamentoRichiesta(s, 'R')[0];
+  assert.deepEqual([r.spedita, r.residuo], [6, 4], '2 arrivati + 4 partiti (1 perso), 4 rientrati da rispedire');
 });
 
 /* ---------- Code 128 dei DDT (js/codice128.js) ---------- */

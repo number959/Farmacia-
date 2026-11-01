@@ -30,6 +30,15 @@ var PASSWORD_MIN = 8;
 var SFIDA_MS = 5 * 60 * 1000;                     // tempo per scrivere il codice dopo la password giusta
 var DISPOSITIVO_MS = 30 * 24 * 60 * 60 * 1000;    // "Ricorda questo computer per 30 giorni"
 var ATTIVAZIONE_MS = 60 * 60 * 1000;              // chiave mostrata nel QR e non ancora confermata
+// codici sbagliati con la stessa sfida (anche dal server stesso, dove non c'è il blocco di 15 minuti): poi di nuovo la password
+var ERRORI_SFIDA_MAX = 10;
+var SFIDE_PER_COMPUTER = 3;                       // sfide valide insieme per lo stesso utente dallo stesso computer
+// dal server stesso: dopo 20 codici sbagliati in 15 minuti per lo stesso utente, una sfida nuova ogni 30 secondi
+// (un'attesa breve, mai un blocco: è l'accesso d'emergenza)
+var ERRORI_SENZA_ATTESA = 20;
+var ATTESA_LOCALE_MS = 30 * 1000;
+// codici sbagliati per la stessa chiave mostrata nel QR: poi la chiave non vale più e si ricomincia
+var ERRORI_ATTIVAZIONE_MAX = 10;
 var CODICI_RECUPERO = 10;
 var MAX_DISPOSITIVI_COOKIE = 5;                   // più utenti sullo stesso computer
 var CRITERI_2FA = ['nessuno', 'amministratori', 'farmacisti', 'tutti'];
@@ -163,9 +172,12 @@ function Accessi(database, log) {
   this.ipSegnalati = {};       // ip -> istante dell'ultimo evento "bloccato-ip" registrato
   this.erroriCambioPassword = {}; // hash della sessione -> numero di password attuali sbagliate
   // verifica in due passaggi
-  this.sfide = {};             // hash della sfida -> { utenteId, ip, scade }: password giusta, manca il codice
-  this.attivazioni = {};       // id utente -> { segreto (byte), scade }: chiave mostrata nel QR, da confermare con un codice
+  this.sfide = {};             // hash della sfida -> { utenteId, ip, scade, creata, errori }: password giusta, manca il codice
+  // id utente -> { segreto (byte), scade, sessione (hash del token), cambio, errori }: chiave mostrata nel QR, da confermare
+  this.attivazioni = {};
   this.ultimoErrore2fa = {};   // id utente -> istante dell'ultimo codice sbagliato (gli errori vecchi non contano)
+  // id utente -> { errori: [istanti dei codici sbagliati, ultimi 15 minuti], ultimaData }: rallenta le sfide dal server stesso
+  this.erroriCodice = {};
   this.chiave = null;          // chiave AES-256 dei segreti TOTP (file nella cartella dati)
   this.criterioNoto = 'nessuno';
 }
@@ -303,6 +315,7 @@ Accessi.prototype.reimpostaPassword = function (ctx, id, nuova) {
     self.db().prepare('DELETE FROM sessioni WHERE utente_id = ?').run(id);
   });
   delete this.ultimoErrore2fa[id];
+  delete this.erroriCodice[id];
   this.sblocca(u.username);
   this.evento(ctx, 'utenti.nuova-password', { utente: u.username });
 };
@@ -430,6 +443,15 @@ Accessi.prototype.login = function (ctx, username, password, agente, opz) {
       return this.apriSessione(ctx, riga, agente, { dueFattori: 'computer attendibile' });
     }
     if (!locale && riga.bloccato_fino > adesso) throw errore(429, messaggioBlocco2fa(riga.bloccato_fino, adesso));
+    if (locale) {
+      // dal server stesso nessun blocco, ma dopo tanti codici sbagliati le sfide nuove arrivano piano
+      var attesa = this.attesaSfidaLocale(riga.id, adesso, true);
+      if (attesa > 0) {
+        var secondi = Math.ceil(attesa / 1000);
+        throw errore(429, 'Troppi codici sbagliati per questo utente: riprova tra ' + secondi + (secondi === 1 ? ' secondo' : ' secondi') +
+          '. Controlla che l’ora del telefono sia giusta e scrivi il codice che l’app mostra in quel momento.', { attesaSecondi: secondi });
+      }
+    }
     return { dueFattori: true, sfida: this.nuovaSfida(riga.id, ctx.ip, adesso) };
   }
   return this.apriSessione(ctx, riga, agente, {});
@@ -462,12 +484,46 @@ function messaggioBlocco2fa(fino, adesso) {
     (minuti === 1 ? ' minuto' : ' minuti') + '. Riprova dopo, oppure chiedi aiuto all’amministratore.';
 }
 
-/* Sfida: prova che la password era giusta. Vale 5 minuti, dallo stesso computer, e si usa una volta sola. */
+/*
+ * Sfida: prova che la password era giusta. Vale 5 minuti, dallo stesso computer, si usa una volta sola e non vale più
+ * dopo 10 codici sbagliati (anche dal server stesso: lì non c'è il blocco di 15 minuti, ma il codice non si può tirare
+ * a indovinare con una password sola).
+ */
 Accessi.prototype.nuovaSfida = function (utenteId, ip, adesso) {
   this.pulisciSfide(adesso);
+  var self = this;
+  // al massimo 3 sfide valide insieme per lo stesso utente dallo stesso computer: la più vecchia non vale più
+  // (altrimenti chi ha la password ne preparerebbe tante e proverebbe 10 codici con ognuna)
+  var stesse = Object.keys(this.sfide).filter(function (k) { return self.sfide[k].utenteId === utenteId && self.sfide[k].ip === (ip || ''); })
+    .sort(function (a, b) { return self.sfide[a].creata - self.sfide[b].creata; });
+  stesse.slice(0, Math.max(0, stesse.length - SFIDE_PER_COMPUTER + 1)).forEach(function (k) { delete self.sfide[k]; });
   var sfida = crypto.randomBytes(24).toString('base64url');
-  this.sfide[hashToken(sfida)] = { utenteId: utenteId, ip: ip || '', scade: adesso + SFIDA_MS, creata: adesso };
+  this.sfide[hashToken(sfida)] = { utenteId: utenteId, ip: ip || '', scade: adesso + SFIDA_MS, creata: adesso, errori: 0 };
   return sfida;
+};
+
+/*
+ * Millisecondi da aspettare, dal server stesso, prima di una sfida nuova (0 = subito). Dopo 20 codici sbagliati per lo
+ * stesso utente negli ultimi 15 minuti passano almeno 30 secondi fra l'ultimo errore (o l'ultima sfida data) e la sfida
+ * dopo. Si contano i codici e non le sfide: le sfide tolte perché ne sono arrivate di nuove non servono a evitarlo.
+ * Con prenota, se si può subito, segna l'istante: la sfida successiva aspetterà di nuovo.
+ */
+Accessi.prototype.attesaSfidaLocale = function (utenteId, adesso, prenota) {
+  var st = this.erroriCodice[utenteId];
+  if (!st) return 0;
+  st.errori = recenti(st.errori, adesso);
+  if (!st.errori.length) { delete this.erroriCodice[utenteId]; return 0; }
+  if (st.errori.length < ERRORI_SENZA_ATTESA) return 0;
+  var ultima = Math.max(st.errori[st.errori.length - 1], st.ultimaData || 0);
+  var attesa = Math.max(0, ultima + ATTESA_LOCALE_MS - adesso);
+  if (!attesa && prenota) st.ultimaData = adesso;
+  return attesa;
+};
+
+Accessi.prototype.segnaCodiceSbagliato = function (utenteId, adesso) {
+  var st = this.erroriCodice[utenteId] = this.erroriCodice[utenteId] || { errori: [], ultimaData: 0 };
+  st.errori = recenti(st.errori, adesso);
+  st.errori.push(adesso);
 };
 
 Accessi.prototype.pulisciSfide = function (adesso) {
@@ -505,6 +561,8 @@ Accessi.prototype.dispositivoAttendibile = function (utenteId, tokens, adesso) {
  * Restituisce { token, tokenHash, utente, dispositivo?, codiciRimasti? }.
  * Errori: 401 sfida scaduta o già usata (si ricomincia dalla password), 400 codice sbagliato (si riprova con la
  * stessa sfida), 429 troppi codici sbagliati (5: blocco di 15 minuti, tranne che dal server stesso).
+ * Dal server stesso non si blocca mai (accesso d'emergenza), ma dopo 10 codici sbagliati la sfida non vale più:
+ * 401 { sfidaScaduta } e si riscrive la password. Così il codice non si indovina provandone milioni con una sfida sola.
  */
 Accessi.prototype.loginDueFattori = function (ctx, dati, agente) {
   dati = dati || {};
@@ -545,7 +603,15 @@ Accessi.prototype.loginDueFattori = function (ctx, dati, agente) {
       }
       db.prepare('UPDATE utenti SET tentativi_2fa = ? WHERE id = ?').run(n, riga.id);
     }
-    this.evento(conNome, 'accesso.2fa.fallito', { utente: riga.username, tipo: esito.tipo, tentativo: n || undefined });
+    sfida.errori = (sfida.errori || 0) + 1;
+    this.segnaCodiceSbagliato(riga.id, adesso);
+    this.evento(conNome, 'accesso.2fa.fallito', { utente: riga.username, tipo: esito.tipo, tentativo: n || sfida.errori });
+    if (sfida.errori >= ERRORI_SFIDA_MAX) {
+      // anche dal server stesso: la sfida non vale più, si riscrive la password (niente blocco: resta l'accesso d'emergenza)
+      delete this.sfide[chiave];
+      this.evento(conNome, 'accesso.2fa.sfida-annullata', { utente: riga.username, codiciSbagliati: sfida.errori, daServer: locale });
+      throw errore(401, 'Troppi codici sbagliati: per sicurezza scrivi di nuovo nome utente e password, poi il codice che mostra l’app adesso.', { sfidaScaduta: true });
+    }
     var rimasti = locale ? null : TENTATIVI_MAX - n;
     throw errore(400, esito.tipo === 'recupero'
       ? 'Questo codice di recupero non è giusto o è già stato usato.' + (rimasti !== null ? ' Tentativi rimasti: ' + rimasti + '.' : '')
@@ -555,6 +621,7 @@ Accessi.prototype.loginDueFattori = function (ctx, dati, agente) {
   // giusto: la sfida non vale più, il passo usato nemmeno (niente codici ripetuti)
   delete this.sfide[chiave];
   delete this.ultimoErrore2fa[riga.id];
+  delete this.erroriCodice[riga.id];
   var dispositivo = null;
   var self = this;
   this.database.transazioneAccessi(function () {
@@ -714,13 +781,30 @@ Accessi.prototype.stato2fa = function (utenteId) {
 /*
  * Primo passo dell'attivazione (o del cambio di telefono): una chiave nuova da inquadrare con l'app.
  * Finché non si conferma con un codice resta solo in memoria (un'ora); la 2FA già attiva continua a valere.
+ *
+ * Cambio di telefono (2FA già attiva): serve la password, come per disattivarla o creare codici di recupero nuovi.
+ * Altrimenti chi ruba una sessione aperta collegherebbe il suo telefono, si terrebbe 10 codici di recupero e chiuderebbe
+ * fuori l'utente vero. Le password sbagliate contano come nel cambio password (5 chiudono la sessione); la chiave nuova
+ * vale solo per la sessione che ha scritto la password.
+ * Prima attivazione: la password non serve di nuovo. Non sostituisce un secondo fattore che c'era già (senza 2FA basta la
+ * password per entrare) e chi la deve attivare per il criterio dell'amministratore l'ha appena scritta per entrare: la sua
+ * sessione serve solo a questo.
  */
-Accessi.prototype.inizia2fa = function (ctx, emittente) {
+Accessi.prototype.inizia2fa = function (ctx, emittente, password) {
   var r = this.riga(ctx.utente.id);
   var adesso = this.adesso();
   this.pulisciSfide(adesso);
+  var cambio = !!r.totp_attivo;
+  if (cambio) {
+    // password mancante (programma vecchio nel browser): non è un tentativo, non conta fra gli errori
+    if (password === undefined || password === null || password === '') {
+      throw errore(400, 'Per collegare un telefono nuovo scrivi la tua password.', { servePassword: true });
+    }
+    this.controllaPasswordSessione(ctx, password, 'accesso.2fa.cambio-telefono');
+    delete this.erroriCambioPassword[ctx.tokenHash];
+  }
   var segreto = crypto.randomBytes(20);
-  this.attivazioni[r.id] = { segreto: segreto, scade: adesso + ATTIVAZIONE_MS };
+  this.attivazioni[r.id] = { segreto: segreto, scade: adesso + ATTIVAZIONE_MS, sessione: ctx.tokenHash || '', cambio: cambio, errori: 0 };
   var base32 = Totp.base32Codifica(segreto);
   return {
     segretoBase32: base32,
@@ -728,7 +812,7 @@ Accessi.prototype.inizia2fa = function (ctx, emittente) {
     uri: Totp.uriOtpauth({ emittente: emittente, utente: r.username, segretoBase32: base32 }),
     emittente: emittente,
     utente: r.username,
-    cambio: !!r.totp_attivo,
+    cambio: cambio,
     oraServer: new Date(adesso).toISOString()
   };
 };
@@ -736,6 +820,8 @@ Accessi.prototype.inizia2fa = function (ctx, emittente) {
 /*
  * Conferma dell'attivazione con il primo codice dell'app: da qui la 2FA vale.
  * Restituisce i 10 codici di recupero in chiaro (si vedono solo adesso). Le altre sessioni dell'utente si chiudono.
+ * Con la 2FA già attiva (cambio di telefono) vale solo una chiave chiesta con la password da questa stessa sessione.
+ * 10 codici sbagliati per la stessa chiave: la chiave non vale più (409 ricomincia), così non si indovina.
  */
 Accessi.prototype.conferma2fa = function (ctx, codice) {
   var r = this.riga(ctx.utente.id);
@@ -743,9 +829,25 @@ Accessi.prototype.conferma2fa = function (ctx, codice) {
   this.pulisciSfide(adesso);
   var att = this.attivazioni[r.id];
   if (!att) throw errore(409, 'La chiave mostrata non vale più (è passata più di un’ora o il server è stato riavviato). Ricomincia: il programma ne mostrerà una nuova.', { ricomincia: true });
+  // la chiave vale solo per la sessione che l'ha chiesta (per il cambio di telefono, quella che ha scritto la password)
+  if (att.sessione !== (ctx.tokenHash || '')) {
+    throw errore(409, 'Questa chiave è stata chiesta da un’altra finestra o da un altro computer. Ricomincia da qui: il programma mostrerà un codice QR nuovo.', { ricomincia: true });
+  }
+  if (r.totp_attivo && !att.cambio) {
+    // chiave chiesta senza password quando la 2FA non era attiva, e nel frattempo è stata attivata: non vale per cambiare telefono
+    throw errore(409, 'La verifica in due passaggi è già attiva: per collegare un telefono nuovo serve la tua password. Ricomincia da «Cambia telefono».', { ricomincia: true, servePassword: true });
+  }
   var passo = Totp.verifica(att.segreto, codice, adesso, { finestra: 1 });
   if (passo < 0) {
-    throw errore(400, /^\s*\d{3}\s*-?\s*\d{3}\s*$/.test(String(codice || ''))
+    // stessa pulizia di Totp.verifica: ogni testo che potrebbe essere un codice conta come tentativo
+    var formatoGiusto = /^\d{6}$/.test(String(codice === undefined || codice === null ? '' : codice).replace(/[\s-]+/g, ''));
+    if (formatoGiusto) att.errori = (att.errori || 0) + 1;
+    if (att.errori >= ERRORI_ATTIVAZIONE_MAX) {
+      delete this.attivazioni[r.id];
+      this.evento(ctx, 'accesso.2fa.chiave-annullata', { codiciSbagliati: att.errori, cambio: !!r.totp_attivo });
+      throw errore(409, 'Troppi codici sbagliati: per sicurezza quella chiave non vale più. Togli dall’app il collegamento appena aggiunto e ricomincia: il programma mostrerà un codice QR nuovo.', { ricomincia: true });
+    }
+    throw errore(400, formatoGiusto
       ? 'Il codice non è giusto. Controlla di aver inquadrato il codice QR qui sopra (o scritto bene la chiave) e che l’ora del telefono sia impostata in automatico.'
       : 'Scrivi le 6 cifre che mostra l’app.');
   }
@@ -760,6 +862,10 @@ Accessi.prototype.conferma2fa = function (ctx, codice) {
     db.prepare('DELETE FROM sessioni WHERE utente_id = ? AND token_hash != ?').run(r.id, ctx.tokenHash || '');
   });
   delete this.attivazioni[r.id];
+  // i codici sbagliati di prima erano per la chiave vecchia: non contano più (anche dopo --reimposta-password, che gira in un
+  // altro processo e non può pulire la memoria di questo)
+  delete this.ultimoErrore2fa[r.id];
+  delete this.erroriCodice[r.id];
   this.evento(ctx, giaAttiva ? 'accesso.2fa.riconfigurata' : 'accesso.2fa.attivata', { codiciRecupero: CODICI_RECUPERO });
   return { codiciRecupero: codici.chiari, utente: this.utente(r.id) };
 };
@@ -812,6 +918,7 @@ Accessi.prototype.azzera = function (utenteId) {
   });
   delete this.attivazioni[utenteId];
   delete this.ultimoErrore2fa[utenteId];
+  delete this.erroriCodice[utenteId];
   var self = this;
   Object.keys(this.sfide).forEach(function (k) { if (self.sfide[k].utenteId === utenteId) delete self.sfide[k]; });
   return tolti;

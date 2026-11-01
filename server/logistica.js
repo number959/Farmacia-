@@ -395,7 +395,13 @@ Logistica.prototype.approvaRichiesta = function (ctx, id, dati) {
   if (lista.length > MAX_RIGHE) throw errore(400, 'Troppe righe (massimo ' + MAX_RIGHE + ').');
   var valori = lista.map(function (x, i) {
     if (!x || typeof x !== 'object' || !x.id) throw errore(400, 'Riga ' + (i + 1) + ' non valida.');
-    return { id: String(x.id), approvata: numero(x.approvata, 'quantità approvata', { min: 0 }) };
+    var v = { id: String(x.id), approvata: numero(x.approvata, 'quantità approvata', { min: 0 }) };
+    // l'approvata che il client mostrava (null = non ancora approvata): se nel frattempo è cambiata, 409
+    if (Object.prototype.hasOwnProperty.call(x, 'prima')) {
+      v.controlla = true;
+      v.prima = x.prima === null || x.prima === '' ? null : numero(x.prima, 'quantità approvata di prima', { min: 0 });
+    }
+    return v;
   });
   var self = this;
   var cambi = [];
@@ -403,6 +409,19 @@ Logistica.prototype.approvaRichiesta = function (ctx, id, dati) {
   var r = this.database.scrivi(function (rev) {
     var ora = self.richiesta(prima.id);
     controllaInLavorazione(ora, 'approvare');
+    var viste = {};
+    self.righeRichiesta(ora.id).forEach(function (x) { viste[x.id] = x; });
+    valori.forEach(function (v) {
+      var x = viste[v.id];
+      if (!v.controlla || !x) return;
+      var adesso = x.approvata === null || x.approvata === undefined ? null : r3(x.approvata);
+      if (adesso !== v.prima) {
+        var art = self.database.articolo(x.articoloId);
+        var chi = ora.presaDa && ora.presaDa !== ctx.utente.id ? (ora.presaDaNome || 'un altro utente') : 'un altro utente';
+        throw errore(409, 'Nel frattempo ' + chi + ' ha cambiato la quantità approvata di ' + (art ? art.nome : 'un articolo') +
+          ' (ora ' + (adesso === null ? 'non approvata' : fmt(adesso)) + '): ho ricaricato la richiesta, controlla e salva di nuovo.');
+      }
+    });
     self.prendi(ctx, rev, ora);
     var perRiga = {};
     self.avanzamento(ora.id).forEach(function (x) { perRiga[x.rigaId] = x; });
@@ -477,21 +496,28 @@ Logistica.prototype.nuovaRipartizione = function (origineId, tranneDdtId) {
 /*
  * Lotti liberi di un articolo nel magazzino di partenza, in ordine di scadenza (FEFO): la giacenza dei lotti
  * meno quanto è già messo in altri DDT in preparazione dallo stesso magazzino e quanto è già stato preso in questa operazione.
+ * scaduto: true per i lotti già scaduti oggi (la scelta automatica non li spedisce).
  */
 Logistica.prototype.lottiLiberi = function (rip, articoloId) {
   var stato = this.operazioni.statoArticolo(articoloId, rip.cache);
   var impegnati = {};
+  var oggi = this.oggi();
   this.db().prepare("SELECT r.lotto, SUM(r.quantita) q FROM ddt_righe r JOIN ddt d ON d.id = r.ddt_id " +
     "WHERE d.stato = 'in_preparazione' AND d.origine_id = ? AND r.articolo_id = ? AND d.id <> ? GROUP BY r.lotto")
     .all(rip.origineId, articoloId, rip.tranne).forEach(function (x) { impegnati[x.lotto] = x.q; });
   return Calcoli.lotti(stato, articoloId, rip.origineId).map(function (l) {
-    return { lotto: l.lotto, scadenza: l.scadenza, quantita: r3(l.quantita - (impegnati[l.lotto] || 0) - (rip.presi[articoloId + '|' + l.lotto] || 0)) };
+    return {
+      lotto: l.lotto, scadenza: l.scadenza, scaduto: Calcoli.scaduto(l.scadenza, oggi),
+      quantita: r3(l.quantita - (impegnati[l.lotto] || 0) - (rip.presi[articoloId + '|' + l.lotto] || 0))
+    };
   }).filter(function (l) { return l.quantita > 0; });
 };
 
 /*
- * Ripartisce una quantità sui lotti liberi: prima il lotto scelto (409 se non è disponibile), poi chi scade prima.
- * Restituisce { parti: [{ lotto, scadenza, quantita }], mancante }.
+ * Ripartisce una quantità sui lotti liberi: prima il lotto scelto (409 se non è disponibile; si può scegliere anche
+ * un lotto scaduto, per esempio per un reso), poi chi scade prima, saltando i lotti già scaduti (si tolgono con una
+ * perdita "Scaduto"). Restituisce { parti: [{ lotto, scadenza, quantita }], mancante, scaduti } (scaduti = merce
+ * libera nei lotti scaduti non presa).
  */
 Logistica.prototype.ripartisci = function (rip, articolo, quantita, lottoScelto, nomeOrigine) {
   var liberi = this.lottiLiberi(rip, articolo.id);
@@ -513,13 +539,19 @@ Logistica.prototype.ripartisci = function (rip, articolo, quantita, lottoScelto,
     }
     prendi(scelto);
   }
-  for (var i = 0; i < liberi.length && q > 0; i++) prendi(liberi[i]);
+  for (var i = 0; i < liberi.length && q > 0; i++) if (!liberi[i].scaduto) prendi(liberi[i]);
   parti.forEach(function (p) {
     var k = articolo.id + '|' + p.lotto;
     rip.presi[k] = r3((rip.presi[k] || 0) + p.quantita);
   });
-  return { parti: parti, mancante: q };
+  var scaduti = r3(liberi.reduce(function (t, l) { return t + (l.scaduto ? l.quantita : 0); }, 0));
+  return { parti: parti, mancante: q, scaduti: scaduti };
 };
+
+/* Spiegazione da aggiungere ai messaggi di merce mancante quando una parte è in lotti scaduti. */
+function notaScaduti(scaduti) {
+  return scaduti > 0 ? ' (altri ' + fmt(scaduti) + ' sono in lotti scaduti: non si spediscono da soli; toglili con una perdita «Scaduto» o, per un reso, scegli il lotto nella riga)' : '';
+}
 
 /* Righe del DDT (una per articolo e lotto; le parti uguali si sommano). */
 Logistica.prototype.scriviRigheDdt = function (rev, ddtId, righe) {
@@ -588,7 +620,7 @@ Logistica.prototype.righeDaMano = function (rip, righe, origine) {
     res.parti.forEach(function (p) {
       out.push({ articoloId: x.articolo.id, richiestaRigaId: x.richiestaRigaId, lotto: p.lotto, scadenza: p.scadenza, quantita: p.quantita, nota: x.nota });
     });
-    if (res.mancante > 0) scoperti.push(x.articolo.nome + ' (liberi ' + fmt(x.quantita - res.mancante) + ' su ' + fmt(x.quantita) + ')');
+    if (res.mancante > 0) scoperti.push(x.articolo.nome + ' (liberi ' + fmt(x.quantita - res.mancante) + ' su ' + fmt(x.quantita) + ')' + notaScaduti(res.scaduti));
   });
   if (scoperti.length) {
     throw errore(409, 'In ' + origine.nome + ' non c’è abbastanza merce per: ' + scoperti.join(', ') +
@@ -676,11 +708,17 @@ Logistica.prototype.preparaDdtRichiesta = function (ctx, id, dati) {
       res.parti.forEach(function (p) {
         parti.push({ articoloId: art.id, richiestaRigaId: x.rigaId, lotto: p.lotto, scadenza: p.scadenza, quantita: p.quantita, nota: x.nota });
       });
-      if (res.mancante > 0) mancanti.push({ articoloId: art.id, articolo: art.nome, richiesta: q, preparata: r3(q - res.mancante) });
+      if (res.mancante > 0) {
+        var m = { articoloId: art.id, articolo: art.nome, richiesta: q, preparata: r3(q - res.mancante) };
+        if (res.scaduti > 0) m.scaduti = res.scaduti;
+        mancanti.push(m);
+      }
     });
     if (!parti.length) {
       if (!av.some(function (x) { return x.residuo > 0; })) throw errore(409, 'Per la richiesta ' + ora.numero + ' non resta niente da preparare: l’approvato è già in DDT o spedito.');
-      throw errore(409, 'In ' + origine.nome + ' non c’è merce libera per gli articoli da preparare: il DDT non è stato creato.');
+      var inScaduti = r3(mancanti.reduce(function (t, x) { return t + (x.scaduti || 0); }, 0));
+      throw errore(409, 'In ' + origine.nome + ' non c’è merce libera per gli articoli da preparare: il DDT non è stato creato.' +
+        (inScaduti > 0 ? ' C’è merce solo in lotti scaduti: toglili con una perdita «Scaduto».' : ''));
     }
     creato = self.inserisciDdt(ctx, rev, { origineId: origine.id, destinazioneId: dest.id, richiestaId: ora.id, causale: causale, colli: colli, note: note }, parti);
   });
@@ -835,6 +873,8 @@ Logistica.prototype.spedisciDdt = function (ctx, id, dati) {
 /*
  * Ricezione: righe [{ id, ricevuta, esito: 'rientro'|'perdita', nota }]. Le righe non indicate si ricevono per intero.
  * La quantità ricevuta entra nel magazzino di arrivo; la differenza rientra all'origine o è una perdita in viaggio.
+ * Quello che rientra torna nel residuo della richiesta collegata (che da evasa torna in lavorazione), così la farmacia
+ * può rispedirlo; la perdita in viaggio resta spedita.
  */
 Logistica.prototype.riceviDdt = function (ctx, id, dati) {
   this.richiedi(ctx, 'riceviDdt');
@@ -859,8 +899,10 @@ Logistica.prototype.riceviDdt = function (ctx, id, dati) {
   var self = this;
   var chi = this.chi(ctx);
   var differenze = [];
+  var nuovoStatoRichiesta = null;
   var r = this.database.scrivi(function (rev) {
     differenze = [];
+    nuovoStatoRichiesta = null;
     var d = self.ddt(prima.id);
     if (d.stato === 'in_preparazione') throw errore(409, 'Il DDT ' + d.numero + ' non è ancora partito: si riceve dopo la spedizione.');
     if (d.stato !== 'in_transito') throw erroreStatoDdt(d, 'ricevere');
@@ -904,8 +946,12 @@ Logistica.prototype.riceviDdt = function (ctx, id, dati) {
     });
     self.db().prepare('UPDATE ddt SET stato = ?, ricevuto_da = ?, ricevuto_da_nome = ?, ricevuto_il = ?, note_ricezione = ?, rev = ? WHERE id = ?')
       .run(differenze.length ? 'ricevuto_con_differenze' : 'ricevuto', chi.id, chi.nome, self.adesso().toISOString(), noteRicezione, rev, d.id);
+    // la merce rientrata all'origine torna nel residuo della richiesta (come con l'annullo): evasa → in lavorazione
+    if (d.richiestaId) nuovoStatoRichiesta = self.aggiornaStatoRichiesta(ctx, rev, d.richiestaId);
   });
-  this.accessi.evento(ctx, 'ddt.ricevi', { numero: prima.numero, a: dest.nome, differenze: differenze.length ? differenze : undefined });
+  this.accessi.evento(ctx, 'ddt.ricevi', {
+    numero: prima.numero, a: dest.nome, differenze: differenze.length ? differenze : undefined, richiesta: nuovoStatoRichiesta || undefined
+  });
   this.dopoScrittura(r);
   return this.rispostaDdt(r.rev, prima.id);
 };
@@ -946,12 +992,15 @@ Logistica.prototype.annullaDdt = function (ctx, id, motivo) {
   return this.rispostaDdt(r.rev, prima.id);
 };
 
-/* Persone che possono trasportare la merce: gli utenti attivi (per la scelta alla spedizione). */
+/*
+ * Persone che possono trasportare la merce: gli utenti attivi (per la scelta alla spedizione).
+ * Solo id e nome: chi prepara i DDT non ha bisogno di sapere ruoli e permessi degli altri utenti.
+ */
 Logistica.prototype.trasportatori = function (ctx) {
   this.richiedi(ctx, 'ddt');
   return {
     utenti: this.accessi.elencoUtenti().filter(function (u) { return u.attivo; })
-      .map(function (u) { return { id: u.id, nome: u.nome, ruolo: u.ruolo }; })
+      .map(function (u) { return { id: u.id, nome: u.nome }; })
   };
 };
 

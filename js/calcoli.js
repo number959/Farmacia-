@@ -140,12 +140,40 @@
   }
 
   /*
-   * Ripartisce un'uscita sui lotti disponibili (FEFO) al momento del salvataggio:
-   * restituisce [{ lotto, scadenza, quantita }]. Se un lotto è indicato lo usa per primo,
-   * ma mai oltre la sua disponibilità (il resto va sugli altri lotti, poi su "senza lotto").
+   * Lotti che un'uscita datata `data` può prendere: per ogni lotto il minimo fra la giacenza a quella data e la
+   * giacenza di oggi (tutti i movimenti), così un'uscita registrata in ritardo non prende un lotto che nel frattempo
+   * è già uscito tutto (per esempio partito con un DDT). Solo i lotti con quantità maggiore di zero.
    */
-  function allocaUscita(stato, articoloId, repartoId, data, quantita, lottoScelto) {
-    var disponibili = lotti(stato, articoloId, repartoId, data).filter(function (l) { return l.quantita > 0; });
+  function lottiDisponibili(stato, articoloId, repartoId, data) {
+    var allaData = lotti(stato, articoloId, repartoId, data);
+    if (!data) return allaData.filter(function (l) { return l.quantita > 0; });
+    var finali = {};
+    lotti(stato, articoloId, repartoId).forEach(function (l) { finali[l.lotto] = l.quantita; });
+    return allaData.map(function (l) {
+      return { lotto: l.lotto, scadenza: l.scadenza, quantita: r3(Math.min(l.quantita, finali[l.lotto] || 0)) };
+    }).filter(function (l) { return l.quantita > 0; });
+  }
+
+  /* Lotto scaduto alla data indicata (il farmaco vale fino all'ultimo giorno del mese di scadenza). */
+  function scaduto(scadenza, data) {
+    if (!scadenza || !data) return false;
+    return giorniAllaScadenza(scadenza, data) < 0;
+  }
+
+  /*
+   * Ripartisce un'uscita sui lotti disponibili (FEFO) al momento del salvataggio:
+   * restituisce [{ lotto, scadenza, quantita }]. Se un lotto è indicato lo usa per primo (anche se scaduto),
+   * ma mai oltre la sua disponibilità (il resto va sugli altri lotti, poi su "senza lotto").
+   * La scelta automatica non prende i lotti già scaduti alla data dell'uscita finché ce ne sono altri: gli scaduti
+   * si tolgono con una perdita "Scaduto" (opz.ancheScaduti: true, le perdite, li prende in ordine di scadenza come
+   * tutti gli altri). Se restano solo lotti scaduti l'uscita li usa lo stesso, invece di lasciare un debito "senza lotto".
+   */
+  function allocaUscita(stato, articoloId, repartoId, data, quantita, lottoScelto, opz) {
+    var disponibili = lottiDisponibili(stato, articoloId, repartoId, data);
+    if (!(opz && opz.ancheScaduti) && data) {
+      var buoni = disponibili.filter(function (l) { return !scaduto(l.scadenza, data); });
+      disponibili = buoni.concat(disponibili.filter(function (l) { return scaduto(l.scadenza, data); }));
+    }
     var q = r3(quantita);
     var parti = [];
     if (lottoScelto) {
@@ -169,10 +197,13 @@
     return parti.filter(function (x) { return x.quantita > 0; });
   }
 
-  /* Disponibilità di un lotto in un reparto a una data (0 se non c'è). */
+  /*
+   * Disponibilità di un lotto in un reparto per un'uscita a una data (0 se non c'è): il minimo fra la giacenza del
+   * lotto a quella data e quella di oggi (vedi lottiDisponibili). Senza data: la giacenza di oggi.
+   */
   function disponibilitaLotto(stato, articoloId, repartoId, data, nomeLotto) {
-    var l = lotti(stato, articoloId, repartoId, data).filter(function (x) { return x.lotto === nomeLotto; })[0];
-    return l && l.quantita > 0 ? l.quantita : 0;
+    var l = lottiDisponibili(stato, articoloId, repartoId, data).filter(function (x) { return x.lotto === nomeLotto; })[0];
+    return l ? l.quantita : 0;
   }
 
   function giorniNelMese(anno, mese) {
@@ -211,11 +242,38 @@
   }
 
   /*
+   * DDT partiti da un magazzino: { data: { ddtId: data della partenza }, origine: { ddtId: true } }.
+   * La partenza è il trasferimento del DDT che esce dal magazzino; se lo stato ha anche i DDT si usa la loro origine.
+   */
+  function partenzeDdt(stato, repartoId) {
+    var out = { data: {}, origine: {} };
+    attivi(stato).forEach(function (m) {
+      if (m.tipo !== 'trasferimento' || !m.ddtId || m.repartoId !== repartoId) return;
+      out.origine[m.ddtId] = true;
+      if (!out.data[m.ddtId] || m.data < out.data[m.ddtId]) out.data[m.ddtId] = m.data;
+    });
+    (Array.isArray(stato.ddt) ? stato.ddt : []).forEach(function (d) { if (d.origineId === repartoId) out.origine[d.id] = true; });
+    return out;
+  }
+
+  /* Movimento di un DDT che riporta la merce al magazzino da cui era partita (annullo in viaggio o differenza "rientra"). */
+  function rientroAllOrigine(m, repartoId, partenze) {
+    return m.tipo === 'trasferimento' && !!m.ddtId && m.repartoDestId === repartoId && m.repartoId !== repartoId && !!partenze.origine[m.ddtId];
+  }
+
+  /*
    * Righe della "Nota consumi medicinali e materiali di medicazione" di un reparto
    * per un mese e una categoria (FARMACI o PRESIDI), con le stesse colonne del modulo:
    * residui mesi prec. (2), carichi (3), totale carico (4), consumi giornalieri,
    * totale consumo (6), perdite (7), totale scarico (8), controllo scadenze (9),
    * residui (10), prezzo unitario (11) e importo scarico.
+   *
+   * Merce dei DDT (versione 3.0): l'origine la vede uscire alla data di partenza (consumo del giorno, come un
+   * trasferimento), il destinatario entrare alla ricezione (carico). La merce che RIENTRA all'origine (DDT annullato in
+   * viaggio, differenza "rientra" alla ricezione) non è né un carico né un consumo: riduce l'uscita del giorno della
+   * partenza se è nello stesso mese, altrimenti quella del giorno del rientro (un DDT partito e annullato nello stesso
+   * mese sparisce dal modulo). Ogni riga ha anche `trasferiti`: per giorno, trasferimenti in uscita meno rientri
+   * (la parte delle caselle dei consumi che non è un consumo registrato).
    */
   function registroMensile(stato, opz) {
     var repartoId = opz.repartoId;
@@ -227,6 +285,7 @@
     var nelMese = attivi(stato).filter(function (m) {
       return m.data >= inizio && m.data <= fine && riguarda(m, repartoId);
     });
+    var partenze = partenzeDdt(stato, repartoId);
 
     var righe = stato.articoli
       .filter(function (a) { return a.categoria === opz.categoria; })
@@ -241,15 +300,23 @@
           perdite: 0,
           prezzo: Number(a.prezzo) || 0
         };
-        for (var g = 0; g < nGiorni; g++) r.consumi.push(0);
+        r.trasferiti = [];
+        for (var g = 0; g < nGiorni; g++) { r.consumi.push(0); r.trasferiti.push(0); }
         var movimentato = false;
         nelMese.forEach(function (m) {
           if (m.articoloId !== a.id) return;
           movimentato = true;
           var e = effetto(m, repartoId);
           var giorno = Number(m.data.slice(8, 10));
-          if (m.tipo === 'consumo' || (m.tipo === 'trasferimento' && e < 0)) {
+          if (e > 0 && rientroAllOrigine(m, repartoId, partenze)) {
+            // rientro: toglie l'uscita della partenza (se è in questo mese) o quella del giorno del rientro
+            var dp = partenze.data[m.ddtId];
+            var gg = dp && dp >= inizio && dp <= fine ? Number(dp.slice(8, 10)) : giorno;
+            r.consumi[gg - 1] = r3(r.consumi[gg - 1] - e);
+            r.trasferiti[gg - 1] = r3(r.trasferiti[gg - 1] - e);
+          } else if (m.tipo === 'consumo' || (m.tipo === 'trasferimento' && e < 0)) {
             r.consumi[giorno - 1] = r3(r.consumi[giorno - 1] - e);
+            if (m.tipo === 'trasferimento') r.trasferiti[giorno - 1] = r3(r.trasferiti[giorno - 1] - e);
           } else if (m.tipo === 'perdita') {
             r.perdite = r3(r.perdite - e);
           } else if (e > 0) {
@@ -297,9 +364,18 @@
    * [{ rigaId, articoloId, quantita, approvata, base, inPreparazione, spedita, residuo, ordine, nota }]
    *   base           quantità da consegnare: l'approvata, oppure la richiesta finché la farmacia non ha approvato
    *   inPreparazione quantità già messa in DDT ancora in preparazione
-   *   spedita        quantità partita con DDT non annullati (in viaggio o ricevuti)
+   *   spedita        quantità partita con DDT non annullati (in viaggio o ricevuti), meno quella che alla ricezione
+   *                  è rientrata all'origine: come per un DDT annullato, torna nel residuo e si può rispedire
+   *                  (la perdita in viaggio invece resta spedita)
    *   residuo        quanto resta da preparare (mai sotto zero)
    */
+  /* Quantità di una riga di DDT partito che conta come spedita: tutta, meno la differenza rientrata all'origine. */
+  function quantitaSpedita(r) {
+    var q = Number(r.quantita) || 0;
+    if (r.esito === 'rientro' && r.ricevuta !== null && r.ricevuta !== undefined) return r3(Math.min(q, Number(r.ricevuta) || 0));
+    return q;
+  }
+
   function avanzamentoRichiesta(stato, richiestaId) {
     var ddtStato = {};
     lista(stato, 'ddt').forEach(function (d) { if (d.richiestaId === richiestaId) ddtStato[d.id] = d.stato; });
@@ -309,7 +385,7 @@
       var st = ddtStato[r.ddtId];
       if (!st || !r.richiestaRigaId) return;
       if (st === 'in_preparazione') preparata[r.richiestaRigaId] = r3((preparata[r.richiestaRigaId] || 0) + r.quantita);
-      else if (DDT_PARTITI.indexOf(st) >= 0) spedita[r.richiestaRigaId] = r3((spedita[r.richiestaRigaId] || 0) + r.quantita);
+      else if (DDT_PARTITI.indexOf(st) >= 0) spedita[r.richiestaRigaId] = r3((spedita[r.richiestaRigaId] || 0) + quantitaSpedita(r));
     });
     return lista(stato, 'richiesteRighe').filter(function (r) { return r.richiestaId === richiestaId; })
       .sort(function (a, b) { return (a.ordine || 0) - (b.ordine || 0); })
@@ -376,6 +452,11 @@
     effetto: effetto,
     r3: r3,
     disponibilitaLotto: disponibilitaLotto,
+    lottiDisponibili: lottiDisponibili,
+    scaduto: scaduto,
+    // merce dei DDT che rientra all'origine (per chi conta le uscite: previsioni, proposte di scorta)
+    partenzeDdt: partenzeDdt,
+    rientroAllOrigine: rientroAllOrigine,
     giacenza: giacenza,
     tutteLeGiacenze: tutteLeGiacenze,
     lotti: lotti,

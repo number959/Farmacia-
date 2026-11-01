@@ -252,7 +252,8 @@ function Backup(database, log, opz) {
     raggiungibile: null,
     ultimaSincronizzazione: null,
     errore: null,
-    inCorso: false
+    inCorso: false,
+    revGiornale: null // revisione del giornale arrivata nella seconda cartella con l'ultima sincronizzazione riuscita
   };
   this.ultimoErrore = null; // { quando, messaggio } dell'ultima copia automatica non riuscita
 }
@@ -448,6 +449,37 @@ Backup.prototype.ferma = function () {
   this.timer = null;
 };
 
+/*
+ * Contatori dei numeri di richieste e DDT (RIC-AAAA-NNNN, DDT-AAAA-NNNN, server/logistica.js prossimoNumero): stanno in
+ * meta (prog_ric_AAAA, prog_ddt_AAAA), che il giornale non registra. Un numero già stampato su un DDT partito non deve
+ * tornare libero: dopo un ripristino o una linea nuova i contatori ripartono dal più alto fra file attuale, copia e
+ * giornale. leggiContatori: { chiave: progressivo più alto } da meta e dalle righe di richieste e DDT.
+ */
+function leggiContatori(db) {
+  var out = {};
+  function tieni(k, n) { n = Number(n) || 0; if (n > (out[k] || 0)) out[k] = n; }
+  try {
+    db.prepare("SELECT chiave, valore FROM meta WHERE chiave LIKE 'prog_%'").all().forEach(function (r) {
+      if (/^prog_(ric|ddt)_\d{4}$/.test(r.chiave)) tieni(r.chiave, r.valore);
+    });
+    [['ric', 'richieste'], ['ddt', 'ddt']].forEach(function (x) {
+      db.prepare('SELECT anno, MAX(progressivo) m FROM ' + x[1] + ' GROUP BY anno').all().forEach(function (r) { tieni('prog_' + x[0] + '_' + r.anno, r.m); });
+    });
+  } catch (e) { /* archivio senza le tabelle della 3.0 */ }
+  return out;
+}
+
+/* Porta i contatori del magazzino aperto (database: server/db.js) almeno ai valori di "contatori". Restituisce quelli alzati. */
+function portaContatori(database, contatori) {
+  var alzati = {};
+  Object.keys(contatori || {}).forEach(function (k) {
+    if (!/^prog_(ric|ddt)_\d{4}$/.test(k)) return;
+    var n = Number(contatori[k]) || 0;
+    if (n > (Number(database.meta(k)) || 0)) { database.impostaMeta(k, n); alzati[k] = n; }
+  });
+  return alzati;
+}
+
 /* Controlla che il file sia un archivio del magazzino integro: restituisce la sua revisione. */
 function controllaCopia(file) {
   var v = verificaFile(file, 'farmacia');
@@ -467,6 +499,8 @@ Backup.prototype.ripristina = function (nome) {
   if (nome.indexOf('farmacia_') !== 0) throw errore(400, 'Si possono ripristinare solo le copie del magazzino.');
   var revCopia = controllaCopia(file);
   var revAttuale = this.database.rev();
+  // i numeri di richieste e DDT già dati (anche dopo la copia) restano usati
+  var contatori = leggiContatori(this.database.dati);
   var sicurezza = this.copia(this.database.dati, 'farmacia', 'prima-del-ripristino');
   var destinazione = this.database.fileDati;
   var temporaneo = destinazione + '.ripristino';
@@ -482,7 +516,10 @@ Backup.prototype.ripristina = function (nome) {
   this.database.impostaMeta('rev', nuova);
   this.database.impostaMeta('rev_base', nuova);
   this.database.segnaSessione();
-  if (this.giornale) this.giornale.segnaLinea('ripristino', { copia: nome, revCopia: revCopia });
+  portaContatori(this.database, contatori);
+  // la linea nuova va subito nel file principale: senza, un WAL perso riporterebbe il magazzino alla linea vecchia
+  var durevole = this.database.fissaSulDisco();
+  if (this.giornale) this.giornale.segnaLinea('ripristino', durevole ? { copia: nome, revCopia: revCopia, durevole: true } : { copia: nome, revCopia: revCopia });
   var dopo = null;
   try { dopo = this.copia(this.database.dati, 'farmacia', 'auto'); } catch (e) { this.log('Copia dopo il ripristino non riuscita: ' + e.message); }
   this.pulisci();
@@ -499,6 +536,7 @@ Backup.prototype.impostaSeconda = function (percorso, origine) {
   this.seconda.raggiungibile = null;
   this.seconda.errore = null;
   this.seconda.ultimaSincronizzazione = null;
+  this.seconda.revGiornale = null;
 };
 
 Backup.prototype.statoSeconda = function () {
@@ -538,14 +576,37 @@ function copiaAsync(da, a) {
  * Sincronizza la seconda cartella (in sottofondo, senza fermare il server): copie verificate che mancano, scaglioni
  * di conservazione anche lì, file del giornale cambiati. Restituisce una promessa che non fallisce mai: l'esito sta
  * in statoSeconda().
+ * Se arriva mentre un giro è già in corso (una copia fatta mentre la seconda cartella si aggiorna), il giro in corso
+ * può non vederla: se ne fa un altro appena finisce (uno solo, per quante chiamate arrivino), e la promessa
+ * restituita aspetta anche quello.
  */
 Backup.prototype.sincronizzaSeconda = function () {
+  // l'ultima promessa data: chi ha appena fatto una copia (POST /api/sistema/copia) aspetta che arrivi anche lì
+  this.attesaSeconda = this.giroSeconda();
+  return this.attesaSeconda;
+};
+
+Backup.prototype.giroSeconda = function () {
   var self = this;
   var s = this.seconda;
-  if (!s.percorso || s.inCorso) return Promise.resolve(this.statoSeconda());
+  if (!s.percorso) return Promise.resolve(this.statoSeconda());
+  if (s.inCorso) {
+    if (!this.giroDopo) {
+      this.giroDopo = (this.fineGiro || Promise.resolve()).then(function () {
+        self.giroDopo = null;
+        return self.sincronizzaSeconda();
+      });
+    }
+    // chi aspetta non aspetta per sempre una cartella di rete appesa: dopo il limite risponde con lo stato attuale
+    var stato = function () { return self.statoSeconda(); };
+    return conAttesa(this.giroDopo, 2 * ATTESA_SECONDA_MS).then(stato, stato);
+  }
   var dest = s.percorso;
   s.inCorso = true;
   var copiate = 0;
+  // revisione del giornale che questo giro porta nella seconda cartella (server/salute.js: giro ogni 5 minuti)
+  var revGiornale = null;
+  try { revGiornale = this.giornale && this.giornale.ultimaVoce() ? this.giornale.ultimaVoce().rev : null; } catch (e) { revGiornale = null; }
   var lavoro = fsp.mkdir(dest, { recursive: true }).then(function () {
     return fsp.readdir(dest);
   }).then(function (presenti) {
@@ -597,12 +658,16 @@ Backup.prototype.sincronizzaSeconda = function () {
       }, Promise.resolve());
     });
   });
+  // un'operazione rimasta appesa (cartella di rete che non risponde) libera il posto solo quando finisce davvero
+  function fine() { s.inCorso = false; }
+  this.fineGiro = lavoro.then(fine, fine);
   return conAttesa(lavoro, ATTESA_SECONDA_MS).then(function () {
     if (s.percorso !== dest) return;
     if (s.raggiungibile === false) self.log('La seconda cartella delle copie è di nuovo raggiungibile: ' + dest);
     s.raggiungibile = true;
     s.errore = null;
     s.ultimaSincronizzazione = new Date().toISOString();
+    s.revGiornale = revGiornale;
     if (copiate) self.log('Seconda cartella aggiornata (' + copiate + (copiate === 1 ? ' copia nuova' : ' copie nuove') + '): ' + dest);
   }, function (e) {
     if (s.percorso !== dest) return;
@@ -610,16 +675,24 @@ Backup.prototype.sincronizzaSeconda = function () {
     s.raggiungibile = false;
     s.errore = e.message;
   }).then(function () {
-    // un'operazione rimasta appesa (cartella di rete che non risponde) libera il posto solo quando finisce davvero
-    lavoro.then(fine, fine);
-    function fine() { s.inCorso = false; }
     return self.statoSeconda();
   });
+};
+
+/* Il giornale è andato avanti dall'ultima sincronizzazione riuscita della seconda cartella? */
+Backup.prototype.giornaleDaPortare = function () {
+  var s = this.seconda;
+  if (!s.percorso || !this.giornale) return false;
+  var u = null;
+  try { u = this.giornale.ultimaVoce(); } catch (e) { u = null; }
+  return !!u && u.rev !== s.revGiornale;
 };
 
 module.exports = {
   Backup: Backup,
   verificaFile: verificaFile,
+  leggiContatori: leggiContatori,
+  portaContatori: portaContatori,
   segnaNonValida: segnaNonValida,
   perRecenza: perRecenza,
   copieIn: copieIn,

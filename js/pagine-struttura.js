@@ -38,6 +38,9 @@
 
   function messaggioErrore(e) { return e && e.message ? e.message : String(e); }
 
+  // singolare con 1: "1 articolo", "3 articoli"
+  function quanti(n, uno, tanti) { return n + ' ' + (Number(n) === 1 ? uno : tanti); }
+
   function cssId(v) {
     var s = String(v === null || v === undefined ? '' : v);
     return root.CSS && root.CSS.escape ? root.CSS.escape(s) : s.replace(/["\\]/g, '\\$&');
@@ -212,7 +215,7 @@
       '<span class="st-stanza-testa"><span class="st-tipo">' + (centrale ? '✚ Farmacia centrale' : 'Magazzino di piano') + '</span><b class="st-nome">' + h(rep.nome) + '</b></span>' +
       (rep.descrizione ? '<span class="st-desc">' + h(rep.descrizione) + '</span>' : '') +
       '<span class="st-indicatori">' + voci + '</span>' +
-      '<span class="st-piede"><span>🗄️ ' + ind.armadi + (ind.armadi === 1 ? ' armadio' : ' armadi') + ' · ' + ind.articoli + ' articoli</span>' +
+      '<span class="st-piede"><span>🗄️ ' + quanti(ind.armadi, 'armadio', 'armadi') + ' · ' + quanti(ind.articoli, 'articolo', 'articoli') + '</span>' +
       '<span class="st-responsabili" data-resp="' + h(rep.id) + '"></span></span>' +
       (opz.anteprima ? '' : '<span class="st-vai">Armadi →</span>') +
       '</' + tag + '>';
@@ -412,7 +415,7 @@
               (vediConsegne ? '<button class="btn piccolo" type="button" data-ddt="' + h(d.id) + '">Apri</button>' : '') + '</li>';
           }).join('') + '</ul>'
           : vuoto('Nessun DDT in viaggio', 'Quando un DDT parte dalla farmacia, qui e sulla mappa si vede il suo percorso fino al magazzino che lo riceve.'),
-        '<span class="nota">' + viaggio.length + ' documenti di trasporto</span>', true);
+        '<span class="nota">' + quanti(viaggio.length, 'documento di trasporto', 'documenti di trasporto') + '</span>', true);
 
       cont.querySelectorAll('.st-stanza[data-rep]').forEach(function (b) {
         b.addEventListener('click', function () { App.vai('armadi', { repartoId: b.getAttribute('data-rep') }); });
@@ -590,7 +593,7 @@
         return '<button type="button" class="ar-chip ar-chip-' + h(a.tipo) + (a.id === st.arm ? ' scelto' : '') + '" data-arm="' + h(a.id) + '" aria-pressed="' + (a.id === st.arm) + '"' +
           (a.colore ? ' style="--ar-tinta:' + h(a.colore) + '"' : '') + '>' +
           '<span class="ar-chip-ico" aria-hidden="true">' + t.ico + '</span>' +
-          '<span class="ar-chip-testo"><b>' + h(a.nome) + '</b><small>' + caselle.length + ' articoli · ' + h(problemi) + '</small></span>' +
+          '<span class="ar-chip-testo"><b>' + h(a.nome) + '</b><small>' + quanti(caselle.length, 'articolo', 'articoli') + ' · ' + h(problemi) + '</small></span>' +
           '<span class="ar-chip-barra" aria-hidden="true">' +
           (conta.ok ? '<i class="ok" style="flex:' + conta.ok + '"></i>' : '') + (conta.att ? '<i class="att" style="flex:' + conta.att + '"></i>' : '') +
           (conta.per ? '<i class="per" style="flex:' + conta.per + '"></i>' : '') + (caselle.length ? '' : '<i class="vuota" style="flex:1"></i>') + '</span>' +
@@ -629,7 +632,7 @@
       }
       var t = V().TIPI[a.tipo] || V().TIPI.armadio;
       titolo.textContent = t.ico + ' ' + a.nome;
-      nota.textContent = t.nome + ' · ' + a.ripiani + ' ripiani × ' + a.colonne + ' posti' + (a.note ? ' · ' + a.note : '');
+      nota.textContent = t.nome + ' · ' + quanti(a.ripiani, 'ripiano', 'ripiani') + ' × ' + quanti(a.colonne, 'posto', 'posti') + (a.note ? ' · ' + a.note : '');
       var caselle = caselleDi(st.rep, a);
       st.vista = V().disegna(box, {
         armadio: a,
@@ -697,8 +700,8 @@
             '<span class="tenue">' + h(V().STATI[x.s.stato]) + ' · ' + h(App.fmtNum(x.s.giacenza)) + '</span></li>';
         }).join('') + '</ul>' + (problemi.length > 12 ? '<p class="piccolo tenue ar-pad">e altri ' + (problemi.length - 12) + '</p>' : '')
           : vuoto('Tutto in ordine', 'Nessun articolo dell’assortimento è sotto scorta, da riordinare o in scadenza.')) +
-        (senza.length ? '<p class="piccolo ar-pad">📦 <b>' + senza.length + '</b> articoli dell’assortimento non hanno ancora un posto negli armadi' +
-          (puoDisporre(st.rep) && a ? ': usa <b>Disponi</b> per sistemarli.' : '.') + '</p>' : ''),
+        (senza.length ? '<p class="piccolo ar-pad">📦 <b>' + senza.length + '</b> ' + (senza.length === 1 ? 'articolo dell’assortimento non ha ancora un posto negli armadi' : 'articoli dell’assortimento non hanno ancora un posto negli armadi') +
+          (puoDisporre(st.rep) && a ? ': usa <b>Disponi</b> per ' + (senza.length === 1 ? 'sistemarlo.' : 'sistemarli.') : '.') + '</p>' : ''),
         '<span class="nota">' + h(App.nomeReparto(st.rep)) + '</span>', true, 'ar-riepilogo');
     }
 
@@ -852,8 +855,8 @@
       var posti = a.ripiani * a.colonne;
       var fuori = Math.max(0, candidati.length - posti);
       App.conferma('Disposizione automatica',
-        'Sistemo <b>' + Math.min(posti, candidati.length) + '</b> articoli in «' + h(a.nome) + '» in ordine di categoria (prima i farmaci) e di nome, ripiano dopo ripiano.' +
-        (fuori ? '<br><b>' + fuori + '</b> articoli non ci stanno e restano da sistemare.' : '') +
+        'Sistemo <b>' + Math.min(posti, candidati.length) + '</b> ' + (Math.min(posti, candidati.length) === 1 ? 'articolo' : 'articoli') + ' in «' + h(a.nome) + '» in ordine di categoria (prima i farmaci) e di nome, ripiano dopo ripiano.' +
+        (fuori ? '<br><b>' + fuori + '</b> ' + (fuori === 1 ? 'articolo non ci sta e resta da sistemare.' : 'articoli non ci stanno e restano da sistemare.') : '') +
         '<br>Gli articoli già negli altri armadi restano dove sono.', 'Disponi').then(function (ok) {
         if (!ok) return;
         var righe = candidati.map(function (art, i) {
@@ -861,7 +864,8 @@
           return { articoloId: art.id, armadioId: a.id, ripiano: Math.floor(i / a.colonne) + 1, posizione: (i % a.colonne) + 1 };
         });
         // prima libero le caselle (una casella = un articolo), poi metto tutti al loro posto nuovo: una sola richiesta
-        salvaPosti(righe, 'Disposti ' + Math.min(posti, candidati.length) + ' articoli in ' + a.nome + (fuori ? '; ' + fuori + ' restano da sistemare' : ''));
+        var disposti = Math.min(posti, candidati.length);
+        salvaPosti(righe, (disposti === 1 ? 'Disposto ' : 'Disposti ') + quanti(disposti, 'articolo', 'articoli') + ' in ' + a.nome + (fuori ? '; ' + fuori + (fuori === 1 ? ' resta da sistemare' : ' restano da sistemare') : ''));
       });
     }
 
@@ -870,7 +874,7 @@
       if (!a) return;
       var dentro = assortimentoDi(st.rep).filter(function (r) { return r.armadioId === a.id; });
       if (!dentro.length) { App.avviso('L’armadio è già vuoto.', 'errore'); return; }
-      App.conferma('Svuota l’armadio', 'Tolgo i <b>' + dentro.length + '</b> articoli da «' + h(a.nome) + '»? Restano nell’assortimento del magazzino, fra quelli da sistemare. Le giacenze non cambiano.', 'Svuota', true).then(function (ok) {
+      App.conferma('Svuota l’armadio', (dentro.length === 1 ? 'Tolgo l’unico articolo da «' + h(a.nome) + '»? Resta' : 'Tolgo i <b>' + dentro.length + '</b> articoli da «' + h(a.nome) + '»? Restano') + ' nell’assortimento del magazzino, fra quelli da sistemare. Le giacenze non cambiano.', 'Svuota', true).then(function (ok) {
         if (!ok) return;
         salvaPosti(dentro.map(function (r) { return { articoloId: r.articoloId, armadioId: null }; }), a.nome + ' svuotato');
       });
@@ -1270,7 +1274,7 @@
             return '<li><button type="button" class="mg-voce' + (r.id === memMagazzini.rep ? ' scelto' : '') + (r.attivo === false ? ' spento' : '') + '" data-rep="' + h(r.id) + '" aria-pressed="' + (r.id === memMagazzini.rep) + '"' +
               (r.colore ? ' style="--st-colore:' + h(r.colore) + '"' : '') + '>' +
               '<span class="mg-pallino' + (eCentrale(r) ? ' centrale' : '') + '" aria-hidden="true"></span>' +
-              '<span class="mg-voce-testo"><b>' + h(r.nome) + '</b><small>' + (eCentrale(r) ? 'Farmacia centrale · ' : '') + ind.articoli + ' articoli · ' + ind.armadi + ' armadi' +
+              '<span class="mg-voce-testo"><b>' + h(r.nome) + '</b><small>' + (eCentrale(r) ? 'Farmacia centrale · ' : '') + quanti(ind.articoli, 'articolo', 'articoli') + ' · ' + quanti(ind.armadi, 'armadio', 'armadi') +
               (r.attivo === false ? ' · non attivo' : '') + '</small></span>' +
               (ind.sotto ? '<span class="etichetta pericolo" title="Articoli sotto scorta">' + ind.sotto + '</span>' : '') +
               '</button></li>';
@@ -1398,7 +1402,7 @@
         }
         var arm = armadiDi(rep.id, true).length;
         var ass = assortimentoDi(rep.id, true).length;
-        App.conferma('Elimina magazzino', 'Elimino «' + h(rep.nome) + '»' + (arm || ass ? ' con i suoi ' + arm + ' armadi e ' + ass + ' righe di assortimento' : '') + '? Gli utenti assegnati lo perdono.', 'Elimina', true).then(function (ok) {
+        App.conferma('Elimina magazzino', 'Elimino «' + h(rep.nome) + '»' + (arm || ass ? ' con ' + quanti(arm, 'armadio', 'armadi') + ' e ' + quanti(ass, 'riga', 'righe') + ' di assortimento' : '') + '? Gli utenti assegnati lo perdono.', 'Elimina', true).then(function (ok) {
           if (!ok) return;
           Api().scrivi('DELETE', '/api/magazzini/' + encodeURIComponent(rep.id)).then(function () {
             App.avviso('Magazzino eliminato', 'ok');
@@ -1442,14 +1446,14 @@
 
     function pannelloArmadi(p, rep) {
       var lista = armadiDi(rep.id, true);
-      p.innerHTML = '<div class="strumenti"><span class="piccolo tenue">' + lista.length + ' armadi in ' + h(rep.nome) + '</span><span class="spazio"></span>' +
+      p.innerHTML = '<div class="strumenti"><span class="piccolo tenue">' + quanti(lista.length, 'armadio', 'armadi') + ' in ' + h(rep.nome) + '</span><span class="spazio"></span>' +
         (puoStruttura ? '<button class="btn primario" type="button" id="mg-arm-nuovo">+ Nuovo armadio</button>' : '') + '</div>' +
         (lista.length ? '<div class="mg-armadi">' + lista.map(function (a) {
           var dentro = assortimentoDi(rep.id).filter(function (r) { return r.armadioId === a.id; }).length;
           var t = V().TIPI[a.tipo] || V().TIPI.armadio;
           return '<article class="mg-armadio' + (a.attivo === false ? ' spento' : '') + '" data-arm="' + h(a.id) + '">' +
             '<div class="mg-armadio-vista" data-anteprima="' + h(a.id) + '"></div>' +
-            '<div class="mg-armadio-testo"><b>' + h(a.nome) + '</b><small>' + t.ico + ' ' + h(t.nome) + ' · ' + a.ripiani + ' × ' + a.colonne + ' posti · ' + dentro + ' articoli' +
+            '<div class="mg-armadio-testo"><b>' + h(a.nome) + '</b><small>' + t.ico + ' ' + h(t.nome) + ' · ' + a.ripiani + ' × ' + a.colonne + (a.ripiani * a.colonne === 1 ? ' posto · ' : ' posti · ') + quanti(dentro, 'articolo', 'articoli') +
             (a.attivo === false ? ' · non attivo' : '') + '</small>' + (a.note ? '<small class="tenue">' + h(a.note) + '</small>' : '') + '</div>' +
             '<div class="mg-armadio-azioni"><button class="btn piccolo" type="button" data-apri="' + h(a.id) + '">Apri</button>' +
             (puoStruttura ? '<button class="btn piccolo" type="button" data-modifica="' + h(a.id) + '">Modifica</button>' +
@@ -1500,7 +1504,7 @@
             var procedi = Promise.resolve(true);
             if (a) {
               var fuori = assortimentoDi(rep.id).filter(function (r) { return r.armadioId === a.id && (r.ripiano > d.ripiani || r.posizione > d.colonne); }).length;
-              if (fuori) procedi = App.conferma('Armadio più piccolo', 'Con meno ripiani o posti, <b>' + fuori + '</b> articoli restano senza casella e tornano fra quelli da sistemare. Procedo?', 'Procedi');
+              if (fuori) procedi = App.conferma('Armadio più piccolo', 'Con meno ripiani o posti, <b>' + fuori + '</b> ' + (fuori === 1 ? 'articolo resta senza casella e torna' : 'articoli restano senza casella e tornano') + ' fra quelli da sistemare. Procedo?', 'Procedi');
             }
             procedi.then(function (ok) {
               if (!ok) return;
@@ -1523,7 +1527,7 @@
     function eliminaArmadio(a) {
       if (!a) return;
       var dentro = assortimentoDi(a.repartoId).filter(function (r) { return r.armadioId === a.id; }).length;
-      App.conferma('Elimina armadio', 'Elimino «' + h(a.nome) + '»?' + (dentro ? ' I suoi <b>' + dentro + '</b> articoli restano nell’assortimento e tornano fra quelli da sistemare.' : '') + ' Le giacenze non cambiano.', 'Elimina', true).then(function (ok) {
+      App.conferma('Elimina armadio', 'Elimino «' + h(a.nome) + '»?' + (dentro ? (dentro === 1 ? ' Il suo unico articolo resta nell’assortimento e torna' : ' I suoi <b>' + dentro + '</b> articoli restano nell’assortimento e tornano') + ' fra quelli da sistemare.' : '') + ' Le giacenze non cambiano.', 'Elimina', true).then(function (ok) {
         if (!ok) return;
         Api().scrivi('DELETE', '/api/armadi/' + encodeURIComponent(a.id)).then(function () {
           App.avviso('Armadio eliminato', 'ok');
@@ -1694,7 +1698,7 @@
           '<th class="n" title="Consumo medio al giorno negli ultimi 90 giorni (consumi e perdite; per la farmacia centrale anche quello che manda agli altri magazzini) e giorni coperti dalla giacenza">Consumo al giorno</th>' +
           '<th class="n">Scorta minima</th><th class="n">Punto di riordino</th><th class="n">Scorta massima</th><th>Posto</th>' + (puoAss ? '<th><span class="st-sr">Azioni</span></th>' : '') +
           '</tr></thead><tbody>' + righe.map(function (x) { return htmlRiga(x.r, x.a); }).join('') + '</tbody></table></div>',
-          '<span class="nota">' + righe.length + ' articoli</span>', true);
+          '<span class="nota">' + quanti(righe.length, 'articolo', 'articoli') + '</span>', true);
         Array.prototype.forEach.call(tab.querySelectorAll('tr[data-art]'), function (tr) {
           aggiornaRiga(tr, !!bozza[tr.getAttribute('data-art')]);
         });
@@ -1706,7 +1710,7 @@
         if (!s) return;
         var n = Object.keys(bozza).length;
         var errori = Object.keys(bozza).filter(function (id) { var v = valori(rigaBase(id)); return v.attivo && erroreSoglie(v); }).length;
-        s.innerHTML = n ? '<b>' + n + '</b> articoli modificati, da salvare' + (errori ? ' · <span class="as-msg">' + errori + ' da correggere</span>' : '')
+        s.innerHTML = n ? '<b>' + n + '</b> ' + (n === 1 ? 'articolo modificato' : 'articoli modificati') + ', da salvare' + (errori ? ' · <span class="as-msg">' + errori + ' da correggere</span>' : '')
           : '<span class="tenue">Nessuna modifica da salvare</span>';
         p.querySelector('#as-salva').disabled = !n;
         p.querySelector('#as-annulla').disabled = !n;
@@ -1802,7 +1806,7 @@
           });
           var ids = Object.keys(usati).filter(function (id) { var a = App.articolo(id); return a && a.attivo !== false; });
           var n = aggiungi(ids);
-          App.avviso(n ? n + ' articoli aggiunti: controlla le scorte (anche con «Proponi dai consumi») e salva' : 'Nessun articolo nuovo da aggiungere.', n ? 'ok' : 'errore');
+          App.avviso(n ? quanti(n, 'articolo aggiunto', 'articoli aggiunti') + ': controlla le scorte (anche con «Proponi dai consumi») e salva' : 'Nessun articolo nuovo da aggiungere.', n ? 'ok' : 'errore');
         });
         p.querySelector('#as-proponi').addEventListener('click', proponi);
         p.querySelector('#as-annulla').addEventListener('click', function () {
@@ -1827,7 +1831,7 @@
           corpo: '<p>Per ogni articolo con consumi negli ultimi 90 giorni in <b>' + h(rep.nome) + '</b> propongo:</p>' +
             '<ul class="as-regole"><li><b>scorta minima</b> ≈ ' + PROPOSTA.min + ' giorni di consumo medio</li><li><b>punto di riordino</b> ≈ ' + PROPOSTA.riordino + ' giorni</li>' +
             '<li><b>scorta massima</b> ≈ ' + PROPOSTA.max + ' giorni</li></ul>' +
-            '<p class="piccolo tenue">' + conConsumi.length + ' articoli su ' + ids.length + ' hanno consumi. Le proposte entrano nella tabella: controllale e poi premi «Salva assortimento».</p>' +
+            '<p class="piccolo tenue">' + quanti(conConsumi.length, 'articolo', 'articoli') + ' su ' + ids.length + (conConsumi.length === 1 ? ' ha' : ' hanno') + ' consumi. Le proposte entrano nella tabella: controllale e poi premi «Salva assortimento».</p>' +
             '<div class="modulo"><label class="spunta largo"><input type="radio" name="as-quali" value="vuote" checked> Solo gli articoli senza scorte indicate</label>' +
             '<label class="spunta largo"><input type="radio" name="as-quali" value="tutte"> Tutti gli articoli con consumi (sostituisce le scorte attuali)</label></div>',
           piede: '<button class="btn" type="button" data-chiudi>Annulla</button><button class="btn primario" type="button" id="as-proponi-ok">Proponi</button>',
@@ -1849,7 +1853,7 @@
               });
               App.chiudiModale();
               disegnaTabella();
-              App.avviso(n ? 'Proposta inserita per ' + n + ' articoli: controlla e premi «Salva assortimento»' : 'Nessun articolo da proporre (hanno già le scorte).', n ? 'ok' : 'errore');
+              App.avviso(n ? 'Proposta inserita per ' + quanti(n, 'articolo', 'articoli') + ': controlla e premi «Salva assortimento»' : 'Nessun articolo da proporre (hanno già le scorte).', n ? 'ok' : 'errore');
               if (n && root.Motion) root.Motion.evidenzia(p.querySelectorAll('tr.as-modificata input.as-num'));
             });
           }

@@ -8,6 +8,8 @@ var Calcoli = require('../js/calcoli.js');
 var Barcode = require('../js/barcode.js');
 var DemoFarmacia = require('../js/demo.js');
 var A = require('./accessi.js');
+// regole dei magazzini della 3.0 (una sola farmacia centrale, disattivazione): le usa anche PUT /api/reparti della 2.x
+var Struttura = require('./struttura.js').Struttura;
 var errore = A.errore;
 var nuovoId = A.nuovoId;
 // magazzino di sistema per la merce in viaggio (DDT partiti e non ancora ricevuti): si muove solo con i DDT
@@ -156,14 +158,18 @@ Operazioni.prototype.statoArticolo = function (articoloId, cache) {
   return { articoli: [], movimenti: cache[articoloId] };
 };
 
-/* Ripartisce un'uscita sui lotti (FEFO), compresi i movimenti già inseriti in questa transazione. */
+/*
+ * Ripartisce un'uscita sui lotti (FEFO), compresi i movimenti già inseriti in questa transazione.
+ * Un'uscita con data passata non prende i lotti che dopo quella data sono già usciti (Calcoli.lottiDisponibili);
+ * la scelta automatica salta i lotti già scaduti finché ce ne sono altri, tranne per le perdite (che li tolgono).
+ */
 Operazioni.prototype.ripartisci = function (m, cache) {
   var stato = this.statoArticolo(m.articoloId, cache);
   if (m.lotto && Calcoli.disponibilitaLotto(stato, m.articoloId, m.repartoId, m.data, m.lotto) <= 0) {
     throw errore(409, 'Il lotto ' + m.lotto + ' di ' + m.articolo.nome + ' non è più disponibile in ' + m.reparto.nome +
-      ' alla data indicata (forse l’ha appena usato un altro utente): aggiorna e scegli di nuovo il lotto.');
+      ' alla data indicata (forse l’ha appena usato un altro utente, o è già uscito dopo quella data): aggiorna e scegli di nuovo il lotto.');
   }
-  return Calcoli.allocaUscita(stato, m.articoloId, m.repartoId, m.data, m.quantita, m.lotto);
+  return Calcoli.allocaUscita(stato, m.articoloId, m.repartoId, m.data, m.quantita, m.lotto, { ancheScaduti: m.tipo === 'perdita' });
 };
 
 Operazioni.prototype.registraMovimenti = function (ctx, lista) {
@@ -301,6 +307,29 @@ function validaPezzi(v) {
   return n;
 }
 
+/* Caratteristiche dell'articolo (docs/NOVITA-3.0.md): servono alla disposizione negli armadi e alle previsioni. */
+var ATTRIBUTI = ['frigo', 'stupefacente', 'alto-rischio', 'lasa', 'urgenza'];
+
+/* Attributi dell'articolo: sottoinsieme di ATTRIBUTI, nell'ordine dell'elenco. undefined = non indicati. */
+function validaAttributi(lista) {
+  if (lista === undefined) return undefined;
+  if (lista === null || lista === '') return [];
+  if (!Array.isArray(lista)) throw errore(400, 'Caratteristiche dell’articolo non valide.');
+  lista.forEach(function (x) {
+    if (ATTRIBUTI.indexOf(x) < 0) throw errore(400, 'Caratteristica dell’articolo non valida: ' + String(x).slice(0, 40) + '.');
+  });
+  return ATTRIBUTI.filter(function (x) { return lista.indexOf(x) >= 0; });
+}
+
+/* Giorni di consegna del fornitore per l'articolo: 0–365, vuoto (null) = l'impostazione generale. undefined = non indicati. */
+function validaLeadTime(v) {
+  if (v === undefined) return undefined;
+  if (v === null || (typeof v === 'string' && !v.trim())) return null;
+  var n = numero(v, 'giorni di consegna');
+  if (n < 0 || n > 365) throw errore(400, 'I giorni di consegna vanno da 0 a 365 (lascia vuoto per usare quelli generali).');
+  return Math.round(n); // giorni interi, come li usano le previsioni
+}
+
 function validaArticolo(dati) {
   if (!dati || typeof dati !== 'object') throw errore(400, 'Articolo non valido.');
   var nome = testo(dati.nome, 200, 'denominazione');
@@ -315,8 +344,21 @@ function validaArticolo(dati) {
     scortaMinima: numero(dati.scortaMinima, 'scorta minima', { min: 0, facoltativo: true }),
     note: testo(dati.note, 1000, 'note'), attivo: dati.attivo !== false,
     barcode: validaCodici(dati.barcode),
-    pezziConfezione: validaPezzi(dati.pezziConfezione)
+    pezziConfezione: validaPezzi(dati.pezziConfezione),
+    attributi: validaAttributi(dati.attributi),
+    leadTime: validaLeadTime(dati.leadTime),
+    fornitore: dati.fornitore === undefined ? undefined : testo(dati.fornitore, 200, 'fornitore abituale')
   };
+}
+
+/* Valori predefiniti (articolo nuovo) o di prima (modifica) per i campi che il client non ha mandato. */
+function completaArticolo(a, prima) {
+  if (a.barcode === undefined) a.barcode = prima ? prima.barcode : [];
+  if (a.pezziConfezione === undefined) a.pezziConfezione = prima ? prima.pezziConfezione : 1;
+  if (a.attributi === undefined) a.attributi = prima ? prima.attributi : [];
+  if (a.leadTime === undefined) a.leadTime = prima ? prima.leadTime : null;
+  if (a.fornitore === undefined) a.fornitore = prima ? prima.fornitore : '';
+  return a;
 }
 
 /* Un codice a barre appartiene a un solo articolo: 409 con il nome dell'articolo che l'ha già. */
@@ -330,18 +372,20 @@ Operazioni.prototype.controllaCodici = function (codici, articoloId) {
 
 Operazioni.prototype.creaArticolo = function (ctx, dati) {
   this.richiedi(ctx, 'articoli');
-  var a = validaArticolo(dati);
+  var a = completaArticolo(validaArticolo(dati), null);
   if (this.database.articoloPerNome(a.nome)) throw errore(409, 'Esiste già un articolo con questo nome.');
-  if (a.barcode === undefined) a.barcode = [];
-  if (a.pezziConfezione === undefined) a.pezziConfezione = 1;
   var self = this;
   var id = nuovoId('a');
   var r = this.database.scrivi(function (rev) {
     self.controllaCodici(a.barcode, id);
-    self.db().prepare('INSERT INTO articoli (id, nome, categoria, unita, principio, confezione, codice, prezzo, scorta_minima, note, attivo, barcode, pezzi_confezione, versione, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
-      .run(id, a.nome, a.categoria, a.unita, a.principio, a.confezione, a.codice, a.prezzo, a.scortaMinima, a.note, a.attivo ? 1 : 0, JSON.stringify(a.barcode), a.pezziConfezione, rev);
+    self.db().prepare('INSERT INTO articoli (id, nome, categoria, unita, principio, confezione, codice, prezzo, scorta_minima, note, attivo, barcode, pezzi_confezione, attributi, lead_time, fornitore, versione, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
+      .run(id, a.nome, a.categoria, a.unita, a.principio, a.confezione, a.codice, a.prezzo, a.scortaMinima, a.note, a.attivo ? 1 : 0, JSON.stringify(a.barcode), a.pezziConfezione,
+        JSON.stringify(a.attributi), a.leadTime, a.fornitore, rev);
   });
-  this.accessi.evento(ctx, 'articoli.crea', { articolo: a.nome, categoria: a.categoria, barcode: a.barcode.length ? a.barcode : undefined });
+  this.accessi.evento(ctx, 'articoli.crea', {
+    articolo: a.nome, categoria: a.categoria, barcode: a.barcode.length ? a.barcode : undefined,
+    attributi: a.attributi.length ? a.attributi : undefined, leadTime: a.leadTime === null ? undefined : a.leadTime, fornitore: a.fornitore || undefined
+  });
   this.dopoScrittura(r);
   return { rev: r.rev, articolo: this.database.articolo(id) };
 };
@@ -356,14 +400,16 @@ Operazioni.prototype.modificaArticolo = function (ctx, id, dati) {
   var a = validaArticolo(dati);
   var doppio = this.database.articoloPerNome(a.nome);
   if (doppio && doppio.id !== prima.id) throw errore(409, 'Esiste già un articolo con questo nome.');
-  // chi non manda codici a barre e pezzi per confezione (client vecchi, importazioni) non li cancella
-  if (a.barcode === undefined) a.barcode = prima.barcode;
-  if (a.pezziConfezione === undefined) a.pezziConfezione = prima.pezziConfezione;
+  // chi non manda codici a barre, pezzi per confezione, caratteristiche, giorni di consegna o fornitore
+  // (client vecchi, importazioni) non li cancella
+  completaArticolo(a, prima);
   var self = this;
   var r = this.database.scrivi(function (rev) {
     self.controllaCodici(a.barcode, prima.id);
-    self.db().prepare('UPDATE articoli SET nome = ?, categoria = ?, unita = ?, principio = ?, confezione = ?, codice = ?, prezzo = ?, scorta_minima = ?, note = ?, attivo = ?, barcode = ?, pezzi_confezione = ?, versione = versione + 1, rev = ? WHERE id = ?')
-      .run(a.nome, a.categoria, a.unita, a.principio, a.confezione, a.codice, a.prezzo, a.scortaMinima, a.note, a.attivo ? 1 : 0, JSON.stringify(a.barcode), a.pezziConfezione, rev, prima.id);
+    self.db().prepare('UPDATE articoli SET nome = ?, categoria = ?, unita = ?, principio = ?, confezione = ?, codice = ?, prezzo = ?, scorta_minima = ?, note = ?, attivo = ?, barcode = ?, pezzi_confezione = ?, ' +
+      'attributi = ?, lead_time = ?, fornitore = ?, versione = versione + 1, rev = ? WHERE id = ?')
+      .run(a.nome, a.categoria, a.unita, a.principio, a.confezione, a.codice, a.prezzo, a.scortaMinima, a.note, a.attivo ? 1 : 0, JSON.stringify(a.barcode), a.pezziConfezione,
+        JSON.stringify(a.attributi), a.leadTime, a.fornitore, rev, prima.id);
   });
   var cambi = {};
   Object.keys(a).forEach(function (k) { if (JSON.stringify(a[k]) !== JSON.stringify(prima[k])) cambi[k] = { prima: prima[k], dopo: a[k] }; });
@@ -398,15 +444,34 @@ Operazioni.prototype.eliminaArticolo = function (ctx, id) {
   this.richiedi(ctx, 'articoli');
   var a = this.database.articolo(String(id));
   if (!a) throw errore(404, 'Articolo non trovato.');
-  if (this.db().prepare('SELECT 1 FROM movimenti WHERE articolo_id = ? LIMIT 1').get(a.id)) {
+  var db = this.db();
+  if (db.prepare('SELECT 1 FROM movimenti WHERE articolo_id = ? LIMIT 1').get(a.id)) {
     throw errore(409, 'L’articolo ha dei movimenti: non si può eliminare. Togli la spunta “Articolo attivo” per nasconderlo.');
   }
+  if (db.prepare('SELECT 1 FROM richieste_righe WHERE articolo_id = ? LIMIT 1').get(a.id) ||
+    db.prepare('SELECT 1 FROM ddt_righe WHERE articolo_id = ? LIMIT 1').get(a.id)) {
+    throw errore(409, 'L’articolo compare in richieste o DDT: non si può eliminare. Togli la spunta “Articolo attivo” per nasconderlo.');
+  }
+  // l'assortimento è solo configurazione: le righe già tolte (non attive) si cancellano con l'articolo,
+  // quelle attive no (l'articolo è ancora previsto in quei magazzini)
+  var nelleScorte = db.prepare('SELECT s.reparto_id, r.nome FROM assortimento s LEFT JOIN reparti r ON r.id = s.reparto_id WHERE s.articolo_id = ? AND s.attivo = 1 ORDER BY r.ordine')
+    .all(a.id).map(function (x) { return x.nome || x.reparto_id; });
+  if (nelleScorte.length) {
+    throw errore(409, 'L’articolo è nell’assortimento di ' + nelleScorte.join(', ') + ': toglilo prima da Magazzini e assortimento, ' +
+      'oppure togli la spunta “Articolo attivo” per nasconderlo.');
+  }
+  var righe = db.prepare('SELECT id FROM assortimento WHERE articolo_id = ?').all(a.id).map(function (x) { return x.id; });
   var self = this;
   var r = this.database.scrivi(function (rev) {
+    var canc = self.db().prepare('INSERT OR REPLACE INTO cancellati (tabella, id, rev) VALUES (?, ?, ?)');
+    righe.forEach(function (id) {
+      self.db().prepare('DELETE FROM assortimento WHERE id = ?').run(id);
+      canc.run('assortimento', id, rev);
+    });
     self.db().prepare('DELETE FROM articoli WHERE id = ?').run(a.id);
-    self.db().prepare('INSERT OR REPLACE INTO cancellati (tabella, id, rev) VALUES (?, ?, ?)').run('articoli', a.id, rev);
+    canc.run('articoli', a.id, rev);
   });
-  this.accessi.evento(ctx, 'articoli.elimina', { articolo: a.nome });
+  this.accessi.evento(ctx, 'articoli.elimina', { articolo: a.nome, assortimento: righe.length || undefined });
   this.dopoScrittura(r);
   return { rev: r.rev };
 };
@@ -426,7 +491,11 @@ Operazioni.prototype.importaArticoli = function (ctx, dati) {
   }
   var origine = testo(dati.origine, 200, 'origine');
   var validi = lista.map(function (x) {
-    var a = validaArticolo({ nome: x.nome, categoria: x.categoria, prezzo: x.prezzo, scortaMinima: x.scortaMinima, unita: x.unita });
+    if (!x || typeof x !== 'object') throw errore(400, 'Articolo non valido.');
+    var a = completaArticolo(validaArticolo({
+      nome: x.nome, categoria: x.categoria, prezzo: x.prezzo, scortaMinima: x.scortaMinima, unita: x.unita,
+      attributi: x.attributi, leadTime: x.leadTime, fornitore: x.fornitore
+    }), null);
     a.giacenza = numero(x.giacenza, 'giacenza', { facoltativo: true });
     return a;
   });
@@ -439,8 +508,8 @@ Operazioni.prototype.importaArticoli = function (ctx, dati) {
       var esiste = self.database.articoloPerNome(a.nome);
       var id = esiste ? esiste.id : nuovoId('a');
       if (!esiste) {
-        self.db().prepare('INSERT INTO articoli (id, nome, categoria, unita, prezzo, scorta_minima, attivo, versione, rev) VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)')
-          .run(id, a.nome, a.categoria, a.unita, a.prezzo, a.scortaMinima, rev);
+        self.db().prepare('INSERT INTO articoli (id, nome, categoria, unita, prezzo, scorta_minima, attributi, lead_time, fornitore, attivo, versione, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?)')
+          .run(id, a.nome, a.categoria, a.unita, a.prezzo, a.scortaMinima, JSON.stringify(a.attributi), a.leadTime, a.fornitore, rev);
         nuovi++;
       }
       if (conGiacenza && a.giacenza > 0) {
@@ -533,6 +602,12 @@ Operazioni.prototype.salvaReparti = function (ctx, dati) {
   if (!lista.length) throw errore(400, 'Elenco dei reparti vuoto.');
   var nomi = {};
   nomi[NOME_TRANSITO.toLowerCase()] = 'riservato';
+  // i nomi dei magazzini che non sono nell'elenco restano: niente doppioni nemmeno con loro
+  var inElenco = {};
+  lista.forEach(function (r) { if (r && r.id) inElenco[String(r.id)] = true; });
+  Object.keys(esistenti).forEach(function (id) {
+    if (!inElenco[id] && esistenti[id].tipo !== 'transito') nomi[esistenti[id].nome.toLowerCase()] = true;
+  });
   var centraleVisto = false;
   var norm = lista.map(function (r, i) {
     var nome = testo(r && r.nome, 80, 'nome del reparto');
@@ -547,9 +622,47 @@ Operazioni.prototype.salvaReparti = function (ctx, dati) {
     if (centrale) centraleVisto = true;
     return { id: id || nuovoId('r'), nome: nome, centrale: centrale, attivo: r.attivo !== false, ordine: i, nuovo: !id };
   });
-  if (!norm.some(function (r) { return r.attivo; })) throw errore(400, 'Deve restare almeno un reparto attivo.');
+  /*
+   * Interfaccia della 2.x: valgono le stesse regole dei magazzini della 3.0 (server/struttura.js). Lo stato finale
+   * comprende anche i magazzini che non sono nell'elenco (restano come sono): una sola farmacia centrale, sempre
+   * attiva (sceglierne un'altra declassa quella di prima a periferico), e un magazzino non si disattiva con DDT da
+   * spedire o in viaggio o richieste aperte.
+   */
+  var finale = {};
+  var centraliPrima = 0;
+  Object.keys(esistenti).forEach(function (id) {
+    var e = esistenti[id];
+    if (e.tipo === 'transito') return;
+    var c = e.tipo === 'centrale' || !!e.centrale;
+    if (c) centraliPrima++;
+    finale[id] = { nome: e.nome, centrale: c, attivo: !!e.attivo };
+  });
+  var nuovoCentrale = norm.filter(function (x) { return x.centrale; })[0] || null;
+  norm.forEach(function (x) { finale[x.id] = { nome: x.nome, centrale: x.centrale, attivo: x.attivo }; });
+  if (nuovoCentrale) Object.keys(finale).forEach(function (id) { if (id !== nuovoCentrale.id) finale[id].centrale = false; });
+  var centrali = Object.keys(finale).filter(function (id) { return finale[id].centrale; });
+  if (centrali.length > 1) throw errore(400, 'Ci può essere una sola farmacia centrale: indica quale.');
+  if (!centrali.length && centraliPrima) {
+    throw errore(400, 'Ci vuole sempre una farmacia centrale: per cambiarla, apri il magazzino che deve diventarlo e scegli «Farmacia centrale».');
+  }
+  if (centrali.length && !finale[centrali[0]].attivo) {
+    throw errore(400, 'La farmacia centrale non si può disattivare: prima scegli un altro magazzino come farmacia centrale.');
+  }
+  if (!Object.keys(finale).some(function (id) { return finale[id].attivo; })) throw errore(400, 'Deve restare almeno un reparto attivo.');
+  var regole = new Struttura({ database: this.database, accessi: this.accessi });
+  norm.forEach(function (x) {
+    if (!x.nuovo && esistenti[x.id].attivo && !x.attivo) regole.controllaDisattivazione(esistenti[x.id]);
+  });
+  var exCentrale = null;
+  if (nuovoCentrale) {
+    Object.keys(esistenti).forEach(function (id) {
+      var e = esistenti[id];
+      if (id !== nuovoCentrale.id && e.tipo !== 'transito' && (e.tipo === 'centrale' || e.centrale)) exCentrale = e.nome;
+    });
+  }
   var self = this;
   var r = this.database.scrivi(function (rev) {
+    if (nuovoCentrale) regole.declassaCentrale(rev, nuovoCentrale.id);
     norm.forEach(function (x) {
       // tipo e centrale sempre coerenti: 'centrale' solo per il reparto centrale, gli altri 'periferico'
       var tipo = x.centrale ? 'centrale' : 'periferico';
@@ -560,7 +673,10 @@ Operazioni.prototype.salvaReparti = function (ctx, dati) {
       }
     });
   });
-  this.accessi.evento(ctx, 'reparti.modifica', { reparti: norm.map(function (x) { return { id: x.id, nome: x.nome, centrale: x.centrale, attivo: x.attivo, nuovo: x.nuovo }; }) });
+  this.accessi.evento(ctx, 'reparti.modifica', {
+    reparti: norm.map(function (x) { return { id: x.id, nome: x.nome, centrale: x.centrale, attivo: x.attivo, nuovo: x.nuovo }; }),
+    exCentrale: exCentrale || undefined
+  });
   this.dopoScrittura(r);
   return { rev: r.rev, reparti: this.database.reparti() };
 };
@@ -570,6 +686,9 @@ Operazioni.prototype.eliminaReparto = function (ctx, id) {
   var rep = this.database.reparto(String(id));
   if (!rep) throw errore(404, 'Reparto non trovato.');
   if (rep.tipo === 'transito') throw errore(400, 'Il magazzino «' + NOME_TRANSITO + '» è del programma (la merce in viaggio con i DDT): non si può eliminare.');
+  if (rep.tipo === 'centrale' || rep.centrale) {
+    throw errore(400, 'La farmacia centrale non si elimina: prima scegli un altro magazzino come farmacia centrale.');
+  }
   if (this.db().prepare('SELECT 1 FROM movimenti WHERE reparto_id = ? OR reparto_dest_id = ? LIMIT 1').get(rep.id, rep.id)) {
     throw errore(409, 'Il reparto ha dei movimenti: non si può eliminare. Togli la spunta “Attivo” per nasconderlo.');
   }
@@ -677,7 +796,7 @@ Operazioni.prototype.importaArchivio = function (ctx, dati) {
   dati.articoli.forEach(function (a) {
     var v;
     // la versione per un solo PC non ha codici a barre né pezzi per confezione: si ignorano (gli articoli nascono senza)
-    try { v = validaArticolo(Object.assign({}, a, { barcode: undefined, pezziConfezione: undefined })); } catch (e) { scartati++; return; }
+    try { v = validaArticolo(Object.assign({}, a, { barcode: undefined, pezziConfezione: undefined, attributi: undefined, leadTime: undefined, fornitore: undefined })); } catch (e) { scartati++; return; }
     var base = v.nome;
     var n = 2;
     while (nomiUsati[v.nome.toLowerCase()]) v.nome = base + ' (' + (n++) + ')';

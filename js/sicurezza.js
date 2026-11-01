@@ -228,7 +228,8 @@
    * opz: {
    *   utente,                 utente collegato (per nome del file dei codici)
    *   obbligatoria: bool,     richiesta dall'amministratore (testo diverso, niente "Annulla")
-   *   cambio: bool,           la 2FA è già attiva: si configura un telefono nuovo
+   *   cambio: bool,           la 2FA è già attiva: si configura un telefono nuovo. Il primo passo chiede la password
+   *                           (il server la vuole per cambiare telefono: con una sessione rubata non si cambia)
    *   senza401: bool,         schermata di accesso: un 401 non apre la schermata di "sessione scaduta"
    *   alTermine(utente),      attivata e codici salvati (utente aggiornato dal server)
    *   alAnnulla(),            (facoltativo) pulsante Annulla
@@ -240,6 +241,9 @@
     var dati = null;
     var utente = opz.utente || App.utente;
     var opzApi = opz.senza401 ? { senza401: true } : undefined;
+    // cambio di telefono: diventa vero anche se il server dice che la verifica è già attiva (per esempio da un'altra scheda)
+    var cambio = !!opz.cambio;
+    var password = ''; // solo per il cambio: si manda una volta con /api/2fa/inizia e si dimentica subito
 
     function annulla() {
       return opz.alAnnulla ? '<button class="btn" type="button" data-sic-annulla>Annulla</button>' : '';
@@ -258,30 +262,62 @@
       return false;
     }
 
-    function passo1() {
-      disegna(
-        '<h3 tabindex="-1">' + (opz.cambio ? 'Prepara il telefono nuovo' : 'Prepara il telefono') + '</h3>' +
+    /* Primo passo. testoErrore: per il cambio di telefono, password sbagliata o chiave da richiedere. */
+    function passo1(testoErrore) {
+      var testo =
+        '<h3 tabindex="-1">' + (cambio ? 'Prepara il telefono nuovo' : 'Prepara il telefono') + '</h3>' +
         '<p>Con la verifica in due passaggi, oltre alla password serve un <b>codice di 6 cifre</b> che il tuo telefono crea ogni 30 secondi. ' +
         'Se qualcuno scopre la tua password, senza il telefono non può entrare.</p>' +
         '<p>Installa sul telefono una di queste app gratuite (dal Play Store o dall’App Store):</p>' +
         '<ul class="sic-app">' + APP_AUTENTICAZIONE.map(function (a) { return '<li><b>' + h(a[0]) + '</b> <span class="tenue">· ' + h(a[1]) + '</span></li>'; }).join('') + '</ul>' +
         '<p class="piccolo tenue">Ne usi già una (per la posta o la banca)? Va bene quella: tiene più codici insieme. ' +
-        'L’ora del telefono deve essere impostata in automatico, e anche quella del server deve essere giusta.</p>' +
-        '<div class="sic-azioni">' + annulla() + '<button class="btn primario" type="button" id="sic-avanti">Ho l’app: continua</button></div>', 0);
-      cont.querySelector('#sic-avanti').addEventListener('click', passo2);
-      cont.querySelector('#sic-avanti').focus({ preventScroll: true });
+        'L’ora del telefono deve essere impostata in automatico, e anche quella del server deve essere giusta.</p>';
+      if (!cambio) {
+        disegna(testo + '<div class="sic-azioni">' + annulla() + '<button class="btn primario" type="button" id="sic-avanti">Ho l’app: continua</button></div>', 0);
+        cont.querySelector('#sic-avanti').addEventListener('click', passo2);
+        cont.querySelector('#sic-avanti').focus({ preventScroll: true });
+        return;
+      }
+      // cambio di telefono: prima la password, come per disattivare la verifica o creare codici nuovi
+      disegna(testo +
+        '<form class="sic-form-password" id="sic-form-cambio" novalidate>' +
+        '<p>Per sicurezza scrivi la tua password: così nessuno, trovando il programma aperto, può collegare il suo telefono al tuo utente. ' +
+        'Il telefono di adesso vale finché non confermi quello nuovo.</p>' +
+        '<input type="text" autocomplete="username" value="' + h(utente && utente.username || '') + '" hidden>' +
+        '<label class="campo"><span>La tua password</span><input type="password" id="sic-pw-cambio" autocomplete="current-password"></label>' +
+        '<p class="sic-errore" role="alert"' + (testoErrore ? '' : ' hidden') + '>' + h(testoErrore || '') + '</p>' +
+        '<div class="sic-azioni">' + annulla() + '<button class="btn primario" type="submit" id="sic-avanti">Ho l’app: continua</button></div>' +
+        '</form>', 0);
+      var campoPw = cont.querySelector('#sic-pw-cambio');
+      cont.querySelector('#sic-form-cambio').addEventListener('submit', function (e) {
+        e.preventDefault();
+        if (!campoPw.value) {
+          var err = cont.querySelector('#sic-form-cambio .sic-errore');
+          err.textContent = 'Scrivi la tua password.';
+          err.hidden = false;
+          campoPw.focus();
+          return;
+        }
+        password = campoPw.value;
+        passo2();
+      });
+      campoPw.focus({ preventScroll: true });
     }
 
     function passo2(avviso) {
       disegna('<h3 tabindex="-1">Collega l’app</h3><p class="tenue" role="status">Preparo la chiave…</p>', 1);
-      Api().richiesta('POST', '/api/2fa/inizia', {}, opzApi).then(function (r) {
+      var corpo = cambio ? { password: password } : {};
+      password = '';
+      Api().richiesta('POST', '/api/2fa/inizia', corpo, opzApi).then(function (r) {
         dati = r;
         disegnaCollega(typeof avviso === 'string' ? avviso : '');
       }, function (e) {
         if (errore(e)) return;
+        // password sbagliata, oppure la verifica è già attiva (un'altra scheda l'ha appena attivata): serve la password
+        if (e.stato === 400 && (cambio || (e.dati && e.dati.servePassword))) { cambio = true; passo1(messaggio(e)); return; }
         disegna('<h3 tabindex="-1">Collega l’app</h3><div class="banda pericolo"><p>' + h(messaggio(e)) + '</p></div>' +
           '<div class="sic-azioni">' + annulla() + '<button class="btn primario" type="button" id="sic-riprova">Riprova</button></div>', 1);
-        cont.querySelector('#sic-riprova').addEventListener('click', passo2);
+        cont.querySelector('#sic-riprova').addEventListener('click', function () { if (cambio) passo1(); else passo2(); });
       });
     }
 
@@ -349,7 +385,12 @@
         }, function (e) {
           inviando = false;
           if (errore(e)) return;
-          if (e.dati && e.dati.ricomincia) { passo2(messaggio(e)); return; }
+          if (e.dati && e.dati.ricomincia) {
+            // chiave scaduta o annullata: una nuova (per il cambio di telefono si riscrive la password)
+            if (e.dati.servePassword) cambio = true;
+            if (cambio) passo1(messaggio(e)); else passo2(messaggio(e));
+            return;
+          }
           b.disabled = false;
           mostraErrore(messaggio(e));
           inp.value = '';
@@ -359,7 +400,8 @@
       inp.focus({ preventScroll: true });
     }
 
-    if (opz.dalPasso === 2) passo2(); else passo1();
+    // il cambio di telefono parte sempre dal primo passo: la password si chiede lì
+    if (opz.dalPasso === 2 && !cambio) passo2(); else passo1();
   };
 
   /* ---------- finestra "Sicurezza dell'account" ---------- */
@@ -422,7 +464,7 @@
           ? 'Su <b>' + st.dispositivi + '</b> computer non chiedo il codice per ' + st.giorniDispositivo + ' giorni (hai scelto «Ricorda questo computer»).'
           : 'Nessun computer ricordato: il codice si chiede a ogni accesso.',
           st.dispositivi ? '<button class="btn piccolo" type="button" id="sic-dimentica">Dimentica i computer</button>' : '') +
-        riga('Telefono', 'Hai cambiato telefono o reinstallato l’app? Collega di nuovo l’app: il telefono vecchio smette di valere.',
+        riga('Telefono', 'Hai cambiato telefono o reinstallato l’app? Collega di nuovo l’app (serve la tua password): il telefono vecchio smette di valere.',
           '<button class="btn piccolo" type="button" id="sic-cambia">Cambia telefono</button>') +
         (st.obbligatoria ? '' : riga('Disattiva', 'Torni a entrare con la sola password.',
           '<button class="btn piccolo pericolo" type="button" id="sic-disattiva">Disattiva</button>')) +

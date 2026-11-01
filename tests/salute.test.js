@@ -32,11 +32,13 @@ function cartellaNuova(nome) {
   return c;
 }
 
-async function avviaServer(dati) {
+/* opz.precarica: file JS caricato nel server prima di tutto (node -r), per esempio una seconda cartella lenta. */
+async function avviaServer(dati, opz) {
   const porta = await portaLibera();
   dati = dati || cartellaNuova();
   const comando = ESEGUIBILE || process.execPath;
-  const argomenti = (ESEGUIBILE ? [] : [path.join(__dirname, '..', 'server', 'main.js')]).concat(['--porta', String(porta), '--dati', dati]);
+  const prima = !ESEGUIBILE && opz && opz.precarica ? ['-r', opz.precarica] : [];
+  const argomenti = (ESEGUIBILE ? [] : prima.concat([path.join(__dirname, '..', 'server', 'main.js')])).concat(['--porta', String(porta), '--dati', dati]);
   const proc = spawn(comando, argomenti, { stdio: ['ignore', 'pipe', 'pipe'] });
   let uscita = '';
   proc.stdout.on('data', (d) => { uscita += d; });
@@ -124,6 +126,37 @@ function quickCheck(file) {
     db.close();
     return r.join(' ');
   } catch (e) { return e.message; }
+}
+
+/* Seconda cartella lenta come un disco di rete carico: ogni file copiato in sottofondo aspetta ms millisecondi. */
+function precaricaLenta(ms) {
+  const f = path.join(cartellaNuova('lenta-js'), 'lenta.js');
+  fs.writeFileSync(f, "const fsp = require('fs').promises;\nconst orig = fsp.copyFile.bind(fsp);\n" +
+    'fsp.copyFile = (a, b, m) => new Promise((r) => setTimeout(r, ' + ms + ')).then(() => orig(a, b, m));\n');
+  return f;
+}
+
+/* Aspetta che cond() sia vera (al massimo ms millisecondi). cosa: testo, o funzione che lo dà (letta alla fine). */
+async function aspetta(cond, ms, cosa) {
+  const fine = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > fine) assert.fail('dopo ' + ms + ' ms ancora no: ' + (typeof cosa === 'function' ? cosa() : cosa));
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+/* Un po' di lavoro di ogni tipo: articolo, carico, richiesta → DDT spedito e ricevuto, armadio, impostazioni. */
+async function lavora(a, etichetta) {
+  const art = ok200(await a.post('/api/articoli', { nome: 'ART ' + etichetta, categoria: 'FARMACI', prezzo: 2 })).articolo;
+  ok200(await a.post('/api/movimenti', { movimenti: [{ tipo: 'carico', data: oggi(), articoloId: art.id, repartoId: 'r-farmacia', quantita: 50, lotto: 'L-' + etichetta, scadenza: '2030-01' }] }));
+  const ric = ok200(await a.post('/api/richieste', { repartoId: 'r-degenza', invia: true, righe: [{ articoloId: art.id, quantita: 5 }] }));
+  const p = ok200(await a.post('/api/richieste/' + ric.richiesta.id + '/ddt', {}));
+  ok200(await a.post('/api/ddt/' + p.ddt.id + '/spedisci', { trasportatoreNome: 'Gino' }));
+  ok200(await a.post('/api/ddt/' + p.ddt.id + '/ricevi', {}));
+  ok200(await a.post('/api/armadi', { repartoId: 'r-degenza', nome: 'Armadio ' + etichetta, ripiani: 2, colonne: 3 }));
+  const imp = ok200(await a.get('/api/dati?da=0')).impostazioni;
+  ok200(await a.put('/api/impostazioni', Object.assign({}, imp, { giorniAvvisoScadenza: 30 + etichetta.length })));
+  return { art, ric: ric.richiesta, ddt: p.ddt };
 }
 
 function righeGiornale(dati) {
@@ -480,6 +513,14 @@ test('un file sostituito a mano con una copia vecchia NON viene riportato avanti
   assert.deepEqual(istantanea(dopo).articoli, istantanea(vecchi).articoli);
   assert.ok(dopo.rev > vecchi.rev + 1, 'linea nuova sopra il giornale');
   assert.match(S.uscita(), /linea nuova/);
+  // quello che il giornale ha e il magazzino no non sparisce in silenzio: cura con perdite, semaforo rosso
+  const st = ok200(await admin.get('/api/sistema'));
+  assert.equal(st.cure[0].metodo, 'linea-nuova');
+  assert.equal(st.cure[0].esito, 'curato-con-perdite');
+  assert.equal(st.cure[0].perse, 1);
+  assert.match(st.cure[0].messaggio, /1 articolo/);
+  assert.equal(st.stato, 'problema');
+  assert.ok(st.motivi.some((m) => /più indietro del giornale/.test(m.testo)), JSON.stringify(st.motivi));
   ok200(await admin.post('/api/articoli', { nome: 'SULLA LINEA NUOVA', categoria: 'FARMACI' }));
   assert.equal(ok200(await admin.post('/api/sistema/prova-ripristino')).prova.esito, 'ok');
 });
@@ -509,12 +550,17 @@ test('accessi.db danneggiato: ripristino dalla copia, gli utenti tornano', async
   const seconda = cartellaNuova('accessi-seconda');
   // seconda cartella scritta nel file di configurazione: dalla pagina non si cambia
   fs.writeFileSync(path.join(dati, 'configurazione.json'), JSON.stringify({ secondaCartella: seconda }));
-  let s = await avviaServer(dati);
+  // seconda cartella lenta (ogni file 800 ms): la copia di adesso deve arrivarci anche se la sincronizzazione delle
+  // copie automatiche dell'avvio è ancora in corso (prima la prova a volte ripristinava la copia vuota dell'avvio)
+  let s = await avviaServer(dati, { precarica: precaricaLenta(800) });
   try {
     const a = new Client(s.base);
     ok200(await a.post('/api/setup', { username: 'admin', nome: 'Amministratore', password: PW }));
     await utente(a, s.base, 'mario', 'farmacista');
-    ok200(await a.post('/api/sistema/copia'));
+    const copia = ok200(await a.post('/api/sistema/copia'));
+    const copiaAccessi = copia.copie.find((c) => c.prefisso === 'accessi').nome;
+    // con la seconda cartella la risposta arriva dopo la sincronizzazione (al massimo 20 s): la copia è già lì
+    await aspetta(() => fs.existsSync(path.join(seconda, copiaAccessi)), 30000, 'la copia ' + copiaAccessi + ' nella seconda cartella');
     await utente(a, s.base, 'luigi', 'farmacista'); // dopo la copia: si perde (accessi.db non ha giornale)
     const st = ok200(await a.get('/api/sistema'));
     assert.equal(st.secondaCartella.origine, 'configurazione');
@@ -527,10 +573,15 @@ test('accessi.db danneggiato: ripristino dalla copia, gli utenti tornano', async
     assert.notEqual(quickCheck(file), 'ok');
     // le copie della cartella dati spariscono: si usano quelle della seconda cartella
     fs.readdirSync(path.join(dati, 'backup')).filter((n) => n.startsWith('accessi_')).forEach((n) => fs.unlinkSync(path.join(dati, 'backup', n)));
-    assert.ok(fs.readdirSync(seconda).some((n) => n.startsWith('accessi_')));
+    assert.ok(fs.existsSync(path.join(seconda, copiaAccessi)), 'la copia di accessi.db fatta prima del danno è nella seconda cartella');
 
     s = await avviaServer(dati);
     assert.match(s.uscita(), /accessi\.db .*danneggiato/);
+    // le sessioni della copia restano valide: chi era collegato prima della copia non deve rientrare
+    const collegato = new Client(s.base);
+    collegato.cookie = a.cookie;
+    const stato = ok200(await collegato.get('/api/stato'));
+    assert.equal(stato.utente && stato.utente.username, 'admin', JSON.stringify(stato).slice(0, 200));
     const a2 = new Client(s.base);
     ok200(await a2.post('/api/login', { username: 'admin', password: PW }));
     const m = new Client(s.base);
@@ -667,6 +718,247 @@ test('le copie di accessi.db nella cartella dati portano la chiave della 2FA; la
     assert.ok(resto.includes('accessi_2020-01-03_120000_manuale.chiave-2fa.key'));
     assert.ok(resto.includes(path.basename(fk)));
   } finally {
+    db.chiudi();
+  }
+});
+
+/* ---------- revisione dei dati 3.0: WAL perso, giornale come fonte di verità, numeri, seconda cartella ---------- */
+
+test('spegnimento improvviso con il WAL sparito, vuoto o con la testata rovinata: le scritture tornano dal giornale', async () => {
+  const dati = cartellaNuova('wal');
+  const file = path.join(dati, 'farmacia.db');
+  let s = await avviaServer(dati);
+  const a = new Client(s.base);
+  try {
+    ok200(await a.post('/api/setup', { username: 'admin', nome: 'Amministratore', password: PW }));
+    await lavora(a, 'prima sessione');
+    await s.ferma(); // arresto ordinato: tutto nel file principale
+    let righe = righeGiornale(dati);
+    assert.equal(righe[righe.length - 1].tipo, 'chiusura', 'l’arresto ordinato si segna nel giornale');
+    assert.equal(righe[righe.length - 1].durevole, true);
+    // WAL sparito, vuoto (una mancanza di corrente su NTFS), testata rovinata; e dopo il checkpoint del controllo
+    // completo (come di notte) con il WAL vuoto
+    for (const danno of ['senza-wal', 'wal-vuoto', 'testata-rovinata', 'dopo-il-controllo']) {
+      s = await avviaServer(dati);
+      a.base = s.base; // la sessione dell'amministratore resta valida
+      righe = righeGiornale(dati);
+      assert.equal(righe[righe.length - 1].tipo, 'avvio');
+      assert.equal(righe[righe.length - 1].durevole, true, 'all’avvio il WAL si riversa nel file principale');
+      if (danno === 'dopo-il-controllo') ok200(await a.post('/api/sistema/controlla'));
+      await lavora(a, danno);
+      const prima = ok200(await a.get('/api/dati?da=0'));
+      await s.uccidi();
+      assert.ok(fs.statSync(file + '-wal').size > 0, 'le scritture di questa sessione sono solo nel WAL');
+      if (danno === 'senza-wal') fs.unlinkSync(file + '-wal');
+      else if (danno === 'testata-rovinata') {
+        const fd = fs.openSync(file + '-wal', 'r+');
+        fs.writeSync(fd, Buffer.alloc(32, 0x77), 0, 32, 0);
+        fs.closeSync(fd);
+      } else fs.truncateSync(file + '-wal', 0);
+      try { fs.unlinkSync(file + '-shm'); } catch (e) { /* non c'è */ }
+
+      s = await avviaServer(dati);
+      a.base = s.base;
+      assert.match(s.uscita(), /spegnimento improvviso/, danno);
+      const dopo = ok200(await a.get('/api/dati?da=0'));
+      assert.deepEqual(istantanea(dopo), istantanea(prima), danno + ': nessuna scrittura persa');
+      assert.equal(dopo.rev, prima.rev, danno);
+      const st = ok200(await a.get('/api/sistema'));
+      assert.equal(st.cure[0].metodo, 'coda', danno);
+      assert.equal(st.cure[0].esito, 'curato', danno);
+      assert.equal(st.cure[0].perse, 0, danno);
+      assert.ok(st.cure[0].riapplicate >= 8, danno + ': riapplicate ' + st.cure[0].riapplicate);
+      assert.equal(st.stato, 'attenzione', danno + ': ' + JSON.stringify(st.motivi));
+      await s.ferma();
+    }
+  } finally {
+    await s.ferma();
+  }
+});
+
+test('un file rimesso a mano da una copia di prima dell’ultimo avvio: non si riporta avanti, cura con perdite, numeri non riusati', async () => {
+  const dati = cartellaNuova('a-mano');
+  const file = path.join(dati, 'farmacia.db');
+  let s = await avviaServer(dati);
+  const a = new Client(s.base);
+  try {
+    ok200(await a.post('/api/setup', { username: 'admin', nome: 'Amministratore', password: PW }));
+    await lavora(a, 'uno');
+    const copia = ok200(await a.post('/api/backup')).nome;
+    const vecchi = ok200(await a.get('/api/dati?da=0'));
+    await lavora(a, 'due');
+    await s.uccidi(); // spegnimento improvviso (il WAL resta: al prossimo avvio finisce nel file)
+    s = await avviaServer(dati);
+    a.base = s.base;
+    const tre = await lavora(a, 'tre');
+    assert.match(tre.ric.numero, /-0003$/);
+    assert.match(tre.ddt.numero, /-0003$/);
+    await s.uccidi();
+    // qualcuno rimette a mano la copia vecchia (il file era già stato riversato su disco più avanti, all'avvio)
+    ['', '-wal', '-shm'].forEach((x) => { try { fs.unlinkSync(file + x); } catch (e) { /* non c'è */ } });
+    fs.copyFileSync(path.join(dati, 'backup', copia), file);
+
+    s = await avviaServer(dati);
+    a.base = s.base;
+    const dopo = ok200(await a.get('/api/dati?da=0'));
+    assert.deepEqual(istantanea(dopo).articoli, istantanea(vecchi).articoli, 'la copia rimessa a mano non si riporta avanti');
+    assert.deepEqual(istantanea(dopo).ddt, istantanea(vecchi).ddt);
+    const st = ok200(await a.get('/api/sistema'));
+    const cura = st.cure[0];
+    assert.equal(cura.metodo, 'linea-nuova');
+    assert.equal(cura.esito, 'curato-con-perdite');
+    assert.ok(cura.perse >= 16, 'modifiche perse: ' + cura.perse);
+    assert.match(cura.messaggio, /2 articoli/);
+    assert.match(cura.messaggio, /2 DDT/);
+    assert.equal(st.stato, 'problema', 'semaforo rosso: ' + JSON.stringify(st.motivi));
+    assert.equal(ok200(await a.get('/api/attivita?azione=sistema.cura')).eventi.length, 1);
+    assert.equal(ok200(await a.get('/api/attivita?azione=sistema.linea-nuova')).eventi.length, 1);
+    // i numeri RIC e DDT già dati (fino a 0003, anche se non sono più nel magazzino) non tornano liberi
+    const quattro = await lavora(a, 'quattro');
+    assert.match(quattro.ric.numero, /-0004$/, quattro.ric.numero);
+    assert.match(quattro.ddt.numero, /-0004$/, quattro.ddt.numero);
+  } finally {
+    await s.ferma();
+  }
+});
+
+test('farmacia.db sparito e nessuna copia del magazzino: si ricostruisce dal solo giornale (non è un archivio nuovo)', async () => {
+  const dati = cartellaNuova('solo-giornale');
+  let s = await avviaServer(dati);
+  const a = new Client(s.base);
+  try {
+    ok200(await a.post('/api/setup', { username: 'admin', nome: 'Amministratore', password: PW }));
+    await lavora(a, 'uno');
+    await lavora(a, 'due');
+    const prima = ok200(await a.get('/api/dati?da=0'));
+    await s.ferma();
+    ['', '-wal', '-shm'].forEach((x) => { try { fs.unlinkSync(path.join(dati, 'farmacia.db' + x)); } catch (e) { /* non c'è */ } });
+    fs.readdirSync(path.join(dati, 'backup')).filter((n) => n.startsWith('farmacia_')).forEach((n) => fs.unlinkSync(path.join(dati, 'backup', n)));
+
+    s = await avviaServer(dati);
+    a.base = s.base;
+    assert.match(s.uscita(), /farmacia\.db .*mancante/);
+    const dopo = ok200(await a.get('/api/dati?da=0'));
+    assert.deepEqual(istantanea(dopo), istantanea(prima));
+    const cura = ok200(await a.get('/api/sistema')).cure[0];
+    assert.equal(cura.file, 'farmacia.db');
+    assert.equal(cura.metodo, 'giornale');
+    assert.equal(cura.esito, 'curato');
+    assert.match(cura.messaggio, /archivio vuoto/);
+  } finally {
+    await s.ferma();
+  }
+});
+
+test('ultima scrittura non arrivata nel giornale e file illeggibile: la cura lo dice, non "nessun dato perso"', async () => {
+  const dati = cartellaNuova('coda-giornale');
+  const file = path.join(dati, 'farmacia.db');
+  let s = await avviaServer(dati);
+  const a = new Client(s.base);
+  try {
+    ok200(await a.post('/api/setup', { username: 'admin', nome: 'Amministratore', password: PW }));
+    ok200(await a.post('/api/sistema/copia'));
+    await lavora(a, 'uno');
+    const ultima = ok200(await a.post('/api/articoli', { nome: 'ULTIMA SCRITTURA', categoria: 'FARMACI' }));
+    await s.uccidi();
+    // il giornale non ha l'ultima scrittura (per esempio non si poteva scrivere), il registro attività sì
+    const cartella = path.join(dati, 'giornale');
+    const nome = fs.readdirSync(cartella).filter((n) => /\.jsonl$/.test(n)).sort().pop();
+    const righe = fs.readFileSync(path.join(cartella, nome), 'utf8').split('\n').filter(Boolean);
+    assert.equal(JSON.parse(righe[righe.length - 1]).rev, ultima.rev);
+    assert.equal(typeof JSON.parse(righe[righe.length - 1]).evento, 'number', 'la voce ricorda il numero del registro attività');
+    righe.pop();
+    fs.writeFileSync(path.join(cartella, nome), righe.join('\n') + '\n');
+    // e il file si rompe nella testata: la sua revisione non si sa più
+    chiudiBene(file);
+    const fd = fs.openSync(file, 'r+');
+    fs.writeSync(fd, Buffer.alloc(8192, 0x3c), 0, 8192, 0);
+    fs.closeSync(fd);
+
+    s = await avviaServer(dati);
+    a.base = s.base;
+    const st = ok200(await a.get('/api/sistema'));
+    const cura = st.cure.find((c) => c.file === 'farmacia.db');
+    assert.equal(cura.esito, 'curato-con-perdite');
+    assert.equal(cura.perse, 1);
+    assert.doesNotMatch(cura.messaggio, /nessun dato perso/);
+    assert.ok(cura.messaggi.some((m) => /registro attività/.test(m) && /articoli\.crea/.test(m)), JSON.stringify(cura.messaggi));
+    assert.equal(st.stato, 'problema');
+    assert.match(s.uscita(), /farmacia\.db danneggiato, curato CON PERDITE/);
+    // l'evento della cura nel registro attività ha il resoconto giusto
+    const ev = ok200(await a.get('/api/attivita?azione=sistema.cura')).eventi[0];
+    assert.equal(JSON.parse(typeof ev.dettagli === 'string' ? ev.dettagli : JSON.stringify(ev.dettagli)).esito, 'curato-con-perdite');
+  } finally {
+    await s.ferma();
+  }
+});
+
+test('dopo il ripristino di una copia i numeri di DDT e richieste già dati non tornano liberi', async () => {
+  const dati = cartellaNuova('numeri');
+  let s = await avviaServer(dati);
+  const a = new Client(s.base);
+  try {
+    ok200(await a.post('/api/setup', { username: 'admin', nome: 'Amministratore', password: PW }));
+    const art = ok200(await a.post('/api/articoli', { nome: 'NUMERI', categoria: 'FARMACI' })).articolo;
+    ok200(await a.post('/api/movimenti', { movimenti: [{ tipo: 'carico', data: oggi(), articoloId: art.id, repartoId: 'r-farmacia', quantita: 100 }] }));
+    const ddt = async () => ok200(await a.post('/api/ddt', { origineId: 'r-farmacia', destinazioneId: 'r-degenza', righe: [{ articoloId: art.id, quantita: 1 }] })).ddt;
+    const ric = async () => ok200(await a.post('/api/richieste', { repartoId: 'r-degenza', invia: true, righe: [{ articoloId: art.id, quantita: 1 }] })).richiesta;
+    assert.match((await ddt()).numero, /-0001$/);
+    assert.match((await ric()).numero, /-0001$/);
+    const copia = ok200(await a.post('/api/backup')).nome;
+    for (let i = 0; i < 2; i++) {
+      const d = await ddt(); // stampato, partito con il codice sul pacco
+      ok200(await a.post('/api/ddt/' + d.id + '/spedisci', { trasportatoreNome: 'Gino' }));
+      await ric();
+    }
+    ok200(await a.post('/api/backup/' + copia + '/ripristina'));
+    const d4 = await ddt();
+    assert.match(d4.numero, /-0004$/, 'dopo il ripristino: ' + d4.numero);
+    assert.match((await ric()).numero, /-0004$/);
+    // la linea nuova del ripristino è già nel file principale: resta anche dopo un riavvio
+    await s.ferma();
+    s = await avviaServer(dati);
+    a.base = s.base;
+    assert.match((await ddt()).numero, /-0005$/);
+    const r = righeGiornale(dati).filter((v) => v.tipo === 'ripristino');
+    assert.equal(r.length, 1);
+    assert.equal(r[0].durevole, true);
+  } finally {
+    await s.ferma();
+  }
+});
+
+test('seconda cartella lenta: una copia fatta mentre si sincronizza ci arriva lo stesso; il giornale nuovo anche senza copie', async () => {
+  const dati = cartellaNuova('lenta');
+  const seconda = cartellaNuova('lenta-seconda');
+  const db = new D.Database(dati);
+  const fsp = fs.promises;
+  const copyFile = fsp.copyFile;
+  fsp.copyFile = (x, y, m) => new Promise((r) => setTimeout(r, 150)).then(() => copyFile.call(fsp, x, y, m));
+  try {
+    const b = new B.Backup(db, () => {}, { secondaCartella: seconda });
+    const prime = b.creaTutte('auto');
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(b.seconda.inCorso, true, 'il primo giro sta ancora copiando');
+    db.scrivi((rev) => { db.dati.prepare("INSERT INTO articoli (id, nome, categoria, rev) VALUES ('a1', 'DOPO', 'FARMACI', ?)").run(rev); });
+    const altre = b.creaTutte('manuale');
+    const tutte = prime.concat(altre);
+    await aspetta(() => tutte.every((n) => fs.existsSync(path.join(seconda, n))) && !b.seconda.inCorso, 15000,
+      () => 'nella seconda cartella ci sono ' + fs.readdirSync(seconda).join(', ') + '; servono ' + tutte.join(', '));
+    assert.equal(b.seconda.raggiungibile, true);
+
+    // il giornale arriva nella seconda cartella anche fra una copia e l'altra (giro ogni 5 minuti)
+    const g = new G.Giornale(db, {});
+    g.collega();
+    b.giornale = g;
+    db.scrivi((rev) => { db.dati.prepare("INSERT INTO articoli (id, nome, categoria, rev) VALUES ('a2', 'SOLO NEL GIORNALE', 'FARMACI', ?)").run(rev); });
+    assert.equal(b.giornaleDaPortare(), true);
+    await b.sincronizzaSeconda();
+    assert.equal(b.giornaleDaPortare(), false);
+    const laggiu = G.leggi(path.join(seconda, 'giornale')).voci;
+    assert.equal(laggiu[laggiu.length - 1].cambiamenti.articoli[0].nome, 'SOLO NEL GIORNALE');
+  } finally {
+    fsp.copyFile = copyFile;
     db.chiudi();
   }
 });

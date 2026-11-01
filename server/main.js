@@ -175,17 +175,22 @@ function avvia() {
 
   // controllo rapido e cura dei file danneggiati, PRIMA di aprire il database per l'uso
   var salute = new Salute({ cartella: cartellaDati, log: log, versione: VERSIONE, secondaCartella: secondaCartella });
+  var controllo;
   try {
-    var controllo = salute.curaAllAvvio();
-    var esiti = Object.keys(controllo.file).map(function (k) { return k + '.db ' + descriviEsito(controllo.file[k]); });
-    log('Controllo della base dati all’avvio: ' + esiti.join(', ') + ' (' + controllo.durataMs + ' ms).');
+    controllo = salute.curaAllAvvio();
   } catch (e) {
     return fatale('Controllo della base dati non riuscito: ' + e.message);
+  }
+  // il riassunto si scrive dopo salute.collega(): la cura si confronta anche con il registro attività
+  function riassuntoAvvio() {
+    var esiti = Object.keys(controllo.file).map(function (k) { return k + '.db ' + descriviEsito(controllo.file[k]); });
+    log('Controllo della base dati all’avvio: ' + esiti.join(', ') + ' (' + controllo.durataMs + ' ms).');
   }
 
   try {
     database = new Database(cartellaDati);
   } catch (e) {
+    riassuntoAvvio();
     return fatale('Non riesco ad aprire il database in ' + cartellaDati + ': ' + e.message +
       '\nForse il programma è già in esecuzione, oppure la cartella non è scrivibile.');
   }
@@ -217,8 +222,10 @@ function avvia() {
   try {
     salute.collega({ database: database, accessi: accessi, backup: backup, giornale: giornale });
   } catch (e) {
+    riassuntoAvvio();
     return fatale('Preparazione della base dati non riuscita: ' + e.message);
   }
+  riassuntoAvvio();
 
   var server;
   var operazioni = new Operazioni(database, accessi, function (rev) { server.notifica(rev); });

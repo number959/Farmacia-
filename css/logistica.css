@@ -161,6 +161,14 @@
   --st-fondo: #eee;
 }
 .log-stampa { color: var(--st-inchiostro); background: var(--st-carta); font: 10pt/1.35 var(--carattere); }
+
+/* ---------- anagrafica articolo: caratteristiche (js/pagine.js, App.formArticolo e scheda) ---------- */
+.attributi-articolo { border: 0; margin: 0; padding: 0; min-width: 0; }
+.attributi-articolo > legend { padding: 0; margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--tenue); }
+.attributi-scelte { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 6px 0 2px; }
+.attributi-scelte .spunta { min-height: 28px; }
+.etichetta.attributo-articolo { background: var(--info-chiaro); color: var(--info); border-color: color-mix(in srgb, var(--info) 22%, transparent); }
+
 @media print {
   body.stampa-ddt { background: var(--st-carta); }
   body.stampa-ddt > *:not(.log-stampa) { display: none !important; }

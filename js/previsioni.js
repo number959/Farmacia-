@@ -8,11 +8,15 @@
  *   periodi(inizio, n, vista) / aggrega(...)       raggruppamento per giorno, settimana (lunedì–domenica) o mese
  *   MODELLI, stima(valori, opz)                    media mobile, livellamento esponenziale, Holt smorzato,
  *                                                 Holt-Winters additivo settimanale, Croston-SBA; scelta automatica
- *                                                 per errore assoluto medio (MAE) di retro-verifica sulle ultime 4 settimane
+ *                                                 per errore assoluto medio (MAE) di retro-verifica sulle ultime 4 settimane;
+ *                                                 un giorno anomalo isolato conta come la soglia (limitaAnomali), σ robusta
  *   sigmaPeriodo(stima, scarto, giorni)            incertezza (deviazione standard) di un periodo previsto
- *   analizza(stato, opz)                           fabbisogno di tutti gli articoli di un ambito, con ABC e XYZ
+ *   analizza(stato, opz)                           fabbisogno di tutti gli articoli di un ambito, con ABC e XYZ;
+ *                                                 disponibile = giacenza + in viaggio + già chiesto (richieste aperte
+ *                                                 dei magazzini periferici dell'ambito)
  *   consumoGiornaliero(stato, articoloId, repId)   unità al giorno previste (proposta delle richieste, parte A)
- *   consumoMedio(stato, articoloId, repId, giorni) uscite medie al giorno degli ultimi giorni (assortimento, parte B)
+ *   consumoMedio(stato, articoloId, repId, giorni) uscite medie al giorno degli ultimi giorni (assortimento, parte B);
+ *                                                 per la centrale le uscite verso gli altri meno i rientri dei DDT
  *   distribuzione(stato, opz)                      quanto la farmacia centrale ha dato a ogni magazzino, consumi, giacenze
  *
  * "reparti" (ambito) vale null = tutta la struttura, un id, oppure un elenco di id di magazzini.
@@ -87,6 +91,17 @@
     var m = media(v), s = 0;
     for (var i = 0; i < v.length; i++) s += (v[i] - m) * (v[i] - m);
     return Math.sqrt(s / (v.length - 1));
+  }
+
+  function mediana(v) {
+    if (!v.length) return 0;
+    var o = v.slice().sort(function (a, b) { return a - b; }), k = o.length >> 1;
+    return o.length % 2 ? o[k] : (o[k - 1] + o[k]) / 2;
+  }
+
+  // scarto assoluto mediano (MAD) riportato alla deviazione standard di una normale
+  function scartoMediano(v, m) {
+    return 1.4826 * mediana(v.map(function (x) { return Math.abs(x - m); }));
   }
 
   /*
@@ -377,6 +392,85 @@
     return err / k / STAGIONE;
   }
 
+  /*
+   * Giorni anomali (un "500" scritto al posto di "5", un consumo eccezionale di un giorno solo): un solo giorno così
+   * peserebbe per mesi sulla previsione e soprattutto sulla scorta di sicurezza (σ). Per i modelli e per σ ogni giorno
+   * isolato molto sopra il solito si conta come la soglia; la serie vera resta per grafici, medie e totali.
+   *   solito  = giorni con consumo: mediana m e scarto tipico s = max(1,4826·MAD, min(√m, m))
+   *             (il minimo evita che con consumi sempre uguali, MAD = 0, ogni piccola variazione sembri anomala)
+   *   soglia  = max(m + 5·s, 3·m)
+   *   anomalo = sopra la soglia e "isolato": i giorni accanto non sono sopra la soglia (più giorni alti di fila sono
+   *             un cambio vero dei consumi, che i modelli devono seguire)
+   * Se i giorni anomali sono più dell'1% dei giorni con consumo (almeno 1), sono un'abitudine (per esempio una scatola
+   * grande ogni tanto) e non un errore: si limitano solo i più alti, al valore di quello che viene dopo.
+   * Servono almeno 5 giorni con consumo: con meno non si sa ancora cos'è il solito.
+   * Restituisce { valori (la serie da usare per i modelli), anomali: [{ indice, valore, contato }], soglia }.
+   */
+  var ANOMALI_MIN_GIORNI = 5;
+  var ANOMALI_K = 5;
+  var ANOMALI_QUOTA = 0.01;
+
+  function limitaAnomali(valori) {
+    var y = valori.map(function (x) { return Number(x) || 0; });
+    var n = y.length;
+    var nz = y.filter(function (x) { return x > 0; });
+    var nulla = { valori: y, anomali: [], soglia: null };
+    if (nz.length < ANOMALI_MIN_GIORNI) return nulla;
+    var m = mediana(nz);
+    var s = Math.max(scartoMediano(nz, m), Math.min(Math.sqrt(m), m));
+    var soglia = r3(Math.max(m + ANOMALI_K * s, 3 * m));
+    var alti = [];
+    for (var i = 0; i < n; i++) {
+      if (y[i] > soglia && !(i > 0 && y[i - 1] > soglia) && !(i < n - 1 && y[i + 1] > soglia)) alti.push(i);
+    }
+    if (!alti.length) { nulla.soglia = soglia; return nulla; }
+    alti.sort(function (a, b) { return y[b] - y[a] || a - b; });
+    var massimo = Math.max(1, Math.floor(nz.length * ANOMALI_QUOTA));
+    var limite = soglia;
+    if (alti.length > massimo) { limite = Math.max(soglia, y[alti[massimo]]); alti = alti.slice(0, massimo); }
+    var out = y.slice(), anomali = [];
+    alti.forEach(function (k) {
+      if (!(y[k] > limite)) return;
+      out[k] = limite;
+      anomali.push({ indice: k, valore: y[k], contato: limite });
+    });
+    anomali.sort(function (a, b) { return a.indice - b.indice; });
+    return { valori: out, anomali: anomali, soglia: soglia };
+  }
+
+  /*
+   * Scarto tipico (deviazione standard) della domanda di un giorno, robusto: dai giorni con consumo (mediana e MAD)
+   * e dalla quota p di giorni con consumo. Per una domanda a giorni alterni è più grande di quello dei soli giorni
+   * con consumo: varianza = p·s² + p·(1−p)·m².
+   */
+  function scartoRobusto(y) {
+    var nz = y.filter(function (x) { return x > 0; });
+    if (!nz.length) return 0;
+    var m = mediana(nz);
+    var s = Math.max(scartoMediano(nz, m), Math.min(Math.sqrt(m), m));
+    var p = nz.length / y.length;
+    return Math.sqrt(p * s * s + p * (1 - p) * m * m);
+  }
+
+  /*
+   * σ dei residui un passo avanti, robusta: un residuo oltre il limite conta come il limite, così un giorno strano non
+   * gonfia la scorta. Limite = 4 volte lo scarto tipico (MAD dei residui, o almeno lo scarto robusto della domanda),
+   * ma mai meno del doppio del residuo che viene dopo l'1% più grande (almeno 1): si limitano solo pochi residui e
+   * solo se sono staccati dagli altri. Se i residui grandi sono di più, o vicini fra loro, sono il modo normale di
+   * consumare (scatole grandi ogni tanto) e la scorta li deve coprire.
+   */
+  function sigmaRobusta(residui, y) {
+    var tipico = Math.max(scartoMediano(residui, mediana(residui)), scartoRobusto(y));
+    var assoluti = residui.map(Math.abs).sort(function (a, b) { return b - a; });
+    var massimo = Math.max(1, Math.floor(residui.length * ANOMALI_QUOTA));
+    var lim = Math.max(4 * tipico, 2 * (assoluti[massimo] || 0)), sq = 0;
+    for (var i = 0; i < residui.length; i++) {
+      var e = lim > 0 ? limita(residui[i], -lim, lim) : residui[i];
+      sq += e * e;
+    }
+    return Math.sqrt(sq / residui.length);
+  }
+
   function giudizio(errSett, n) {
     if (n < 4 * STAGIONE || !isFinite(errSett)) return { id: 'scarsa', testo: 'Pochi dati' };
     if (errSett <= 0.25) return { id: 'alta', testo: 'Alta' };
@@ -390,23 +484,30 @@
    * poi lo riadatta a tutta la serie con gli stessi parametri. Il punteggio è il MAE giornaliero più il MAE delle somme
    * di 7 giorni (riportato al giorno): il primo premia chi coglie il ritmo dei giorni, il secondo chi coglie il livello.
    * A parità (entro il 2%) vince il modello più semplice.
-   * opz.modello: forza un modello; opz.criterio 'giornaliero': solo il MAE giornaliero; opz.tolleranza (0.02).
+   * I giorni anomali isolati si contano come la soglia (limitaAnomali) e σ è robusta (sigmaRobusta): un solo giorno
+   * sbagliato non gonfia previsione e scorta di sicurezza. retro.reali resta la serie vera.
+   * opz.modello: forza un modello; opz.criterio 'giornaliero': solo il MAE giornaliero; opz.tolleranza (0.02);
+   * opz.anomali false: nessun limite ai giorni anomali e σ semplice (radice della media dei quadrati dei residui).
    * Restituisce:
    *   { id, nome, breve, parametri, alfa, sigma, mae, wape, errSett, affidabilita, giorni, retro: { giorni, reali },
+   *     anomali: [{ indice, valore, contato }], soglia,
    *     candidati: [{ id, nome, breve, mae, maeSettimane, punteggio, wape, errSett, previsti }], prevedi(h) }
    */
   function stima(valori, opz) {
     opz = opz || {};
-    var y = valori.map(function (x) { return Number(x) || 0; });
-    var n = y.length;
-    var tot = somma(y);
+    var vere = valori.map(function (x) { return Number(x) || 0; });
+    var n = vere.length;
+    var tot = somma(vere);
     if (!n || !(tot > 0)) {
       return {
         id: NESSUNO.id, nome: NESSUNO.nome, breve: NESSUNO.breve, parametri: {}, alfa: 0, sigma: 0, mae: null, wape: null, errSett: null,
         affidabilita: n ? { id: 'nessuna', testo: 'Nessun consumo' } : { id: 'nessuna', testo: 'Nessun dato' }, giorni: n, candidati: [], retro: null,
+        anomali: [], soglia: null,
         prevedi: function (h) { var v = []; for (var i = 0; i < h; i++) v.push(0); return v; }
       };
     }
+    var pulita = opz.anomali === false ? { valori: vere, anomali: [], soglia: null } : limitaAnomali(vere);
+    var y = pulita.valori;
     var H = n >= RETRO + 3 * STAGIONE ? RETRO : (n >= 3 * STAGIONE ? Math.max(STAGIONE, Math.floor(n / 3 / STAGIONE) * STAGIONE) : 0);
     var lista = [];
     var scelto = null;
@@ -439,16 +540,18 @@
     }
     var def = MODELLI[scelto.id];
     var m = def.adatta(y, scelto.parametri);
-    // residui un passo avanti dopo il riscaldo
-    var r = riscaldo(n), sq = 0, k = 0;
-    for (var t = r; t < n; t++) { var e = y[t] - m.adattati[t]; sq += e * e; k++; }
-    var sigma = k >= 3 ? Math.sqrt(sq / k) : deviazione(y);
+    // residui un passo avanti dopo il riscaldo; σ robusta (sigmaRobusta: pochi residui enormi e staccati non la gonfiano)
+    var r = riscaldo(n), residui = [];
+    for (var t = r; t < n; t++) residui.push(y[t] - m.adattati[t]);
+    var sigma = residui.length < 3 ? deviazione(y)
+      : (opz.anomali === false ? Math.sqrt(somma(residui.map(function (e) { return e * e; })) / residui.length) : sigmaRobusta(residui, y));
     var memo = null;
     return {
       id: def.id, nome: def.nome, breve: def.breve, parametri: m.parametri, alfa: m.alfa, sigma: sigma,
       mae: scelto.mae, wape: scelto.wape, errSett: scelto.errSett,
       affidabilita: giudizio(scelto.errSett, n), giorni: n,
-      retro: H ? { giorni: H, reali: y.slice(n - H) } : null,
+      retro: H ? { giorni: H, reali: vere.slice(n - H) } : null,
+      anomali: pulita.anomali, soglia: pulita.soglia,
       candidati: lista,
       prevedi: function (h) {
         if (!memo || memo.length < h) memo = m.prevedi(Math.max(h, memo ? memo.length : 0));
@@ -501,7 +604,10 @@
     var annullati = 0;
     for (var i = 0; i < mov.length; i++) if (mov[i].annullato) annullati++;
     var ddt = lista(stato, 'ddt').map(function (d) { return d.id + d.stato; }).join(',');
-    return 'imp:' + conte + ':' + annullati + ':' + (mov.length ? mov[0].id + ':' + mov[mov.length - 1].id : '') + ':' + ddt;
+    // richieste aperte: stati e quantità approvate (contano nel "già chiesto" dei magazzini periferici)
+    var ric = lista(stato, 'richieste').map(function (r) { return r.id + r.stato; }).join(',');
+    var righe = lista(stato, 'richiesteRighe').reduce(function (s, r) { return s + ':' + r.id + '=' + r.quantita + '/' + r.approvata; }, '');
+    return 'imp:' + conte + ':' + annullati + ':' + (mov.length ? mov[0].id + ':' + mov[mov.length - 1].id : '') + ':' + ddt + '|' + ric + '|' + righe;
   }
 
   function aggiungiA(oggetto, a, b, v) {
@@ -521,15 +627,19 @@
     lista(stato, 'reparti').forEach(function (r) { if (r.tipo === 'transito') transito[r.id] = true; });
     var I = {
       cons: {},       // articolo -> magazzino ('*' = struttura) -> giorno -> consumo + perdita
-      usc: {},        // articolo -> magazzino -> giorno -> trasferimenti in uscita (per la farmacia centrale)
+      usc: {},        // articolo -> magazzino -> giorno -> uscite verso altri magazzini, meno i rientri (per la centrale)
       primo: {},      // articolo -> magazzino ('*') -> primo giorno con un movimento qualsiasi
       primoRep: {},   // magazzino -> primo giorno con un movimento
       giac: {},       // articolo -> magazzino -> giacenza attuale
       fornitore: {},  // articolo -> { chiave, nome } dell'ultimo carico con fornitore
       viaggio: {},    // articolo -> magazzino di arrivo -> merce partita con un DDT e non ancora ricevuta
+      chiesto: {},    // articolo -> [{ rep, fornitore, q }]: richieste aperte, quanto manca da spedire (residuo + in preparazione)
       transito: transito,
       ultimo: null    // ultimo giorno con movimenti
     };
+    // origine dei DDT: dall'elenco dei DDT o dal movimento di partenza (origine -> In transito)
+    var origineDdt = {}, partenza = {}, rientri = [];
+    lista(stato, 'ddt').forEach(function (x) { if (x && x.id) origineDdt[x.id] = x.origineId; });
     var mov = lista(stato, 'movimenti');
     for (var i = 0; i < mov.length; i++) {
       var m = mov[i];
@@ -564,12 +674,30 @@
           aggiungiA(I.giac, a, dest, q);
           primoA(I.primo, a, dest, d);
           if (I.primoRep[dest] === undefined || d < I.primoRep[dest]) I.primoRep[dest] = d;
-          if (!transito[r]) aggiungiA(I.usc[a] || (I.usc[a] = {}), r, d, q);
+          if (!transito[r]) {
+            aggiungiA(I.usc[a] || (I.usc[a] = {}), r, d, q);
+            if (m.ddtId && transito[dest]) {
+              var pk = m.ddtId + '|' + a;
+              if (!partenza[pk] || d < partenza[pk].d) partenza[pk] = { d: d, r: r };
+            }
+          } else if (m.ddtId) rientri.push({ ddtId: m.ddtId, a: a, dest: dest, d: d, q: q });
           break;
         default:
           break;
       }
     }
+    /*
+     * Merce che rientra all'origine di un DDT (annullato in viaggio, differenza "rientra" alla ricezione): non è
+     * uscita davvero. Si toglie dalle uscite dell'origine il giorno della partenza (o quello del rientro se la
+     * partenza non c'è). L'arrivo a destinazione e la perdita in viaggio restano uscite (come Calcoli.registroMensile).
+     */
+    rientri.forEach(function (x) {
+      var p = partenza[x.ddtId + '|' + x.a];
+      var origine = origineDdt[x.ddtId] !== undefined ? origineDdt[x.ddtId] : (p ? p.r : null);
+      if (!origine || x.dest !== origine || transito[origine]) return;
+      aggiungiA(I.usc[x.a] || (I.usc[x.a] = {}), origine, p && p.r === origine ? p.d : x.d, -x.q);
+    });
+    richiesteAperte(stato, I);
     // merce in viaggio: righe dei DDT partiti e non ancora ricevuti (come Calcoli.merceInViaggio)
     var arrivo = {};
     lista(stato, 'ddt').forEach(function (x) { if (x.stato === 'in_transito') arrivo[x.id] = x.destinazioneId; });
@@ -578,6 +706,40 @@
       if (dest) aggiungiA(I.viaggio, x.articoloId, dest, Number(x.quantita) || 0);
     });
     return I;
+  }
+
+  // Calcoli (js/calcoli.js): nel browser è già caricato prima di questo file, in Node si carica qui
+  function calcoli() {
+    if (root && root.Calcoli) return root.Calcoli;
+    if (typeof require === 'function') { try { return require('./calcoli.js'); } catch (e) { /* senza: niente richieste aperte */ } }
+    return null;
+  }
+
+  // stati di una richiesta che non aspetta più niente (come RICHIESTE_CHIUSE in js/pagine-logistica.js)
+  var RICHIESTE_CHIUSE = ['evasa', 'chiusa', 'rifiutata', 'annullata'];
+
+  /*
+   * Richieste aperte (bozza, inviata, in lavorazione): per ogni riga quanto deve ancora arrivare dalla farmacia e non
+   * è già "in viaggio", cioè residuo + in preparazione di Calcoli.avanzamentoRichiesta, gli stessi numeri della
+   * proposta della pagina Richieste (js/pagine-logistica.js, giaChiesto). Si raggruppa per richiesta prima, così il
+   * calcolo resta lineare anche con molte richieste.
+   */
+  function richiesteAperte(stato, I) {
+    var C = calcoli();
+    var aperte = lista(stato, 'richieste').filter(function (r) { return r && r.id && RICHIESTE_CHIUSE.indexOf(r.stato) < 0; });
+    if (!C || typeof C.avanzamentoRichiesta !== 'function' || !aperte.length) return;
+    var per = {};
+    aperte.forEach(function (r) { per[r.id] = { ddt: [], ddtRighe: [], richiesteRighe: [] }; });
+    var ddtRich = {};
+    lista(stato, 'ddt').forEach(function (d) { if (d && per[d.richiestaId]) { per[d.richiestaId].ddt.push(d); ddtRich[d.id] = d.richiestaId; } });
+    lista(stato, 'ddtRighe').forEach(function (x) { var k = x && ddtRich[x.ddtId]; if (k) per[k].ddtRighe.push(x); });
+    lista(stato, 'richiesteRighe').forEach(function (x) { if (x && per[x.richiestaId]) per[x.richiestaId].richiesteRighe.push(x); });
+    aperte.forEach(function (r) {
+      C.avanzamentoRichiesta(per[r.id], r.id).forEach(function (x) {
+        var q = r3((Number(x.residuo) || 0) + (Number(x.inPreparazione) || 0));
+        if (q > 0) (I.chiesto[x.articoloId] || (I.chiesto[x.articoloId] = [])).push({ rep: r.repartoId, fornitore: r.fornitoreId || null, q: q });
+      });
+    });
   }
 
   function indice(stato) {
@@ -711,15 +873,24 @@
 
   /* ======================= indicatori per articolo ======================= */
 
+  /*
+   * Giacenza, merce in viaggio e già chiesta di un articolo in un ambito.
+   * giaChiesto: richieste aperte dei magazzini dell'ambito a un fornitore fuori dall'ambito (per un magazzino
+   * periferico: quello che ha chiesto alla farmacia e che non è ancora partito). Per tutta la struttura è 0: una
+   * richiesta fra magazzini non porta merce nuova.
+   */
   function giacenzaAmbito(I, articoloId, amb) {
-    var g = I.giac[articoloId] || {}, v = I.viaggio[articoloId] || {}, giac = 0, viaggio = 0, k;
+    var g = I.giac[articoloId] || {}, v = I.viaggio[articoloId] || {}, giac = 0, viaggio = 0, chiesto = 0, k;
     if (!amb) {
       for (k in g) if (!I.transito[k]) giac += g[k];
       for (k in v) viaggio += v[k];
     } else {
       amb.forEach(function (r) { giac += g[r] || 0; viaggio += v[r] || 0; });
+      (I.chiesto[articoloId] || []).forEach(function (x) {
+        if (amb.indexOf(x.rep) >= 0 && amb.indexOf(x.fornitore) < 0) chiesto += x.q;
+      });
     }
-    return { giacenza: r3(giac), inViaggio: r3(viaggio) };
+    return { giacenza: r3(giac), inViaggio: r3(viaggio), giaChiesto: r3(chiesto) };
   }
 
   /* Tendenza %: ultime 4 settimane contro le 4 prima (o le due metà della storia se è più corta). */
@@ -770,7 +941,8 @@
     var z = normInv(p.servizio);
     var scorta = st.sigma > 0 ? z * st.sigma * Math.sqrt(Math.max(lt, 1)) : 0;
     var g = giacenzaAmbito(I, a.id, amb);
-    var disponibile = r3(Math.max(0, g.giacenza) + g.inViaggio);
+    // merce che c'è o che arriva: giacenza (mai sotto zero) + in viaggio + già chiesta (richieste aperte)
+    var disponibile = r3(Math.max(0, g.giacenza) + g.inViaggio + g.giaChiesto);
     var puntoRiordino = r3(somma(previsti, 0, lt) + scorta);
     var fabbisogno = r3(somma(previsti, 0, copre) + scorta);
     var pezzi = Number(a.pezziConfezione) > 0 ? Number(a.pezziConfezione) : 1;
@@ -798,6 +970,7 @@
       previstoGiorno: somma(previsti, 0, p.orizzonte) / p.orizzonte,
       giacenza: g.giacenza,
       inViaggio: g.inViaggio,
+      giaChiesto: g.giaChiesto,
       disponibile: disponibile,
       copertura: cop.giorni,
       esaurimento: cop.esaurimento,
@@ -820,6 +993,10 @@
       fornitore: fornitoreDi(I, a),
       settimane: settimaneComplete(v).slice(-12),
       prossime: prossime,
+      // giorni anomali che la previsione conta come la soglia (il grafico mostra il dato vero)
+      anomali: (st.anomali || []).map(function (y) {
+        return { data: aggiungiGiorni(x.serie.inizio, y.indice), valore: y.valore, contato: y.contato };
+      }),
       abc: 'C',
       xyz: null,
       stima: st,
@@ -991,8 +1168,10 @@
 
   /*
    * Uscite medie al giorno degli ultimi "giorni" giorni (oggi compreso) di un articolo in un magazzino: consumi e perdite;
-   * per la farmacia centrale anche quello che dà agli altri magazzini. Con una storia del magazzino più corta si divide
-   * per i giorni che ci sono (almeno 7). La usa "Proponi dai consumi" dell'assortimento (js/pagine-struttura.js).
+   * per la farmacia centrale anche quello che dà agli altri magazzini, contato alla partenza; la merce che rientra
+   * (DDT annullato in viaggio, differenza "rientra" alla ricezione) si toglie dal giorno della sua partenza, quindi un
+   * DDT annullato non conta. Con una storia del magazzino più corta si divide per i giorni che ci sono (almeno 7).
+   * La usa "Proponi dai consumi" dell'assortimento (js/pagine-struttura.js).
    */
   function consumoMedio(stato, articoloId, repartoId, giorni, opz) {
     var I = indice(stato);
@@ -1171,6 +1350,7 @@
     MODELLI: MODELLI,
     candidati: candidati,
     stima: stima,
+    limitaAnomali: limitaAnomali,
     sigmaPeriodo: sigmaPeriodo,
     banda: banda,
     // indicatori e analisi

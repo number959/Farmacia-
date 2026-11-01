@@ -339,13 +339,17 @@ test('ricezione con differenze: quello che arriva entra, la differenza rientra o
   assert.equal(rientro.quantita, 1);
   assert.equal(rientro.causale, 'Differenza alla ricezione DDT ' + DDT1.numero);
   assert.deepEqual(C.merceInViaggio(d), {});
+  // la fiala rientrata torna da spedire (come con l'annullo); quella persa in viaggio resta spedita
+  const avPara = C.avanzamentoRichiesta(d, RIC.id).find((x) => x.articoloId === ART.para.id);
+  assert.deepEqual([avPara.base, avPara.spedita, avPara.residuo], [14, 13, 1]);
+  assert.equal(d.richieste.find((x) => x.id === RIC.id).stato, 'in_lavorazione');
 });
 
 test('annullo di un DDT partito: tutto rientra all\'origine e la richiesta torna in lavorazione', async () => {
   const f = U.farma.client;
-  // le 2 garze che mancavano: un secondo DDT evade la richiesta
+  // la fiala rientrata alla ricezione e le 2 garze che mancavano: un secondo DDT evade la richiesta
   const p = ok200(await f.post('/api/richieste/' + RIC.id + '/ddt', {}));
-  assert.deepEqual(p.righe.map((x) => [x.articoloId, x.quantita]), [[ART.garze.id, 2]]);
+  assert.deepEqual(p.righe.map((x) => [x.articoloId, x.quantita]), [[ART.para.id, 1], [ART.garze.id, 2]]);
   ok200(await f.post('/api/ddt/' + p.ddt.id + '/spedisci', { trasportatoreNome: 'Gino del magazzino', colli: 1 }));
   let d = await dati(f);
   assert.equal(d.richieste.find((x) => x.id === RIC.id).stato, 'evasa', 'tutto l\'approvato è partito');
@@ -426,11 +430,13 @@ test('nota consumi e registro attività coerenti con i DDT', async () => {
   const [anno, mese] = oggi().split('-').map(Number);
   const giorno = Number(oggi().slice(8, 10));
   const reg = (rep, cat) => C.registroMensile(d, { repartoId: rep, anno, mese, categoria: cat }).righe;
-  // farmacia: il paracetamolo partito con il DDT è un'uscita del giorno di partenza, il rientro un carico
+  // farmacia: il paracetamolo partito con i DDT è un'uscita del giorno di partenza; quello che rientra (1 alla
+  // ricezione del primo DDT, 1 con l'annullo del secondo) non è un carico ma toglie l'uscita: 14 + 1 − 1 − 1 = 13
   const farPara = reg('r-farmacia', 'FARMACI').find((x) => x.articoloId === ART.para.id);
-  assert.equal(farPara.consumi[giorno - 1], 14);
-  assert.equal(farPara.carichi, 31);
+  assert.equal(farPara.consumi[giorno - 1], 13);
+  assert.equal(farPara.carichi, 30);
   assert.equal(farPara.residui, 17);
+  assert.equal(farPara.trasferiti[giorno - 1], 13, 'la casella è tutta merce partita con i DDT, niente consumi');
   // degenza: entra solo quello ricevuto
   const degPara = reg('r-degenza', 'FARMACI').find((x) => x.articoloId === ART.para.id);
   assert.equal(degPara.carichi, 12);
@@ -483,6 +489,155 @@ test('notifiche: ogni passaggio avvisa i browser collegati', async () => {
   ctrl.abort();
   await leggi;
   assert.ok((testo.match(/event: rev/g) || []).length > prima, testo);
+});
+
+/* ---------- correzioni dopo la revisione (approvazioni contemporanee, rientri, lotti) ---------- */
+
+function giorno(piu) {
+  const d = new Date();
+  d.setDate(d.getDate() + piu);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+/* Mese di scadenza (AAAA-MM) già passato: due mesi fa. */
+function meseScaduto() {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() - 2);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+async function articoloNuovo(nome) {
+  return ok200(await U.farma.client.post('/api/articoli', { nome, categoria: 'FARMACI', unita: 'pz', prezzo: 1 })).articolo;
+}
+
+test('trasportatori: solo nome e id degli utenti attivi, senza ruoli', async () => {
+  const tr = ok200(await U.farma.client.get('/api/trasportatori'));
+  assert.ok(tr.utenti.length >= 4);
+  assert.ok(tr.utenti.every((u) => JSON.stringify(Object.keys(u).sort()) === '["id","nome"]'), JSON.stringify(tr.utenti[0]));
+});
+
+test('approvazione: chi salva quantità viste prima di un cambiamento riceve 409 e non sovrascrive', async () => {
+  const a = await articoloNuovo('MORFINA 10 mg f');
+  const r = ok200(await U.deg.client.post('/api/richieste', { repartoId: 'r-degenza', invia: true, righe: [{ articoloId: a.id, quantita: 20 }] }));
+  const riga = r.righe[0].id;
+  // la pagina della richiesta inviata mostra "non approvata" (prima: null): salvare così prende in carico
+  ok200(await U.farma.client.post('/api/richieste/' + r.richiesta.id + '/approva', { righe: [{ id: riga, approvata: 4, prima: null }] }));
+  // l'amministratore aveva la pagina aperta da prima (non approvata): 409, l'approvata resta 4
+  const vecchia = await admin.post('/api/richieste/' + r.richiesta.id + '/approva', { righe: [{ id: riga, approvata: 20, prima: null }] });
+  assert.equal(vecchia.stato, 409);
+  assert.match(vecchia.json.errore, /Maria Farmacista ha cambiato la quantità approvata di MORFINA 10 mg f \(ora 4\)/);
+  assert.equal((await righeDi(r.richiesta.id))[0].approvata, 4);
+  // con la pagina ricaricata (prima: 4) si salva
+  const nuova = ok200(await admin.post('/api/richieste/' + r.richiesta.id + '/approva', { righe: [{ id: riga, approvata: 5, prima: 4 }] }));
+  assert.equal(nuova.righe[0].approvata, 5);
+  // e chi aveva visto 4 adesso trova 5
+  assert.equal((await U.farma.client.post('/api/richieste/' + r.richiesta.id + '/approva', { righe: [{ id: riga, approvata: 3, prima: 4 }] })).stato, 409);
+  assert.equal((await righeDi(r.richiesta.id))[0].approvata, 5);
+});
+
+test('ricezione con merce che rientra: la richiesta evasa torna in lavorazione e il residuo si rispedisce', async () => {
+  const f = U.farma.client;
+  const a = await articoloNuovo('RIENTRO 1 g fl');
+  ok200(await f.post('/api/movimenti', { movimenti: [{ tipo: 'carico', data: oggi(), articoloId: a.id, repartoId: 'r-farmacia', quantita: 50, lotto: 'R1', scadenza: '2031-01' }] }));
+  const r = ok200(await U.deg.client.post('/api/richieste', { repartoId: 'r-degenza', invia: true, righe: [{ articoloId: a.id, quantita: 10 }] }));
+  const p = ok200(await f.post('/api/richieste/' + r.richiesta.id + '/ddt', {}));
+  ok200(await f.post('/api/ddt/' + p.ddt.id + '/spedisci', { trasportatoreNome: 'Gino' }));
+  assert.equal((await dati(f)).richieste.find((x) => x.id === r.richiesta.id).stato, 'evasa');
+  ok200(await U.deg.client.post('/api/ddt/' + p.ddt.id + '/ricevi', { righe: [{ id: p.righe[0].id, ricevuta: 6, esito: 'rientro', nota: 'scatola sbagliata' }] }));
+  let d = await dati(f);
+  assert.equal(d.richieste.find((x) => x.id === r.richiesta.id).stato, 'in_lavorazione', 'i 4 rientrati sono di nuovo da spedire');
+  const av = C.avanzamentoRichiesta(d, r.richiesta.id)[0];
+  assert.deepEqual([av.spedita, av.residuo], [6, 4]);
+  assert.deepEqual([C.giacenza(d, a.id, 'r-degenza'), C.giacenza(d, a.id, 'r-farmacia')], [6, 44]);
+  const ev = ok200(await admin.get('/api/attivita?azione=ddt.ricevi')).eventi.find((e) => e.dettagli.numero === p.ddt.numero);
+  assert.equal(ev.dettagli.richiesta, 'in_lavorazione');
+  // la farmacia rispedisce i 4
+  const p2 = ok200(await f.post('/api/richieste/' + r.richiesta.id + '/ddt', {}));
+  assert.deepEqual(p2.righe.map((x) => x.quantita), [4]);
+  ok200(await f.post('/api/ddt/' + p2.ddt.id + '/spedisci', { trasportatoreNome: 'Gino' }));
+  // la perdita in viaggio invece resta spedita: la richiesta resta evasa
+  ok200(await U.deg.client.post('/api/ddt/' + p2.ddt.id + '/ricevi', { righe: [{ id: p2.righe[0].id, ricevuta: 3, esito: 'perdita' }] }));
+  d = await dati(f);
+  assert.equal(d.richieste.find((x) => x.id === r.richiesta.id).stato, 'evasa');
+  assert.equal(C.avanzamentoRichiesta(d, r.richiesta.id)[0].residuo, 0);
+});
+
+test('nota consumi dell\'origine: DDT annullato in viaggio e differenze che rientrano non sono consumi né carichi', async () => {
+  const f = U.farma.client;
+  const a = await articoloNuovo('NOTA T5 cpr');
+  ok200(await f.post('/api/movimenti', { movimenti: [{ tipo: 'carico', data: oggi(), articoloId: a.id, repartoId: 'r-farmacia', quantita: 40, lotto: 'E1', scadenza: '2031-05' }] }));
+  const ddt = async (q) => {
+    const x = ok200(await f.post('/api/ddt', { origineId: 'r-farmacia', destinazioneId: 'r-degenza', righe: [{ articoloId: a.id, quantita: q }] }));
+    ok200(await f.post('/api/ddt/' + x.ddt.id + '/spedisci', { trasportatoreNome: 'X' }));
+    return x;
+  };
+  const d1 = await ddt(15);
+  ok200(await U.deg.client.post('/api/ddt/' + d1.ddt.id + '/ricevi', { righe: [{ id: d1.righe[0].id, ricevuta: 12, esito: 'perdita' }] }));
+  const d2 = await ddt(5);
+  ok200(await U.deg.client.post('/api/ddt/' + d2.ddt.id + '/ricevi', { righe: [{ id: d2.righe[0].id, ricevuta: 3, esito: 'rientro' }] }));
+  const d3 = await ddt(4);
+  ok200(await f.post('/api/ddt/' + d3.ddt.id + '/annulla', { motivo: 'sbagliato' }));
+  const d = await dati(admin);
+  const [anno, mese] = oggi().split('-').map(Number);
+  const g = Number(oggi().slice(8, 10));
+  const far = C.registroMensile(d, { repartoId: 'r-farmacia', anno, mese, categoria: 'FARMACI' }).righe.find((x) => x.articoloId === a.id);
+  // uscito davvero: 15 + 5 − 2 rientrati = 18 (di cui 3 persi in viaggio); il DDT annullato non c'è
+  assert.deepEqual([far.carichi, far.consumi[g - 1], far.totaleScarico, far.importoScarico, far.residui], [40, 18, 18, 18, 22]);
+  const deg = C.registroMensile(d, { repartoId: 'r-degenza', anno, mese, categoria: 'FARMACI' }).righe.find((x) => x.articoloId === a.id);
+  assert.deepEqual([deg.carichi, deg.residui], [15, 15]);
+});
+
+test('consumo registrato in ritardo dopo la partenza di un DDT: non prende il lotto già partito', async () => {
+  const f = U.farma.client;
+  const a = await articoloNuovo('RITARDO T11 cpr');
+  ok200(await f.post('/api/movimenti', { movimenti: [
+    { tipo: 'carico', data: giorno(-3), articoloId: a.id, repartoId: 'r-farmacia', quantita: 10, lotto: 'PRIMO', scadenza: '2030-12' },
+    { tipo: 'carico', data: giorno(-3), articoloId: a.id, repartoId: 'r-farmacia', quantita: 10, lotto: 'SECONDO', scadenza: '2031-12' }
+  ] }));
+  const x = ok200(await f.post('/api/ddt', { origineId: 'r-farmacia', destinazioneId: 'r-degenza', righe: [{ articoloId: a.id, quantita: 10 }] }));
+  assert.deepEqual(x.righe.map((r) => [r.lotto, r.quantita]), [['PRIMO', 10]]);
+  ok200(await f.post('/api/ddt/' + x.ddt.id + '/spedisci', { trasportatoreNome: 'X' }));
+  // il consumo di ieri, scritto stamattina: alla data di ieri PRIMO c'era, ma adesso è tutto partito
+  const c = ok200(await f.post('/api/movimenti', { movimenti: [{ tipo: 'consumo', data: giorno(-1), articoloId: a.id, repartoId: 'r-farmacia', quantita: 4 }] }));
+  assert.deepEqual(c.movimenti.map((m) => [m.lotto, m.quantita]), [['SECONDO', 4]]);
+  // scegliere a mano il lotto partito: 409
+  const scelto = await f.post('/api/movimenti', { movimenti: [{ tipo: 'consumo', data: giorno(-1), articoloId: a.id, repartoId: 'r-farmacia', quantita: 1, lotto: 'PRIMO' }] });
+  assert.equal(scelto.stato, 409);
+  ok200(await U.deg.client.post('/api/ddt/' + x.ddt.id + '/ricevi', {}));
+  const d = await dati(f);
+  const tot = (lotto) => ['r-farmacia', 'r-degenza', T].reduce((t, rep) => t + ((C.lotti(d, a.id, rep).find((l) => l.lotto === lotto) || {}).quantita || 0), 0);
+  assert.deepEqual([tot('PRIMO'), tot('SECONDO')], [10, 6]);
+  assert.deepEqual(C.lotti(d, a.id, 'r-farmacia').map((l) => [l.lotto, l.quantita]), [['SECONDO', 6]]);
+});
+
+test('lotti scaduti: DDT e consumi non li prendono da soli (si possono scegliere), la perdita sì', async () => {
+  const f = U.farma.client;
+  const a = await articoloNuovo('SCADUTI cpr');
+  const vecchio = meseScaduto();
+  ok200(await f.post('/api/movimenti', { movimenti: [
+    { tipo: 'carico', data: giorno(-90), articoloId: a.id, repartoId: 'r-farmacia', quantita: 5, lotto: 'VECCHIO', scadenza: vecchio },
+    { tipo: 'carico', data: oggi(), articoloId: a.id, repartoId: 'r-farmacia', quantita: 3, lotto: 'BUONO', scadenza: '2031-01' }
+  ] }));
+  // DDT automatico: solo il lotto buono, anche se il vecchio "scade prima"
+  const x = ok200(await f.post('/api/ddt', { origineId: 'r-farmacia', destinazioneId: 'r-sala', righe: [{ articoloId: a.id, quantita: 3 }] }));
+  assert.deepEqual(x.righe.map((r) => [r.lotto, r.quantita]), [['BUONO', 3]]);
+  const no = await f.post('/api/ddt', { origineId: 'r-farmacia', destinazioneId: 'r-sala', righe: [{ articoloId: a.id, quantita: 2 }] });
+  assert.equal(no.stato, 409);
+  assert.match(no.json.errore, /altri 5 sono in lotti scaduti/);
+  // un reso dello scaduto si fa scegliendo il lotto
+  const reso = ok200(await f.post('/api/ddt', { origineId: 'r-farmacia', destinazioneId: 'r-sala', righe: [{ articoloId: a.id, quantita: 2, lotto: 'VECCHIO' }] }));
+  assert.deepEqual(reso.righe.map((r) => [r.lotto, r.quantita]), [['VECCHIO', 2]]);
+  ok200(await f.post('/api/ddt/' + x.ddt.id + '/annulla', { motivo: 'prova' }));
+  ok200(await f.post('/api/ddt/' + reso.ddt.id + '/annulla', { motivo: 'prova' }));
+  // consumo automatico: il lotto buono
+  const c = ok200(await f.post('/api/movimenti', { movimenti: [{ tipo: 'consumo', data: oggi(), articoloId: a.id, repartoId: 'r-farmacia', quantita: 1 }] }));
+  assert.deepEqual(c.movimenti.map((m) => m.lotto), ['BUONO']);
+  // perdita "Scaduto" senza lotto: prende lo scaduto
+  const p = ok200(await f.post('/api/movimenti', { movimenti: [{ tipo: 'perdita', data: oggi(), articoloId: a.id, repartoId: 'r-farmacia', quantita: 5, causale: 'Scaduto' }] }));
+  assert.deepEqual(p.movimenti.map((m) => [m.lotto, m.quantita]), [['VECCHIO', 5]]);
+  const d = await dati(f);
+  assert.deepEqual(C.lotti(d, a.id, 'r-farmacia').map((l) => [l.lotto, l.quantita]), [['BUONO', 2]]);
 });
 
 /* ---------- numerazione per anno (modulo provato direttamente, con l'ora simulata) ---------- */

@@ -468,12 +468,24 @@ test('nuovi codici di recupero e disattivazione: servono password e codice', asy
   assert.equal((await f.get('/api/dati?da=0')).stato, 401);
 });
 
-test('cambio di telefono: la chiave nuova vale solo dopo la conferma', async () => {
+test('cambio di telefono: serve la password, la chiave nuova vale solo dopo la conferma', async () => {
   const farma = U.farma.client;
-  const ini = ok200(await farma.post('/api/2fa/inizia'));
+  // con la verifica già attiva serve la password (come per disattivarla o creare codici nuovi)
+  const senza = await farma.post('/api/2fa/inizia');
+  assert.equal(senza.stato, 400);
+  assert.equal(senza.json.servePassword, true);
+  assert.equal(senza.json.segretoBase32, undefined, 'nessuna chiave senza password');
+  const sbagliata = await farma.post('/api/2fa/inizia', { password: 'sbagliata' });
+  assert.equal(sbagliata.stato, 400);
+  assert.equal(sbagliata.json.segretoBase32, undefined);
+  const ini = ok200(await farma.post('/api/2fa/inizia', { password: PW }));
   assert.equal(ini.cambio, true);
   // finché non conferma vale ancora il telefono vecchio
   const c = await accedi2fa('farma');
+  // la chiave vale solo per la sessione che ha scritto la password: un'altra sessione dello stesso utente non la conferma
+  const altrove = await c.post('/api/2fa/conferma', { codice: Totp.totp(ini.segretoBase32) });
+  assert.equal(altrove.stato, 409);
+  assert.equal(altrove.json.ricomincia, true);
   const conf = ok200(await farma.post('/api/2fa/conferma', { codice: await codiceNuovo(ini.segretoBase32) }));
   assert.equal(conf.codiciRecupero.length, 10);
   U.farma.segreto = ini.segretoBase32;
@@ -526,6 +538,92 @@ test('pagina Sicurezza: solo l’amministratore; azzeramento della 2FA di un ute
     if (a === 'accesso.2fa.bloccato' && !ipRete()) continue;
     assert.ok(ev.includes(a), 'registro: ' + a);
   }
+});
+
+/*
+ * Revisione di sicurezza, D2: con la 2FA già attiva, «Cambia telefono» salvava un segreto nuovo e 10 codici di recupero
+ * nuovi senza password. Chi rubava il cookie di sessione collegava il suo telefono e chiudeva fuori l'utente vero.
+ */
+test('sessione rubata: senza la password non si collega un altro telefono né si prendono codici di recupero', async () => {
+  const admin = U.admin.client;
+  ok200(await admin.post('/api/utenti', { username: 'vittima', nome: 'Vittima Prova', ruolo: 'farmacista', reparti: [], password: 'Provvisoria1' }));
+  const vittima = new Client(S.base);
+  ok200(await vittima.post('/api/login', { username: 'vittima', password: 'Provvisoria1' }));
+  ok200(await vittima.post('/api/password', { attuale: 'Provvisoria1', nuova: PW }));
+  // prima attivazione dalla propria sessione: la password non serve di nuovo
+  const att = await attiva(vittima);
+  assert.equal(att.ini.cambio, false);
+
+  // il ladro ha solo il cookie della sessione (non la password, non il telefono)
+  const ladro = new Client(S.base);
+  ladro.cookie = JSON.parse(JSON.stringify(vittima.cookie));
+  assert.equal(ok200(await ladro.get('/api/2fa')).attiva, true, 'la sessione rubata vale');
+  const senza = await ladro.post('/api/2fa/inizia');
+  assert.equal(senza.stato, 400);
+  assert.equal(senza.json.servePassword, true);
+  assert.equal(senza.json.segretoBase32, undefined);
+  // niente chiave da confermare: nessun codice di recupero nuovo
+  const conferma = await ladro.post('/api/2fa/conferma', { codice: '123456' });
+  assert.equal(conferma.stato, 409);
+  assert.equal(conferma.json.codiciRecupero, undefined);
+
+  // la vittima intanto cambia telefono con la sua password: con la stessa sessione il ladro non indovina il codice nuovo
+  const ini = ok200(await vittima.post('/api/2fa/inizia', { password: PW }));
+  assert.equal(ini.cambio, true);
+  for (let i = 1; i < 10; i++) assert.equal((await ladro.post('/api/2fa/conferma', { codice: codiceSbagliato(ini.segretoBase32) })).stato, 400, 'codice ' + i);
+  const decimo = await ladro.post('/api/2fa/conferma', { codice: codiceSbagliato(ini.segretoBase32) });
+  assert.equal(decimo.stato, 409);
+  assert.equal(decimo.json.ricomincia, true);
+  // dopo 10 codici sbagliati quella chiave non vale più, nemmeno con il codice giusto
+  assert.equal((await vittima.post('/api/2fa/conferma', { codice: Totp.totp(ini.segretoBase32) })).stato, 409);
+
+  // password tirate a indovinare: alla quinta la sessione rubata si chiude (la password mancante non conta)
+  for (let i = 1; i <= 4; i++) assert.equal((await ladro.post('/api/2fa/inizia', { password: 'sbagliata-' + i })).stato, 400);
+  const quinta = await ladro.post('/api/2fa/inizia', { password: 'sbagliata-5' });
+  assert.equal(quinta.stato, 401);
+  assert.equal((await ladro.get('/api/dati?da=0')).stato, 401);
+
+  // il telefono della vittima vale ancora (il segreto non è cambiato) e i suoi codici di recupero pure
+  const c = new Client(S.base);
+  const l = ok200(await c.post('/api/login', { username: 'vittima', password: PW }));
+  ok200(await c.post('/api/login/2fa', { sfida: l.sfida, codice: await codiceNuovo(att.segreto) }));
+  const c2 = new Client(S.base);
+  const l2 = ok200(await c2.post('/api/login', { username: 'vittima', password: PW }));
+  assert.equal(ok200(await c2.post('/api/login/2fa', { sfida: l2.sfida, codiceRecupero: att.codici[0] })).codiciRimasti, 9);
+  // registro attività: le password sbagliate e la chiave annullata, nessun cambio di telefono
+  const eventi = async (azione) => ok200(await admin.get('/api/attivita?azione=' + azione + '&utente=vittima')).eventi;
+  assert.equal((await eventi('accesso.2fa.cambio-telefono-fallito')).length, 5);
+  assert.equal((await eventi('accesso.2fa.chiave-annullata')).length, 1);
+  assert.equal((await eventi('accesso.2fa.riconfigurata')).length, 0);
+});
+
+/*
+ * Revisione di sicurezza, D1: dal server stesso il secondo passo non si blocca mai (accesso d'emergenza), ma la sfida
+ * restava valida dopo i codici sbagliati e il codice si indovinava in pochi minuti con la sola password.
+ */
+test('dal server stesso: 10 codici sbagliati annullano la sfida, senza blocco', async () => {
+  const c = new Client(S.base); // 127.0.0.1: il server stesso
+  let l = ok200(await c.post('/api/login', { username: 'admin', password: PW }));
+  for (let i = 1; i <= 9; i++) {
+    const r = await c.post('/api/login/2fa', { sfida: l.sfida, codice: codiceSbagliato(U.admin.segreto) });
+    assert.equal(r.stato, 400, 'codice sbagliato ' + i);
+    assert.equal(r.json.tentativiRimasti, undefined, 'dal server stesso nessun blocco da contare');
+  }
+  const decimo = await c.post('/api/login/2fa', { sfida: l.sfida, codice: codiceSbagliato(U.admin.segreto) });
+  assert.equal(decimo.stato, 401);
+  assert.equal(decimo.json.sfidaScaduta, true);
+  assert.match(decimo.json.errore, /Troppi codici sbagliati/);
+  // la sfida non vale più nemmeno con il codice giusto: serve di nuovo la password
+  assert.equal((await c.post('/api/login/2fa', { sfida: l.sfida, codice: Totp.totp(U.admin.segreto) })).stato, 401);
+  // nessun blocco: si riscrive la password ed entra (qui con un codice di recupero, per non aspettare un codice nuovo dell'app)
+  l = ok200(await c.post('/api/login', { username: 'admin', password: PW }));
+  assert.equal(l.dueFattori, true);
+  ok200(await c.post('/api/login/2fa', { sfida: l.sfida, codiceRecupero: U.admin.recupero.pop() }));
+  assert.equal(ok200(await U.admin.client.get('/api/sicurezza')).utenti.find((u) => u.username === 'admin').bloccato, false);
+  const ev = ok200(await U.admin.client.get('/api/attivita?azione=accesso.2fa.sfida-annullata')).eventi;
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].dettagli.daServer, true);
+  assert.equal(ev[0].dettagli.codiciSbagliati, 10);
 });
 
 test('orologio simulato: sfida di 5 minuti, blocco di 15, computer di 30 giorni, accesso d’emergenza', () => {
@@ -611,5 +709,171 @@ test('orologio simulato: sfida di 5 minuti, blocco di 15, computer di 30 giorni,
     assert.equal(dopo.utente.cambioPassword, true);
   } finally {
     database.chiudi();
+  }
+});
+
+/* Codice di 6 cifre sicuramente sbagliato per il segreto all'istante "ora" (finestra di ±30 secondi). */
+function sbagliatoAlle(segreto, ora) {
+  const giusti = [-1, 0, 1].map((d) => Totp.totp(segreto, ora + d * 30000));
+  let c = '000000';
+  for (let i = 1; giusti.includes(c); i++) c = String(i * 7).padStart(6, '0');
+  return c;
+}
+
+test('orologio simulato: cambio di telefono solo con la password e dalla stessa sessione (D2)', () => {
+  const { Database } = require('../server/db.js');
+  const { Accessi } = require('../server/accessi.js');
+  const cartella = fs.mkdtempSync(path.join(os.tmpdir(), 'gf-sicurezza-cambio-'));
+  const database = new Database(cartella);
+  try {
+    const acc = new Accessi(database, () => {});
+    let ora = Date.UTC(2026, 10, 2, 9, 0, 0);
+    acc.adesso = () => ora;
+    const ctx = { ip: '10.1.2.3', locale: false };
+    const u = acc.creaUtente(ctx, { username: 'cambio', nome: 'Prova Cambio', ruolo: 'farmacista', password: PW }, database.reparti(), true);
+    const sessA = { ip: '10.1.2.3', utente: u, tokenHash: 'sessione-a' };
+    const sessB = { ip: '10.1.2.4', utente: u, tokenHash: 'sessione-b' };
+    // prima attivazione: niente password; la chiave vale solo per la sessione che l'ha chiesta
+    const k0 = acc.inizia2fa(sessA, 'Prova');
+    assert.equal(k0.cambio, false);
+    assert.throws(() => acc.conferma2fa(sessB, Totp.totp(k0.segretoBase32, ora)), (e) => e.stato === 409 && e.dati.ricomincia);
+    acc.conferma2fa(sessA, Totp.totp(k0.segretoBase32, ora));
+
+    // con la verifica attiva: senza password 400 { servePassword } (non conta), sbagliata 400 (conta), giusta 200
+    assert.throws(() => acc.inizia2fa(sessA, 'Prova'), (e) => e.stato === 400 && e.dati.servePassword);
+    assert.throws(() => acc.inizia2fa(sessA, 'Prova', ''), (e) => e.stato === 400 && e.dati.servePassword);
+    assert.throws(() => acc.inizia2fa(sessA, 'Prova', 'sbagliata'), (e) => e.stato === 400 && !e.dati);
+    const k1 = acc.inizia2fa(sessB, 'Prova', PW);
+    assert.equal(k1.cambio, true);
+    // una password sbagliata non toglie la chiave già chiesta con quella giusta
+    assert.throws(() => acc.inizia2fa(sessB, 'Prova', 'sbagliata'), (e) => e.stato === 400);
+    // un'altra sessione dello stesso utente non conferma la chiave di B, nemmeno col codice giusto
+    assert.throws(() => acc.conferma2fa(sessA, Totp.totp(k1.segretoBase32, ora)), (e) => e.stato === 409 && e.dati.ricomincia);
+    // testi che non possono essere un codice non contano; i codici sbagliati sì: al decimo la chiave non vale più
+    assert.throws(() => acc.conferma2fa(sessB, 'abc'), (e) => e.stato === 400);
+    for (let i = 1; i < 10; i++) {
+      // anche scritto "1-2-3-4-5-6": per il server è un codice come gli altri
+      const c = sbagliatoAlle(k1.segretoBase32, ora);
+      assert.throws(() => acc.conferma2fa(sessB, i % 2 ? c : c.split('').join('-')), (e) => e.stato === 400, 'codice ' + i);
+    }
+    assert.throws(() => acc.conferma2fa(sessB, sbagliatoAlle(k1.segretoBase32, ora)), (e) => e.stato === 409 && e.dati.ricomincia && /Troppi codici/.test(e.message));
+    assert.throws(() => acc.conferma2fa(sessB, Totp.totp(k1.segretoBase32, ora)), (e) => e.stato === 409);
+    // con la password di nuovo: chiave nuova, confermata
+    ora += 30000;
+    const k2 = acc.inizia2fa(sessB, 'Prova', PW);
+    const fatto = acc.conferma2fa(sessB, Totp.totp(k2.segretoBase32, ora));
+    assert.equal(fatto.codiciRecupero.length, 10);
+    // il telefono vecchio non vale più, quello nuovo sì
+    ora += 30000;
+    let l = acc.login(ctx, 'cambio', PW, 'prova', {});
+    assert.throws(() => acc.loginDueFattori(ctx, { sfida: l.sfida, codice: Totp.totp(k0.segretoBase32, ora) }, 'prova'), (e) => e.stato === 400);
+    assert.ok(acc.loginDueFattori(ctx, { sfida: l.sfida, codice: Totp.totp(k2.segretoBase32, ora) }, 'prova').token);
+    // cinque password sbagliate con la stessa sessione la chiudono (come nel cambio password)
+    const sessC = { ip: '10.1.2.6', utente: u, tokenHash: 'sessione-c' };
+    for (let i = 1; i <= 4; i++) assert.throws(() => acc.inizia2fa(sessC, 'Prova', 'sbagliata-' + i), (e) => e.stato === 400);
+    assert.throws(() => acc.inizia2fa(sessC, 'Prova', 'sbagliata-5'), (e) => e.stato === 401);
+
+    // chiave chiesta senza password quando la verifica non era attiva: se intanto si attiva, non vale per cambiare telefono
+    const v = acc.creaUtente(ctx, { username: 'senza2fa', nome: 'Senza 2FA', ruolo: 'farmacista', password: PW }, database.reparti(), true);
+    const sessV = { ip: '10.1.2.5', utente: v, tokenHash: 'sessione-v' };
+    const kv = acc.inizia2fa(sessV, 'Prova');
+    database.accessi.prepare('UPDATE utenti SET totp_attivo = 1 WHERE id = ?').run(v.id);
+    assert.throws(() => acc.conferma2fa(sessV, Totp.totp(kv.segretoBase32, ora)), (e) => e.stato === 409 && e.dati.servePassword && e.dati.ricomincia);
+  } finally {
+    database.chiudi();
+    fs.rmSync(cartella, { recursive: true, force: true });
+  }
+});
+
+test('orologio simulato: dal server stesso la sfida si annulla e le sfide nuove rallentano, mai un blocco (D1)', () => {
+  const { Database } = require('../server/db.js');
+  const { Accessi } = require('../server/accessi.js');
+  const cartella = fs.mkdtempSync(path.join(os.tmpdir(), 'gf-sicurezza-locale-'));
+  const database = new Database(cartella);
+  try {
+    const acc = new Accessi(database, () => {});
+    let ora = Date.UTC(2026, 10, 2, 9, 0, 0);
+    acc.adesso = () => ora;
+    const qui = { ip: '127.0.0.1', locale: true }; // il server stesso
+    const u = acc.creaUtente(qui, { username: 'locale', nome: 'Prova Locale', ruolo: 'amministratore', password: PW }, database.reparti(), true);
+    const sess = { ip: '127.0.0.1', locale: true, utente: u, tokenHash: 'sessione' };
+    const k = acc.inizia2fa(sess, 'Prova');
+    acc.conferma2fa(sess, Totp.totp(k.segretoBase32, ora));
+    const seg = k.segretoBase32;
+    const sbagliato = () => sbagliatoAlle(seg, ora);
+    const sfida = () => acc.login(qui, 'locale', PW, 'prova', {}).sfida;
+    const prova = (s, codice) => acc.loginDueFattori(qui, { sfida: s, codice: codice }, 'prova');
+
+    // al massimo 3 sfide insieme dallo stesso computer: la quarta toglie la più vecchia
+    const s1 = sfida(), s2 = sfida(), s3 = sfida(), s4 = sfida();
+    assert.throws(() => prova(s1, sbagliato()), (e) => e.stato === 401 && e.dati.sfidaScaduta);
+    // 10 codici sbagliati con la stessa sfida: dal server stesso nessun blocco, ma la sfida non vale più
+    for (let i = 1; i <= 9; i++) assert.throws(() => prova(s2, sbagliato()), (e) => e.stato === 400 && !e.dati, 'codice ' + i);
+    assert.throws(() => prova(s2, sbagliato()), (e) => e.stato === 401 && e.dati.sfidaScaduta && /Troppi codici/.test(e.message));
+    assert.throws(() => prova(s2, Totp.totp(seg, ora + 30000)), (e) => e.stato === 401);
+    // altri 10 con un'altra sfida: 20 codici sbagliati in 15 minuti
+    for (let i = 1; i <= 10; i++) assert.throws(() => prova(s3, sbagliato()), (e) => e.stato === (i < 10 ? 400 : 401));
+    // da qui una sfida nuova ogni 30 secondi (un'attesa, non un blocco)
+    assert.throws(() => sfida(), (e) => e.stato === 429 && e.dati.attesaSecondi === 30 && /30 secondi/.test(e.message));
+    ora += 29000;
+    assert.throws(() => sfida(), (e) => e.stato === 429 && e.dati.attesaSecondi === 1 && /1 secondo/.test(e.message));
+    ora += 1000;
+    const s5 = sfida();
+    assert.ok(s5);
+    // anche senza errori nel frattempo, la sfida dopo aspetta altri 30 secondi
+    assert.throws(() => sfida(), (e) => e.stato === 429 && e.dati.attesaSecondi === 30);
+    // le sfide già date valgono ancora: s4 ha i suoi tentativi, e il codice giusto entra subito (mai un blocco)
+    assert.throws(() => prova(s4, sbagliato()), (e) => e.stato === 400);
+    const entrato = prova(s5, Totp.totp(seg, ora));
+    assert.ok(entrato.token);
+    assert.equal(database.accessi.prepare('SELECT bloccato_fino FROM utenti WHERE id = ?').get(u.id).bloccato_fino, 0, 'nessun blocco dal server stesso');
+    // dopo un accesso riuscito gli errori di prima non contano più
+    assert.ok(sfida());
+
+    // gli errori di più di 15 minuti fa non contano
+    for (let n = 0; n < 2; n++) {
+      const s = sfida();
+      for (let i = 1; i <= 10; i++) assert.throws(() => prova(s, sbagliato()), (e) => e.stato === (i < 10 ? 400 : 401));
+    }
+    assert.throws(() => sfida(), (e) => e.stato === 429);
+    ora += 15 * 60000 + 1000;
+    assert.ok(sfida());
+
+    // dalla rete invece valgono come prima i 5 tentativi e il blocco di 15 minuti (prima di arrivare a 10)
+    const rete = { ip: '10.9.8.7', locale: false };
+    const lr = acc.login(rete, 'locale', PW, 'prova', {});
+    for (let i = 1; i <= 4; i++) assert.throws(() => acc.loginDueFattori(rete, { sfida: lr.sfida, codice: sbagliato() }, 'prova'), (e) => e.stato === 400 && e.dati.tentativiRimasti === 5 - i);
+    assert.throws(() => acc.loginDueFattori(rete, { sfida: lr.sfida, codice: sbagliato() }, 'prova'), (e) => e.stato === 429);
+    // ...e dal server stesso si entra anche con l'utente bloccato per la rete (accesso d'emergenza)
+    ora += 30000;
+    assert.ok(prova(sfida(), Totp.totp(seg, ora)).token);
+
+    // accesso d'emergenza da riga di comando (un altro processo: non tocca la memoria del server) dopo 20 codici sbagliati
+    for (let n = 0; n < 2; n++) {
+      const s = sfida();
+      for (let i = 1; i <= 10; i++) assert.throws(() => prova(s, sbagliato()), (e) => e.stato === (i < 10 ? 400 : 401));
+    }
+    assert.throws(() => sfida(), (e) => e.stato === 429);
+    const provvisoria = new Accessi(database, () => {}).passwordEmergenza('locale');
+    // si entra con la password provvisoria, senza codice e senza attese
+    const dopo = acc.login(qui, 'locale', provvisoria, 'prova', {});
+    assert.ok(dopo.token);
+    assert.equal(dopo.utente.dueFattori, false);
+    assert.equal(dopo.utente.cambioPassword, true);
+    // nuova password e verifica di nuovo attiva con un telefono nuovo: la password non si chiede di nuovo e gli errori
+    // della chiave vecchia non fanno più aspettare
+    const sessN = { ip: '127.0.0.1', locale: true, utente: dopo.utente, tokenHash: dopo.tokenHash };
+    acc.cambiaPassword(sessN, provvisoria, 'Nuova-Password-1');
+    const kn = acc.inizia2fa(sessN, 'Prova');
+    assert.equal(kn.cambio, false);
+    acc.conferma2fa(sessN, Totp.totp(kn.segretoBase32, ora));
+    const ln = acc.login(qui, 'locale', 'Nuova-Password-1', 'prova', {});
+    assert.equal(ln.dueFattori, true);
+    assert.throws(() => prova(ln.sfida, Totp.totp(seg, ora + 30000)), (e) => e.stato === 400, 'il telefono vecchio non vale');
+    ora += 30000;
+    assert.ok(prova(ln.sfida, Totp.totp(kn.segretoBase32, ora)).token);
+  } finally {
+    database.chiudi();
+    fs.rmSync(cartella, { recursive: true, force: true });
   }
 });

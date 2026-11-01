@@ -419,6 +419,21 @@ Database.prototype.segnaSessione = function () {
   this.impostaMeta('sessione', this.storia);
 };
 
+/*
+ * Riversa il WAL nel file principale (checkpoint completo, con sync del file): da qui il magazzino non dipende più
+ * dal WAL, che dopo uno spegnimento improvviso può perdersi o rovinarsi. Vero se il checkpoint è riuscito per intero.
+ * Si usa all'avvio, all'arresto ordinato, dopo un ripristino o una linea nuova (server/salute.js, server/backup.js).
+ */
+Database.prototype.fissaSulDisco = function () {
+  try {
+    var r = this.dati.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+    return !!r && r.busy === 0;
+  } catch (e) {
+    if (this.log) this.log('Checkpoint del magazzino non riuscito: ' + e.message);
+    return false;
+  }
+};
+
 Database.prototype.chiudiDati = function () {
   if (this.dati) { this.dati.close(); this.dati = null; }
 };

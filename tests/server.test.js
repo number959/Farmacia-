@@ -177,6 +177,42 @@ test('anagrafica: crea, nome doppio, versione in conflitto', async () => {
   assert.equal(ART.versione, 2);
 });
 
+test('anagrafica: caratteristiche, giorni di consegna e fornitore abituale', async () => {
+  const f = U.farma.client;
+  const r = await f.post('/api/articoli', { nome: 'INSULINA RAPIDA fl', categoria: 'FARMACI', attributi: ['urgenza', 'frigo', 'urgenza'], leadTime: '10', fornitore: '  Grossista Sud  ' });
+  assert.equal(r.stato, 200, JSON.stringify(r.json));
+  let a = r.json.articolo;
+  assert.deepEqual(a.attributi, ['frigo', 'urgenza'], 'senza doppioni, nell\'ordine dell\'elenco');
+  assert.equal(a.leadTime, 10);
+  assert.equal(a.fornitore, 'Grossista Sud');
+  // valori non validi: 400
+  assert.equal((await f.post('/api/articoli', { nome: 'X1', categoria: 'FARMACI', attributi: ['caldo'] })).stato, 400);
+  assert.equal((await f.post('/api/articoli', { nome: 'X2', categoria: 'FARMACI', attributi: 'frigo' })).stato, 400);
+  assert.equal((await f.post('/api/articoli', { nome: 'X3', categoria: 'FARMACI', leadTime: 400 })).stato, 400);
+  assert.equal((await f.post('/api/articoli', { nome: 'X4', categoria: 'FARMACI', leadTime: -1 })).stato, 400);
+  assert.equal((await f.post('/api/articoli', { nome: 'X5', categoria: 'FARMACI', fornitore: 'x'.repeat(201) })).stato, 400);
+  // un client che non manda i campi nuovi (versione precedente, importazioni) non li cancella
+  const m = await f.put('/api/articoli/' + a.id, { versione: a.versione, nome: a.nome, categoria: a.categoria, prezzo: 3 });
+  assert.equal(m.stato, 200, JSON.stringify(m.json));
+  a = m.json.articolo;
+  assert.deepEqual([a.attributi, a.leadTime, a.fornitore, a.prezzo], [['frigo', 'urgenza'], 10, 'Grossista Sud', 3]);
+  // vuoto = l'impostazione generale; caratteristiche tolte
+  const v = await f.put('/api/articoli/' + a.id, Object.assign({}, a, { attributi: [], leadTime: '', fornitore: '' }));
+  assert.equal(v.stato, 200, JSON.stringify(v.json));
+  assert.deepEqual([v.json.articolo.attributi, v.json.articolo.leadTime, v.json.articolo.fornitore], [[], null, '']);
+  const att = (await admin.get('/api/attivita?azione=articoli.modifica')).json.eventi[0];
+  assert.ok(att.dettagli.cambi.leadTime && att.dettagli.cambi.attributi, JSON.stringify(att.dettagli));
+  // tutti gli attributi e l'importazione
+  const tutti = ['frigo', 'stupefacente', 'alto-rischio', 'lasa', 'urgenza'];
+  const t = await f.post('/api/articoli', { nome: 'MORFINA 10 mg f', categoria: 'FARMACI', attributi: tutti.slice().reverse(), leadTime: 0 });
+  assert.deepEqual([t.json.articolo.attributi, t.json.articolo.leadTime], [tutti, 0]);
+  const imp = await f.post('/api/articoli/importa', { articoli: [{ nome: 'IMPORTATO CON FORNITORE', categoria: 'FARMACI', fornitore: 'Ditta X', leadTime: 3, attributi: ['lasa'] }] });
+  assert.equal(imp.stato, 200, JSON.stringify(imp.json));
+  const d = (await f.get('/api/dati?da=0')).json.articoli.find((x) => x.nome === 'IMPORTATO CON FORNITORE');
+  assert.deepEqual([d.fornitore, d.leadTime, d.attributi], ['Ditta X', 3, ['lasa']]);
+  assert.equal((await f.post('/api/articoli/importa', { articoli: [{ nome: 'IMPORTATO MALE', categoria: 'FARMACI', attributi: ['boh'] }] })).stato, 400);
+});
+
 async function giacenza(client, articoloId, repartoId) {
   const C = require('../js/calcoli.js');
   const d = (await client.get('/api/dati?da=0')).json;
@@ -362,6 +398,88 @@ test('impostazioni e reparti solo per l\'amministratore', async () => {
   assert.ok(dh);
   assert.equal((await admin.del('/api/reparti/r-degenza')).stato, 409); // ha movimenti
   assert.equal((await admin.del('/api/reparti/' + dh.id)).stato, 200);
+});
+
+test('eliminare un articolo in assortimento, richieste o DDT: 409 chiaro, non un errore del server', async () => {
+  const f = U.farma.client;
+  const nuovo = async (nome) => (await f.post('/api/articoli', { nome, categoria: 'FARMACI' })).json.articolo;
+  // nell'assortimento di Degenza (attivo): 409 con il nome del magazzino
+  const a = await nuovo('ELIMINA IN ASSORTIMENTO');
+  assert.equal((await admin.put('/api/assortimento', { repartoId: 'r-degenza', righe: [{ articoloId: a.id, scortaMin: 1, puntoRiordino: 2, scortaMax: 5 }] })).stato, 200);
+  const no = await f.del('/api/articoli/' + a.id);
+  assert.equal(no.stato, 409, JSON.stringify(no.json));
+  assert.match(no.json.errore, /assortimento di Degenza/);
+  // tolto dall'assortimento (riga non attiva): si elimina e la riga sparisce anche dai browser
+  assert.equal((await admin.put('/api/assortimento', { repartoId: 'r-degenza', righe: [{ articoloId: a.id, attivo: false }] })).stato, 200);
+  const prima = (await f.get('/api/dati?da=0')).json;
+  const riga = prima.assortimento.find((x) => x.articoloId === a.id);
+  assert.equal(riga.attivo, false);
+  const si = await f.del('/api/articoli/' + a.id);
+  assert.equal(si.stato, 200, JSON.stringify(si.json));
+  const dopo = (await f.get('/api/dati?da=' + prima.rev)).json;
+  assert.ok(dopo.cancellati.some((c) => c.tabella === 'assortimento' && c.id === riga.id), JSON.stringify(dopo.cancellati));
+  assert.ok(dopo.cancellati.some((c) => c.tabella === 'articoli' && c.id === a.id));
+  // in una richiesta (anche in bozza): 409
+  const b = await nuovo('ELIMINA IN RICHIESTA');
+  assert.equal((await U.infdeg.client.post('/api/richieste', { repartoId: 'r-degenza', righe: [{ articoloId: b.id, quantita: 1 }] })).stato, 200);
+  const nob = await f.del('/api/articoli/' + b.id);
+  assert.equal(nob.stato, 409);
+  assert.match(nob.json.errore, /richieste o DDT/);
+  // mai usato: si elimina
+  const c = await nuovo('ELIMINA LIBERO');
+  assert.equal((await f.del('/api/articoli/' + c.id)).stato, 200);
+});
+
+test('PUT e DELETE /api/reparti (interfaccia 2.x): stesse regole dei magazzini della 3.0', async () => {
+  const S2 = await avviaServer();
+  try {
+    const a = new Client(S2.base);
+    await a.post('/api/setup', { username: 'admin', nome: 'Admin', password: PW });
+    const tutti = () => [
+      { id: 'r-farmacia', nome: 'Farmacia', centrale: true, attivo: true },
+      { id: 'r-degenza', nome: 'Degenza', centrale: false, attivo: true },
+      { id: 'r-sala', nome: 'Sala operatoria', centrale: false, attivo: true },
+      { id: 'r-ambulatori', nome: 'Ambulatori', centrale: false, attivo: true }];
+    const centrali = async () => (await a.get('/api/dati?da=0')).json.reparti.filter((r) => r.tipo === 'centrale' || r.centrale).map((r) => r.id);
+    // un DDT in viaggio verso la Sala
+    const art = (await a.post('/api/articoli', { nome: 'X', categoria: 'FARMACI' })).json.articolo;
+    assert.equal((await a.post('/api/movimenti', { movimenti: [{ tipo: 'carico', data: oggi(), articoloId: art.id, repartoId: 'r-farmacia', quantita: 10 }] })).stato, 200);
+    const d = (await a.post('/api/ddt', { origineId: 'r-farmacia', destinazioneId: 'r-sala', righe: [{ articoloId: art.id, quantita: 2 }] })).json;
+    assert.equal((await a.post('/api/ddt/' + d.ddt.id + '/spedisci', { trasportatoreNome: 'X' })).stato, 200);
+    // disattivare la Sala (anche indicando solo lei): 409 come con /api/magazzini
+    const l1 = tutti(); l1[2].attivo = false;
+    const s1 = await a.put('/api/reparti', { reparti: l1 });
+    assert.equal(s1.stato, 409, JSON.stringify(s1.json));
+    assert.match(s1.json.errore, /DDT da spedire o in viaggio/);
+    assert.equal((await a.put('/api/reparti', { reparti: [{ id: 'r-sala', nome: 'Sala operatoria', centrale: false, attivo: false }] })).stato, 409);
+    assert.equal((await a.get('/api/dati?da=0')).json.reparti.find((r) => r.id === 'r-sala').attivo, true);
+    // togliere la farmacia centrale senza indicarne un'altra: 400
+    const l2 = tutti(); l2[0].centrale = false;
+    assert.equal((await a.put('/api/reparti', { reparti: l2 })).stato, 400);
+    // disattivare la farmacia centrale: 400
+    const l3 = tutti(); l3[0].attivo = false;
+    const s3 = await a.put('/api/reparti', { reparti: l3 });
+    assert.equal(s3.stato, 400);
+    assert.match(s3.json.errore, /non si può disattivare/);
+    assert.deepEqual(await centrali(), ['r-farmacia']);
+    // un'altra centrale indicata da sola: quella di prima diventa periferica (mai due centrali)
+    assert.equal((await a.put('/api/reparti', { reparti: [{ id: 'r-degenza', nome: 'Degenza', centrale: true, attivo: true }] })).stato, 200);
+    assert.deepEqual(await centrali(), ['r-degenza']);
+    const farm = (await a.get('/api/dati?da=0')).json.reparti.find((r) => r.id === 'r-farmacia');
+    assert.deepEqual([farm.tipo, farm.centrale, farm.attivo], ['periferico', false, true]);
+    // la centrale non si elimina
+    const nuovo = (await a.put('/api/reparti', { reparti: tutti().concat([{ nome: 'Day hospital', centrale: false, attivo: true }]) })).json;
+    assert.deepEqual(await centrali(), ['r-farmacia']);
+    const el = await a.del('/api/reparti/r-farmacia');
+    assert.equal(el.stato, 400);
+    assert.match(el.json.errore, /non si elimina/);
+    // nome già usato da un magazzino che non è nell'elenco: 400
+    assert.equal((await a.put('/api/reparti', { reparti: [{ id: 'r-sala', nome: 'Degenza', centrale: false, attivo: true }] })).stato, 400);
+    // il resto funziona come prima
+    assert.equal((await a.del('/api/reparti/' + nuovo.reparti.find((r) => r.nome === 'Day hospital').id)).stato, 200);
+  } finally {
+    await S2.ferma();
+  }
 });
 
 function ipRete() {

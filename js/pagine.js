@@ -92,6 +92,26 @@
     return (lista || []).map(function (k) { return root.Barcode ? root.Barcode.descrivi(k) : k; });
   }
 
+  /* Caratteristiche dell'articolo (docs/NOVITA-3.0.md, articoli.attributi): servono a Disposizione automatica degli armadi. */
+  var ATTRIBUTI_ARTICOLO = [
+    { id: 'frigo', testo: 'Da frigorifero 2–8 °C', breve: 'Frigorifero' },
+    { id: 'stupefacente', testo: 'Stupefacente (cassaforte)', breve: 'Stupefacente' },
+    { id: 'alto-rischio', testo: 'Alto rischio', breve: 'Alto rischio' },
+    { id: 'lasa', testo: 'LASA (nome o aspetto simile)', breve: 'LASA' },
+    { id: 'urgenza', testo: 'Urgenze', breve: 'Urgenze' }
+  ];
+  App.ATTRIBUTI_ARTICOLO = ATTRIBUTI_ARTICOLO;
+
+  function descriviAttributi(lista) {
+    return ATTRIBUTI_ARTICOLO.filter(function (x) { return (lista || []).indexOf(x.id) >= 0; }).map(function (x) { return x.breve; });
+  }
+
+  /* Giorni di consegna generali (Configura), usati per gli articoli che non hanno i propri. */
+  function leadTimeGenerale() {
+    var v = App.S.impostazioni ? App.S.impostazioni.leadTimeGiorni : undefined;
+    return v === undefined || v === null || v === '' || !isFinite(Number(v)) ? 7 : Number(v);
+  }
+
   /* Un filtro della pagina (categoria, ricerca) nasconde l'articolo appena letto: lo tolgo. */
   function mostraArticoloNeiFiltri(cont, selCategoria, selCerca, a) {
     var cat = cont.querySelector(selCategoria);
@@ -241,13 +261,17 @@
       a.unita ? 'Unità: <b>' + h(a.unita) + '</b>' : '',
       a.pezziConfezione && a.pezziConfezione !== 1 ? 'Pezzi per confezione: <b>' + App.fmtNum(a.pezziConfezione) + '</b>' : '',
       'Prezzo unitario: <b>' + App.fmtEuro(a.prezzo) + '</b>',
-      a.scortaMinima ? 'Scorta minima (' + h(App.repartoCentrale().nome) + '): <b>' + App.fmtNum(a.scortaMinima) + '</b>' : ''
+      a.scortaMinima ? 'Scorta minima (' + h(App.repartoCentrale().nome) + '): <b>' + App.fmtNum(a.scortaMinima) + '</b>' : '',
+      a.fornitore ? 'Fornitore abituale: <b>' + h(a.fornitore) + '</b>' : '',
+      a.leadTime !== null && a.leadTime !== undefined ? 'Giorni di consegna: <b>' + App.fmtNum(a.leadTime) + '</b>' : ''
     ].filter(Boolean).join(' · ');
+    var attributi = descriviAttributi(a.attributi);
     App.apriModale({
       titolo: a.nome,
       largo: true,
       corpo: '<p>' + etichettaCategoria(a.categoria) + (a.attivo === false ? ' <span class="etichetta">non attivo</span>' : '') +
-        (App.sottoScorta(a) ? ' <span class="etichetta pericolo">sotto scorta</span>' : '') + '</p>' +
+        (App.sottoScorta(a) ? ' <span class="etichetta pericolo">sotto scorta</span>' : '') +
+        attributi.map(function (t) { return ' <span class="etichetta attributo-articolo">' + h(t) + '</span>'; }).join('') + '</p>' +
         '<p class="piccolo">' + info + '</p>' + (a.note ? '<p class="piccolo tenue">' + h(a.note) + '</p>' : '') +
         '<h3>Giacenze e lotti</h3>' +
         (righe ? '<div class="tabella-contenitore"><table class="tabella"><thead><tr><th>Reparto</th><th class="n">Giacenza</th><th>Lotti</th></tr></thead><tbody>' + righe + '</tbody></table></div>'
@@ -310,6 +334,14 @@
         '“Pezzi per confezione”: quante unità ci sono in una confezione; con il lettore su “1 confezione” ogni lettura vale tanto così.</small></div>' +
         '<label class="campo"><span>Prezzo unitario €</span><input id="fa-prezzo" inputmode="decimal" value="' + (a.prezzo ? String(a.prezzo).replace('.', ',') : '') + '"></label>' +
         '<label class="campo"><span>Scorta minima in ' + h(App.repartoCentrale().nome) + '</span><input id="fa-scorta" inputmode="decimal" value="' + (a.scortaMinima || '') + '"></label>' +
+        '<label class="campo"><span>Fornitore abituale</span><input id="fa-fornitore" list="dl-fornitori-articolo" value="' + h(a.fornitore || '') + '" placeholder="Es. il grossista da cui si ordina"></label>' +
+        datalistFornitori().replace('id="dl-fornitori"', 'id="dl-fornitori-articolo"') +
+        '<label class="campo" title="Giorni che il fornitore impiega a consegnare questo articolo: servono alle previsioni e alla proposta d’ordine. Vuoto = i giorni scritti in Configura">' +
+        '<span>Giorni di consegna</span><input id="fa-leadtime" inputmode="numeric" value="' + (a.leadTime !== null && a.leadTime !== undefined ? h(App.fmtCampo(a.leadTime)) : '') + '" placeholder="vuoto = ' + App.fmtNum(leadTimeGenerale()) + ' (generale)"></label>' +
+        '<fieldset class="campo largo attributi-articolo"><legend>Caratteristiche</legend><div class="attributi-scelte">' +
+        ATTRIBUTI_ARTICOLO.map(function (x) {
+          return '<label class="spunta"><input type="checkbox" data-attributo="' + h(x.id) + '"' + ((a.attributi || []).indexOf(x.id) >= 0 ? ' checked' : '') + '> ' + h(x.testo) + '</label>';
+        }).join('') + '</div><small class="tenue">Servono alla disposizione automatica degli armadi (frigorifero, cassaforte) e a riconoscere gli articoli da trattare con attenzione.</small></fieldset>' +
         '<label class="campo largo"><span>Note</span><textarea id="fa-note">' + h(a.note || '') + '</textarea></label>' +
         '<label class="spunta"><input type="checkbox" id="fa-attivo"' + (a.attivo !== false ? ' checked' : '') + '> Articolo attivo (si può caricare e scaricare)</label>' +
         '</div>',
@@ -383,6 +415,11 @@
           var testoPezzi = valore(m, '#fa-pezzi').trim();
           var pezzi = testoPezzi ? App.numero(testoPezzi) : 1;
           if (!(pezzi > 0)) { App.avviso('Pezzi per confezione: scrivi un numero maggiore di zero.', 'errore'); return; }
+          var testoLt = valore(m, '#fa-leadtime').trim();
+          var leadTime = testoLt ? App.numero(testoLt) : null;
+          if (testoLt && !(leadTime >= 0 && leadTime <= 365)) { App.avviso('Giorni di consegna: scrivi un numero da 0 a 365, oppure lascia vuoto per usare quelli generali.', 'errore'); return; }
+          var attributi = Array.prototype.filter.call(m.querySelectorAll('[data-attributo]'), function (c) { return c.checked; })
+            .map(function (c) { return c.getAttribute('data-attributo'); });
           var dati = {
             nome: nome,
             categoria: valore(m, '#fa-cat'),
@@ -395,7 +432,10 @@
             note: valore(m, '#fa-note').trim(),
             attivo: m.querySelector('#fa-attivo').checked,
             barcode: codici.slice(),
-            pezziConfezione: pezzi
+            pezziConfezione: pezzi,
+            attributi: attributi,
+            fornitore: valore(m, '#fa-fornitore').trim(),
+            leadTime: leadTime === null ? null : Math.round(leadTime)
           };
           var bottone = this;
           bottone.disabled = true;
@@ -436,6 +476,18 @@
           var usato = App.S.movimenti.some(function (x) { return x.articoloId === id; });
           if (usato) {
             App.avviso('L’articolo ha dei movimenti: non si può eliminare. Togli la spunta “Articolo attivo” per nasconderlo.', 'errore');
+            return;
+          }
+          var inDocumenti = (App.S.richiesteRighe || []).some(function (x) { return x.articoloId === id; }) ||
+            (App.S.ddtRighe || []).some(function (x) { return x.articoloId === id; });
+          if (inDocumenti) {
+            App.avviso('L’articolo compare in richieste o DDT: non si può eliminare. Togli la spunta “Articolo attivo” per nasconderlo.', 'errore');
+            return;
+          }
+          var scorte = (App.S.assortimento || []).filter(function (x) { return x.articoloId === id && x.attivo !== false; });
+          if (scorte.length) {
+            App.avviso('L’articolo è nell’assortimento di ' + scorte.map(function (x) { return App.nomeReparto(x.repartoId); }).join(', ') +
+              ': toglilo prima da Magazzini e assortimento, oppure togli la spunta “Articolo attivo” per nasconderlo.', 'errore');
             return;
           }
           App.conferma('Elimina articolo', 'Elimino “' + h(a.nome) + '” dall’anagrafica?', 'Elimina', true).then(function (ok) {
@@ -484,8 +536,11 @@
       var rep = cfg.repartoOrigine(cont);
       if (!articoloId || !rep) return '<option value="">automatico</option>';
       var l = C.lotti(App.S, articoloId, rep).filter(function (x) { return x.quantita > 0 && x.lotto; });
+      var oggi = App.oggi();
+      // la scelta automatica di consumi e trasferimenti salta i lotti scaduti (si tolgono con una perdita "Scaduto")
       return '<option value="">automatico (scade prima)</option>' + l.map(function (x) {
-        return '<option value="' + h(x.lotto) + '">' + h(x.lotto) + ' · ' + App.fmtNum(x.quantita) + (x.scadenza ? ' · ' + App.fmtScadenza(x.scadenza) : '') + '</option>';
+        return '<option value="' + h(x.lotto) + '">' + h(x.lotto) + ' · ' + App.fmtNum(x.quantita) + (x.scadenza ? ' · ' + App.fmtScadenza(x.scadenza) : '') +
+          (C.scaduto(x.scadenza, oggi) ? ' · SCADUTO' : '') + '</option>';
       }).join('');
     }
 
@@ -1336,12 +1391,10 @@
       // le caselle dei giorni si correggono solo con il permesso e nei reparti dell'utente
       var modificabile = App.puo('registro') && App.repartoPermesso(o.repartoId);
       registro = C.registroMensile(App.S, o);
+      // parte delle caselle che non è un consumo: trasferimenti e DDT partiti, meno la merce rientrata (Calcoli.registroMensile)
       trasferimentiUscita = {};
-      App.S.movimenti.forEach(function (m) {
-        if (!m.annullato && m.tipo === 'trasferimento' && m.repartoId === o.repartoId && m.data >= registro.inizio && m.data <= registro.fine) {
-          var k = m.articoloId + '|' + Number(m.data.slice(8, 10));
-          trasferimentiUscita[k] = (trasferimentiUscita[k] || 0) + m.quantita;
-        }
+      registro.righe.forEach(function (r) {
+        (r.trasferiti || []).forEach(function (q, i) { if (q) trasferimentiUscita[r.articoloId + '|' + (i + 1)] = q; });
       });
       var nomeMese = root.ExcelFarmacia.MESI[o.mese - 1] + ' ' + o.anno;
       var giorni = [];
@@ -1362,7 +1415,9 @@
           '<td>' + fmt(r.residuiPrec) + '</td><td>' + fmt(r.carichi) + '</td><td class="tot">' + fmt(r.totaleCarico) + '</td>' +
           r.consumi.map(function (q, i) {
             var tr = trasferimentiUscita[r.articoloId + '|' + (i + 1)];
-            return '<td class="g' + (festivo(i + 1) ? ' festivo' : '') + '"' + (tr ? ' title="Comprende ' + App.fmtNum(tr) + ' trasferiti ad altri reparti (anche con i DDT)"' : '') + '>' +
+            var titolo = !tr ? '' : tr > 0 ? 'Comprende ' + App.fmtNum(tr) + ' trasferiti ad altri reparti (anche con i DDT), al netto della merce rientrata'
+              : 'Comprende ' + App.fmtNum(-tr) + ' rientrati da DDT partiti il mese prima (annullati in viaggio o differenze alla ricezione)';
+            return '<td class="g' + (festivo(i + 1) ? ' festivo' : '') + '"' + (titolo ? ' title="' + h(titolo) + '"' : '') + '>' +
               (modificabile ? '<input data-giorno="' + (i + 1) + '" value="' + App.fmtCampo(q) + '" inputmode="decimal" aria-label="Giorno ' + (i + 1) + '">' : '<span class="sola">' + fmt(q) + '</span>') + '</td>';
           }).join('') +
           '<td class="tot">' + fmt(r.totaleConsumo) + '</td><td>' + fmt(r.perdite) + '</td><td class="tot">' + fmt(r.totaleScarico) + '</td>' +
@@ -1422,7 +1477,9 @@
       if (inp.value === inp.defaultValue || nuovo === vecchio) { if (prossimo) spostaFuoco(art, prossimo); return; }
       var trasf = trasferimentiUscita[art + '|' + giorno] || 0;
       if (nuovo < trasf) {
-        App.avviso('In questo giorno ci sono ' + App.fmtNum(trasf) + ' trasferiti ad altri reparti: il valore non può essere più basso. Correggi il trasferimento da Movimenti (o annulla il DDT da DDT e consegne).', 'errore');
+        App.avviso(trasf > 0
+          ? 'In questo giorno ci sono ' + App.fmtNum(trasf) + ' trasferiti ad altri reparti: il valore non può essere più basso. Correggi il trasferimento da Movimenti (o annulla il DDT da DDT e consegne).'
+          : 'In questo giorno sono rientrati ' + App.fmtNum(-trasf) + ' da DDT del mese prima: il valore non può essere più basso di ' + App.fmtNum(trasf) + '.', 'errore');
         inp.value = App.fmtCampo(vecchio);
         inp.removeAttribute('data-gestito');
         return;
@@ -1579,11 +1636,13 @@
       cont.querySelector('#a-importa').addEventListener('click', importaDaExcel);
     }
     cont.querySelector('#a-excel').addEventListener('click', function () {
-      var col = ['Denominazione', 'Categoria', 'Principio attivo', 'Confezione', 'Codice', 'Unità', 'Prezzo', 'Scorta minima', 'Giacenza totale', 'Attivo', 'Note', 'Pezzi per confezione', 'Codici a barre']
-        .map(function (t, i) { return { titolo: t, larghezza: [42, 11, 22, 20, 14, 8, 10, 13, 15, 8, 30, 12, 34][i] }; });
+      var col = ['Denominazione', 'Categoria', 'Principio attivo', 'Confezione', 'Codice', 'Unità', 'Prezzo', 'Scorta minima', 'Giacenza totale', 'Attivo', 'Note', 'Pezzi per confezione', 'Codici a barre',
+        'Fornitore abituale', 'Giorni di consegna', 'Caratteristiche']
+        .map(function (t, i) { return { titolo: t, larghezza: [42, 11, 22, 20, 14, 8, 10, 13, 15, 8, 30, 12, 34, 24, 12, 30][i] }; });
       var righe = App.S.articoli.slice().sort(function (x, y) { return x.nome.localeCompare(y.nome, 'it'); }).map(function (a) {
         return [a.nome, a.categoria, a.principio || '', a.confezione || '', a.codice || '', a.unita || '', a.prezzo || 0, a.scortaMinima || 0, App.giacenzaTotale(a.id), a.attivo === false ? 'No' : 'Sì', a.note || '',
-          a.pezziConfezione || 1, descriviCodici(a.barcode).join(', ')];
+          a.pezziConfezione || 1, descriviCodici(a.barcode).join(', '),
+          a.fornitore || '', a.leadTime !== null && a.leadTime !== undefined ? a.leadTime : '', descriviAttributi(a.attributi).join(', ')];
       });
       root.ExcelFarmacia.esportaElenco('Articoli', col, righe).then(function (b) { App.scarica(b, 'Articoli_' + App.oggi() + '.xlsx'); });
     });

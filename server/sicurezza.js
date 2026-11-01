@@ -8,8 +8,12 @@
  * Il proprio account (ogni utente):
  *   GET    /api/2fa                → { attiva, attivataIl, obbligatoria, daAttivare, criterio, codiciRimasti, dispositivi,
  *                                      giorniDispositivo, oraServer }
- *   POST   /api/2fa/inizia         → { segretoBase32, chiave, uri, emittente, utente, cambio, oraServer }
+ *   POST   /api/2fa/inizia         { password? } → { segretoBase32, chiave, uri, emittente, utente, cambio, oraServer }
+ *                                   con la 2FA già attiva (cambio di telefono) serve la password: senza → 400 { servePassword },
+ *                                   sbagliata → 400 (5 errori chiudono la sessione, 401). Per la prima attivazione non serve.
  *   POST   /api/2fa/conferma       { codice } → { codiciRecupero: [10], utente }
+ *                                   409 { ricomincia } se la chiave è scaduta, chiesta da un'altra sessione, chiesta senza
+ *                                   password e intanto la 2FA è diventata attiva, o dopo 10 codici sbagliati
  *   POST   /api/2fa/disattiva      { password, codice } → { utente }        (409 se il criterio la richiede)
  *   POST   /api/2fa/codici         { password } → { codiciRecupero: [10] }
  *   DELETE /api/2fa/dispositivi    → { ok, tolti }                          (dimentica i computer attendibili)
@@ -59,8 +63,9 @@ module.exports.rotte = function (server) {
     return acc.stato2fa(ctx.utente.id);
   });
 
+  // cambio di telefono: serve la password (come per disattivare o creare codici nuovi); prima attivazione: no
   server.rotta('POST', '/api/2fa/inizia', DA_ATTIVARE, function (ctx) {
-    return acc.inizia2fa(ctx, emittente());
+    return acc.inizia2fa(ctx, emittente(), ctx.corpo.password);
   });
 
   // le altre sessioni dell'utente si chiudono (le loro notifiche se ne accorgono al controllo successivo)

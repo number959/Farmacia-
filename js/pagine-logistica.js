@@ -91,16 +91,23 @@
     return out;
   }
 
-  /* Merce libera di un articolo: giacenza meno quanto è già in DDT in preparazione. */
-  function libera(articoloId, origineId, tranneDdtId) {
-    return r3(App.giacenza(articoloId, origineId) - (impegnati(origineId, tranneDdtId)[articoloId] || 0));
+  /*
+   * Merce libera di un articolo: i lotti liberi non scaduti (giacenza meno quanto è già in DDT in preparazione).
+   * Come nel server, la scelta automatica dei lotti di un DDT non prende i lotti già scaduti.
+   */
+  function libera(articoloId, origineId, tranneDdtId, lottiScelti) {
+    return r3(lottiLiberi(articoloId, origineId, tranneDdtId).reduce(function (t, l) {
+      // un lotto scaduto conta solo se è scelto a mano nella riga (per esempio un reso alla farmacia)
+      return t + (l.scaduto && !(lottiScelti && lottiScelti.indexOf(l.lotto) >= 0) ? 0 : l.quantita);
+    }, 0));
   }
 
-  /* Lotti liberi (FEFO) di un articolo in un magazzino. */
+  /* Lotti liberi (FEFO) di un articolo in un magazzino; scaduto: true se il lotto è già scaduto oggi. */
   function lottiLiberi(articoloId, origineId, tranneDdtId) {
     var imp = impegnati(origineId, tranneDdtId);
+    var oggi = App.oggi();
     return C.lotti(App.S, articoloId, origineId).map(function (l) {
-      return { lotto: l.lotto, scadenza: l.scadenza, quantita: r3(l.quantita - (imp[articoloId + '|' + l.lotto] || 0)) };
+      return { lotto: l.lotto, scadenza: l.scadenza, scaduto: C.scaduto(l.scadenza, oggi), quantita: r3(l.quantita - (imp[articoloId + '|' + l.lotto] || 0)) };
     }).filter(function (l) { return l.quantita > 0; });
   }
 
@@ -277,7 +284,7 @@
       if (scelto && !lotti.some(function (l) { return l.lotto === scelto; })) lotti.unshift({ lotto: scelto, scadenza: '', quantita: 0 });
       return '<option value="">automatico (scade prima)</option>' + lotti.map(function (l) {
         return '<option value="' + h(l.lotto) + '"' + (l.lotto === scelto ? ' selected' : '') + '>' + h(l.lotto) +
-          (l.quantita ? ' · liberi ' + App.fmtNum(l.quantita) : '') + (l.scadenza ? ' · ' + App.fmtScadenza(l.scadenza) : '') + '</option>';
+          (l.quantita ? ' · liberi ' + App.fmtNum(l.quantita) : '') + (l.scadenza ? ' · ' + App.fmtScadenza(l.scadenza) : '') + (l.scaduto ? ' · SCADUTO' : '') + '</option>';
       }).join('');
     }
 
@@ -647,7 +654,7 @@
         (x.nota ? '<div class="piccolo tenue">' + h(x.nota) + '</div>' : '') + '</td>' +
         '<td class="n">' + qta(x.quantita, x.articoloId) + '</td>' +
         '<td class="n">' + (approvabile
-          ? '<input class="q ric-appr" inputmode="decimal" aria-label="Quantità approvata di ' + h(a ? a.nome : '') + '" data-riga="' + h(x.rigaId) + '" data-prima="' + h(App.fmtCampo(x.base)) + '" value="' + h(App.fmtCampo(x.base)) + '">'
+          ? '<input class="q ric-appr" inputmode="decimal" aria-label="Quantità approvata di ' + h(a ? a.nome : '') + '" data-riga="' + h(x.rigaId) + '" data-prima="' + h(App.fmtCampo(x.base)) + '" data-approvata="' + (x.approvata === null ? '' : h(String(x.approvata))) + '" value="' + h(App.fmtCampo(x.base)) + '">'
           : (x.approvata === null ? '<span class="tenue">—</span>' : App.fmtNum(x.approvata))) + '</td>' +
         (evade ? '<td class="n' + (corto ? ' neg' : '') + '" title="Giacenza meno la merce già messa in DDT in preparazione">' + App.fmtNum(lib) + '</td>' : '') +
         '<td class="n">' + (x.inPreparazione ? App.fmtNum(x.inPreparazione) : '<span class="tenue">0</span>') + '</td>' +
@@ -695,8 +702,12 @@
     function approvazioniCambiate() {
       return Array.prototype.filter.call(cont.querySelectorAll('.ric-appr'), function (i) { return App.numero(i.value) !== App.numero(i.getAttribute('data-prima')); });
     }
+    // prima: l'approvata che la pagina mostrava (null se non ancora approvata). Se nel frattempo un altro l'ha cambiata il server risponde 409
     function leggiApprovazioni() {
-      return Array.prototype.map.call(cont.querySelectorAll('.ric-appr'), function (i) { return { id: i.getAttribute('data-riga'), approvata: App.numero(i.value) }; });
+      return Array.prototype.map.call(cont.querySelectorAll('.ric-appr'), function (i) {
+        var vista = i.getAttribute('data-approvata');
+        return { id: i.getAttribute('data-riga'), approvata: App.numero(i.value), prima: vista === '' || vista === null ? null : Number(vista) };
+      });
     }
     var salvaAppr = cont.querySelector('#ric-salva-appr');
     var prepara = cont.querySelector('#ric-prepara');
@@ -765,7 +776,9 @@
         var passo = cambiate ? salvaApprovazioni() : Promise.resolve();
         occupa(bt, passo.then(function () { return scrivi('POST', '/api/richieste/' + encodeURIComponent(r.id) + '/ddt', {}); })).then(function (res) {
           inModifica = false;
-          var mancano = (res.mancanti || []).map(function (m) { return m.articolo + ' (' + App.fmtNum(m.preparata) + ' su ' + App.fmtNum(m.richiesta) + ')'; });
+          var mancano = (res.mancanti || []).map(function (m) {
+            return m.articolo + ' (' + App.fmtNum(m.preparata) + ' su ' + App.fmtNum(m.richiesta) + (m.scaduti ? '; altri ' + App.fmtNum(m.scaduti) + ' in lotti scaduti' : '') + ')';
+          });
           App.avviso('Preparato il DDT ' + res.ddt.numero + (mancano.length ? '. Non bastava la merce per: ' + mancano.join(', ') : ''), mancano.length ? 'errore' : 'ok');
           App.vai('consegne', { id: res.ddt.id });
         }, errore('DDT non preparato: '));
@@ -1225,7 +1238,7 @@
         root.Api.richiesta('GET', '/api/trasportatori').then(function (r) {
           utenti = (r && r.utenti) || [];
           sel.innerHTML = '<option value="">— scegli —</option>' + utenti.map(function (u) {
-            return '<option value="' + h(u.id) + '">' + h(u.nome) + ' · ' + h(App.nomeRuolo(u.ruolo)) + '</option>';
+            return '<option value="' + h(u.id) + '">' + h(u.nome) + '</option>';
           }).join('') + '<option value="altro">Un’altra persona (scrivi il nome)…</option>';
         }, function () {
           sel.innerHTML = '<option value="altro">Un’altra persona (scrivi il nome)…</option>';
@@ -1322,7 +1335,8 @@
       '<span class="nota">Da ' + h(nomeMag(d.origineId)) + ' · partito ' + h(App.fmtDataOra(d.partitoIl)) + ' con ' + h(d.trasportatoreNome) + '</span></div>' +
       '<div class="scheda-corpo">' +
       '<div class="banda info" id="rc-banda"><p>Controlla le confezioni: la quantità ricevuta è già quella partita. Se manca qualcosa correggila e indica se rientra in ' +
-      h(nomeMag(d.origineId)) + ' o se è persa in viaggio. Con il lettore puoi contarle una per una.</p></div>' +
+      h(nomeMag(d.origineId)) + ' o se è persa in viaggio. Con il lettore puoi contarle una per una.' +
+      (d.richiestaId ? ' Quello che rientra torna da spedire nella richiesta: la farmacia può rimandarlo.' : '') + '</p></div>' +
       '<div class="tabella-contenitore"><table class="tabella log-tabella log-tab-ricezione"><thead><tr><th>Articolo</th><th>Lotto</th><th class="n">Partita</th><th class="n">Ricevuta</th><th>Se manca qualcosa</th><th>Nota</th></tr></thead><tbody>' +
       righe.map(function (x) {
         var a = App.articolo(x.articoloId);
@@ -1433,7 +1447,9 @@
         if (!ok) return;
         occupa(bt, scrivi('POST', '/api/ddt/' + encodeURIComponent(d.id) + '/ricevi', corpo)).then(function (res) {
           inModifica = false;
-          App.avviso('Ricezione del DDT ' + d.numero + ' registrata' + (res.ddt.stato === 'ricevuto_con_differenze' ? ' (con differenze)' : ''), 'ok');
+          var rientri = corpo.righe.some(function (x) { return x.esito === 'rientro'; });
+          App.avviso('Ricezione del DDT ' + d.numero + ' registrata' + (res.ddt.stato === 'ricevuto_con_differenze' ? ' (con differenze)' : '') +
+            (rientri && d.richiestaId ? '. Quello che rientra torna da spedire nella richiesta.' : ''), 'ok');
           App.vai('consegne', { id: d.id });
         }, function (e) { App.avviso('Ricezione non registrata: ' + messaggio(e), 'errore'); });
       });
@@ -1580,8 +1596,9 @@
       info: function (a) {
         var g = App.giacenza(a.id, selDa.value);
         var l = libera(a.id, selDa.value);
+        var scad = r3(lottiLiberi(a.id, selDa.value).reduce(function (t, x) { return t + (x.scaduto ? x.quantita : 0); }, 0));
         return (a.categoria === 'PRESIDI' ? 'Presidio' : 'Farmaco') + ' · in ' + h(nomeMag(selDa.value)) + ': <b>' + App.fmtNum(g) + '</b>' + (a.unita ? ' ' + h(a.unita) : '') +
-          (l !== g ? ' · liberi ' + App.fmtNum(l) + ' (il resto è in altri DDT)' : '');
+          (l !== g ? ' · liberi ' + App.fmtNum(l) + (scad ? ' (' + App.fmtNum(scad) + ' in lotti scaduti: si spediscono solo scegliendo il lotto)' : ' (il resto è in altri DDT)') : '');
       }
     });
     if (par.articoloId) ed.nuova({ articoloId: par.articoloId });
@@ -1607,12 +1624,17 @@
       if (selDa.value === selA.value) { App.avviso('Il magazzino di partenza e quello di arrivo sono uguali.', 'errore'); return; }
       // controllo della merce libera prima di chiamare il server (che ricontrolla comunque)
       var somme = {};
-      lette.righe.forEach(function (x) { somme[x.articolo.id] = r3((somme[x.articolo.id] || 0) + x.quantita); });
-      var scoperti = Object.keys(somme).filter(function (k) { return somme[k] > libera(k, selDa.value); });
+      var scelti = {};
+      lette.righe.forEach(function (x) {
+        somme[x.articolo.id] = r3((somme[x.articolo.id] || 0) + x.quantita);
+        if (x.lotto) (scelti[x.articolo.id] = scelti[x.articolo.id] || []).push(x.lotto);
+      });
+      var scoperti = Object.keys(somme).filter(function (k) { return somme[k] > libera(k, selDa.value, null, scelti[k]); });
       if (scoperti.length) {
         App.avviso('In ' + nomeMag(selDa.value) + ' non c’è abbastanza merce libera per: ' + scoperti.map(function (k) {
-          return App.nomeArticolo(k) + ' (liberi ' + App.fmtNum(libera(k, selDa.value)) + ')';
-        }).join(', ') + '.', 'errore');
+          return App.nomeArticolo(k) + ' (liberi ' + App.fmtNum(libera(k, selDa.value, null, scelti[k])) + ')';
+        }).join(', ') + '.' + (scoperti.some(function (k) { return lottiLiberi(k, selDa.value).some(function (l) { return l.scaduto; }); })
+          ? ' I lotti scaduti non si spediscono da soli: per un reso scegli il lotto nella riga.' : ''), 'errore');
         return;
       }
       var corpo = {

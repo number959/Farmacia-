@@ -444,3 +444,244 @@ test('Excel della distribuzione: fogli per magazzino, per mese e articolo × mag
   mesi.eachRow((r) => valori.push(r.values.slice(1)));
   assert.ok(valori.some((v) => v[0] === 'set 2026' && v[1] === 40));
 });
+
+/* ======================= correzioni della revisione dei dati (D7, D8, D13) ======================= */
+
+/*
+ * Scenario del revisore (D8): 2 al giorno per 169 giorni con un solo giorno diverso ("picco" unità "giorniFa" giorni fa),
+ * giacenza finale 44, confezioni da 10, consegna 7 giorni, un ordine ogni 7.
+ */
+function rigaPicco(giorniFa, picco) {
+  P.svuotaMemoria();
+  const consumi = [];
+  for (let k = 169; k >= 1; k--) consumi.push(mov('consumo', P.aggiungiGiorni(OGGI, -k), k === giorniFa ? picco : 2));
+  const caricato = consumi.reduce((t, m) => t + m.quantita, 0) + 44;
+  const s = stato([mov('carico', P.aggiungiGiorni(OGGI, -170), caricato)].concat(consumi));
+  s.articoli[0].pezziConfezione = 10;
+  return { s, r: P.analizza(s, { reparti: 'deg', oggi: OGGI }).righe.find((x) => x.articoloId === 'a1') };
+}
+
+test('D8 un giorno anomalo isolato (picco o errore di battitura) non gonfia previsione, scorta e quantità da ordinare', () => {
+  const base = rigaPicco(-1, 2).r;
+  assert.equal(base.giacenza, 44);
+  assert.equal(base.daOrdinare, 0);
+  assert.ok(base.scortaSicurezza < 1, 'senza picco: scorta ' + base.scortaSicurezza);
+  for (const giorniFa of [1, 3, 20, 40, 100, 160]) {
+    for (const picco of [50, 500]) {
+      const { s, r } = rigaPicco(giorniFa, picco);
+      const caso = picco + ' ' + giorniFa + ' giorni fa';
+      assert.equal(r.giacenza, 44, caso);
+      // prima della correzione: da ordinare fino a 410, scorta 170, 19,8 al giorno
+      assert.equal(r.daOrdinare, 0, caso + ': da ordinare ' + r.daOrdinare);
+      assert.ok(r.scortaSicurezza < 3, caso + ': scorta di sicurezza ' + r.scortaSicurezza);
+      assert.ok(r.sigma < 1, caso + ': sigma ' + r.sigma);
+      assert.ok(r.previstoOrizzonte / 30 < 2.5, caso + ': previsto al giorno ' + r.previstoOrizzonte / 30);
+      assert.ok(r.fabbisogno < 44, caso + ': fabbisogno ' + r.fabbisogno);
+      assert.ok(P.consumoGiornaliero(s, 'a1', 'deg', { oggi: OGGI }) < 2.5, caso + ': consumo giornaliero delle richieste');
+      // il dato vero resta per il grafico, le medie e i totali; il giorno anomalo è segnalato con quanto è contato
+      assert.equal(r.serie.valori[r.serie.valori.length - giorniFa], picco, caso + ': serie vera');
+      assert.equal(r.totaleStorico, 168 * 2 + picco, caso + ': totale vero');
+      assert.equal(r.anomali.length, 1, caso + ': un giorno anomalo');
+      assert.equal(r.anomali[0].data, P.aggiungiGiorni(OGGI, -giorniFa));
+      assert.equal(r.anomali[0].valore, picco);
+      assert.ok(r.anomali[0].contato > 2 && r.anomali[0].contato < 10, caso + ': contato come ' + r.anomali[0].contato);
+    }
+  }
+  // senza il limite (opz.anomali false) il picco peserebbe: è proprio quello che la correzione evita
+  const y = rigaPicco(100, 500).r.serie.valori;
+  assert.ok(P.stima(y, { anomali: false }).sigma > 20);
+  assert.ok(P.stima(y).sigma < 1);
+});
+
+test('D8 non sono anomalie: picchi che si ripetono, aumenti veri di più giorni, articoli con pochi giorni', () => {
+  const rnd = casuale(31);
+  // una scatola grande ogni 10 giorni (o ogni 60): è il modo di consumare, la previsione non si abbassa
+  const ogni10 = Array.from({ length: 180 }, (_, i) => (i % 10 === 3 ? 20 : 1));
+  const st10 = P.stima(ogni10);
+  assert.deepEqual(st10.anomali, []);
+  const vera10 = ogni10.reduce((a, b) => a + b, 0) / 180;
+  vicino(st10.prevedi(30).reduce((a, b) => a + b, 0) / 30, vera10, vera10 * 0.15, 'scatole ogni 10 giorni');
+  assert.ok(st10.sigma > 4, 'la scorta copre le scatole grandi: sigma ' + st10.sigma);
+  assert.deepEqual(P.stima(Array.from({ length: 180 }, (_, i) => (i % 60 === 3 ? 20 : 1))).anomali, []);
+  // consumo che sale davvero: due o più giorni alti di fila non si toccano
+  for (const giorni of [2, 3, 5]) {
+    const y = Array.from({ length: 180 }, (_, i) => (i >= 180 - giorni ? 20 : 2));
+    const st = P.stima(y);
+    assert.deepEqual(st.anomali, [], giorni + ' giorni alti');
+    assert.ok(st.prevedi(1)[0] > 3, giorni + ' giorni alti: la previsione sale (' + st.prevedi(1)[0] + ')');
+  }
+  // consumi normali (Poisson, normali): nessun giorno limitato e la stessa sigma di prima
+  const poisson = Array.from({ length: 180 }, () => { let k = 0, p = rnd(); while (p > Math.exp(-3)) { k++; p *= rnd(); } return k; });
+  assert.deepEqual(P.stima(poisson).anomali, []);
+  vicino(P.stima(poisson).sigma, P.stima(poisson, { anomali: false }).sigma, 1e-9, 'Poisson');
+  // articolo nuovo: con meno di 5 giorni di consumo non si sa cos'è il solito e non si limita niente
+  assert.deepEqual(P.stima([2, 2, 2, 50]).anomali, []);
+  vicino(P.stima([2, 2, 2, 50]).prevedi(1)[0], 14, 1e-9, 'quattro giorni');
+  // con 5 giorni un errore evidente sì
+  const nuovo = P.stima([2, 2, 2, 2, 500]);
+  assert.equal(nuovo.anomali.length, 1);
+  assert.ok(nuovo.prevedi(1)[0] < 5, 'nuovo con errore: ' + nuovo.prevedi(1)[0]);
+});
+
+test('D8 articoli nuovi con pochi giorni: numeri finiti e quantità coerente', () => {
+  P.svuotaMemoria();
+  const s = stato([
+    mov('carico', P.aggiungiGiorni(OGGI, -3), 20, { articoloId: 'a1' }),
+    mov('consumo', P.aggiungiGiorni(OGGI, -2), 4, { articoloId: 'a1' }),
+    mov('consumo', P.aggiungiGiorni(OGGI, -1), 6, { articoloId: 'a1' }),
+    mov('carico', OGGI, 30, { articoloId: 'a2' }) // caricato oggi: ancora nessuna storia
+  ]);
+  s.articoli[0].pezziConfezione = 5;
+  const righe = P.analizza(s, { reparti: 'deg', oggi: OGGI }).righe;
+  const nuovo = righe.find((r) => r.articoloId === 'a1');
+  assert.equal(nuovo.giorniStorico, 3);
+  vicino(nuovo.previstoOrizzonte / 30, 10 / 3, 1e-6, 'media dei 3 giorni');
+  assert.equal(nuovo.giacenza, 10);
+  ['mediaGiorno', 'previstoOrizzonte', 'sigma', 'scortaSicurezza', 'puntoRiordino', 'fabbisogno', 'daOrdinare', 'copertura'].forEach((c) => {
+    assert.ok(Number.isFinite(nuovo[c]) && nuovo[c] >= 0, c + ' = ' + nuovo[c]);
+  });
+  assert.equal(nuovo.confezioni, Math.ceil((nuovo.fabbisogno - nuovo.disponibile) / 5 - 1e-9));
+  assert.equal(nuovo.daOrdinare, nuovo.confezioni * 5);
+  assert.deepEqual(nuovo.anomali, []);
+  const oggi = righe.find((r) => r.articoloId === 'a2');
+  assert.equal(oggi.modello, 'nessuno');
+  assert.equal(oggi.daOrdinare, 0);
+  assert.equal(oggi.copertura, Infinity);
+});
+
+test('D8 consumi intermittenti: un errore isolato non cambia Croston né la scorta, i giorni alterni restano 2 al giorno', () => {
+  const rnd = casuale(77);
+  const y = Array.from({ length: 168 }, () => (rnd() < 1 / 3 ? 3 + Math.floor(rnd() * 7) : 0));
+  const pulita = P.stima(y);
+  assert.deepEqual(pulita.anomali, []);
+  assert.ok(P.candidati(y).indexOf('croston') >= 0);
+  // lo stesso con un "300" in un giorno con consumo (300 invece di 3)
+  const conErrore = y.slice();
+  const k = conErrore.lastIndexOf(conErrore.filter((v) => v > 0).slice(-10)[0]);
+  conErrore[k] = 300;
+  const st = P.stima(conErrore);
+  assert.equal(st.anomali.length, 1);
+  assert.equal(st.anomali[0].indice, k);
+  assert.ok(st.anomali[0].contato < 25, 'contato come ' + st.anomali[0].contato);
+  // il giorno conta come la soglia (circa 21): la media delle ultime 4 settimane sale di (21 − 4) / 28, non di 296 / 28
+  const media28 = (s) => s.prevedi(28).reduce((a, b) => a + b, 0) / 28;
+  assert.ok(media28(st) - media28(pulita) < 1, 'previsione con errore ' + media28(st) + ', senza ' + media28(pulita));
+  const senzaLimite = P.stima(conErrore, { anomali: false });
+  assert.ok(media28(senzaLimite) > media28(pulita) + 5, 'senza limite la previsione esploderebbe: ' + media28(senzaLimite));
+  vicino(st.sigma, pulita.sigma, pulita.sigma * 0.2, 'sigma con e senza errore');
+  assert.ok(senzaLimite.sigma > 2 * pulita.sigma, 'senza limite sigma esploderebbe');
+  // a giorni alterni non c'è niente di anomalo
+  const alterni = Array.from({ length: 120 }, (_, i) => (i % 2 ? 0 : 4));
+  assert.deepEqual(P.stima(alterni).anomali, []);
+  vicino(P.stima(alterni).prevedi(1)[0], 2, 0.15, 'giorni alterni');
+});
+
+/* Movimento di un DDT. */
+function movDdt(giorniFa, quantita, da, a, ddtId) {
+  return mov('trasferimento', P.aggiungiGiorni(OGGI, -giorniFa), quantita, { repartoId: da, repartoDestId: a, ddtId });
+}
+
+test('D7 consumo medio della farmacia centrale: i DDT annullati in viaggio e la merce che rientra non sono uscite', () => {
+  P.svuotaMemoria();
+  const T = 'r-transito';
+  const movimenti = [
+    mov('carico', P.aggiungiGiorni(OGGI, -6), 40, { repartoId: 'far' }),
+    // d1: 15 partiti, 12 arrivati, 3 persi in viaggio (sono usciti dalla farmacia)
+    movDdt(5, 15, 'far', T, 'd1'), movDdt(4, 12, T, 'deg', 'd1'),
+    mov('perdita', P.aggiungiGiorni(OGGI, -4), 3, { repartoId: T, ddtId: 'd1' }),
+    // d2: 5 partiti, 3 arrivati, 2 rientrati in farmacia
+    movDdt(3, 5, 'far', T, 'd2'), movDdt(2, 3, T, 'deg', 'd2'), movDdt(2, 2, T, 'far', 'd2'),
+    // d3: 4 partiti verso Chirurgia e annullati in viaggio: rientrano tutti
+    movDdt(2, 4, 'far', T, 'd3'), movDdt(1, 4, T, 'far', 'd3'),
+    // d4: partito 10 giorni fa (fuori dagli ultimi 7) e annullato 2 giorni fa: il rientro si toglie dal giorno della partenza
+    movDdt(10, 6, 'far', T, 'd4'), movDdt(2, 6, T, 'far', 'd4')
+  ];
+  const ddt = [
+    { id: 'd1', origineId: 'far', destinazioneId: 'deg', stato: 'ricevuto_con_differenze' },
+    { id: 'd2', origineId: 'far', destinazioneId: 'deg', stato: 'ricevuto_con_differenze' },
+    { id: 'd3', origineId: 'far', destinazioneId: 'chi', stato: 'annullato' },
+    { id: 'd4', origineId: 'far', destinazioneId: 'deg', stato: 'annullato' }
+  ];
+  const s = stato(movimenti, { ddt });
+  // uscite vere negli ultimi 7 giorni: 15 + 5 − 2 = 18 (prima della correzione 24: 15 + 5 + 4)
+  vicino(P.consumoMedio(s, 'a1', 'far', 7, { oggi: OGGI }) * 7, 18, 1e-9, 'farmacia, 7 giorni');
+  // ultimi 30 giorni (storia di 11 giorni): il DDT d4 partito e annullato vale zero
+  vicino(P.consumoMedio(s, 'a1', 'far', 30, { oggi: OGGI }) * 11, 18, 1e-9, 'farmacia, 30 giorni');
+  // anche senza l'elenco dei DDT (l'origine si ricava dal movimento di partenza)
+  P.svuotaMemoria();
+  vicino(P.consumoMedio(stato(movimenti), 'a1', 'far', 7, { oggi: OGGI }) * 7, 18, 1e-9, 'senza elenco dei DDT');
+  // per Degenza contano solo consumi e perdite (nessuno qui), la distribuzione resta quella di prima
+  P.svuotaMemoria();
+  assert.equal(P.consumoMedio(s, 'a1', 'deg', 7, { oggi: OGGI }), 0);
+  const d = P.distribuzione(s, { al: OGGI });
+  assert.equal(d.perArticolo.a1.deg.dato, 15);
+  assert.equal((d.perArticolo.a1.chi || {}).dato || 0, 0);
+  assert.equal(d.perArticolo.a1.far.giacenza, 40 - 15 - 5 + 2);
+});
+
+test('D13 magazzino periferico: "da chiedere" toglie le richieste aperte (residuo e in preparazione) come la pagina Richieste', () => {
+  P.svuotaMemoria();
+  const C = require('../js/calcoli.js');
+  const movimenti = [mov('carico', P.aggiungiGiorni(OGGI, -61), 600)].concat(consumiDa(60, () => 10));
+  movimenti.push(mov('carico', P.aggiungiGiorni(OGGI, -61), 5000, { repartoId: 'far' }));
+  movimenti.push(movDdt(1, 50, 'far', 'r-transito', 'd2'));
+  const richiesta = (id, rep, statoR, q, approvata) => ({ id, numero: 'RIC-2026-' + id, repartoId: rep, fornitoreId: 'far', stato: statoR });
+  const riga = (id, richiestaId, q, approvata) => ({ id, richiestaId, articoloId: 'a1', quantita: q, approvata: approvata === undefined ? null : approvata, ordine: 0 });
+  const s = stato(movimenti, {
+    richieste: [
+      richiesta('q1', 'deg', 'in_lavorazione'), richiesta('q2', 'deg', 'bozza'), richiesta('q3', 'deg', 'evasa'),
+      richiesta('q4', 'deg', 'rifiutata'), richiesta('q5', 'chi', 'inviata'), richiesta('q6', 'deg', 'annullata'), richiesta('q7', 'deg', 'chiusa')
+    ],
+    richiesteRighe: [riga('qr1', 'q1', 150, 140), riga('qr2', 'q2', 20), riga('qr3', 'q3', 10, 10), riga('qr4', 'q4', 30, 0),
+      riga('qr5', 'q5', 25), riga('qr6', 'q6', 50), riga('qr7', 'q7', 40, 40)],
+    ddt: [
+      { id: 'd1', richiestaId: 'q1', origineId: 'far', destinazioneId: 'deg', stato: 'in_preparazione' },
+      { id: 'd2', richiestaId: 'q1', origineId: 'far', destinazioneId: 'deg', stato: 'in_transito' }
+    ],
+    ddtRighe: [
+      { id: 'dr1', ddtId: 'd1', articoloId: 'a1', richiestaRigaId: 'qr1', quantita: 60 },
+      { id: 'dr2', ddtId: 'd2', articoloId: 'a1', richiestaRigaId: 'qr1', quantita: 50 }
+    ],
+    assortimento: [{ id: 'as1', repartoId: 'chi', articoloId: 'a1', scortaMin: 0, puntoRiordino: 0, scortaMax: 0 }]
+  });
+  s.articoli[0].pezziConfezione = 10;
+  const coerente = (r, testo) => {
+    assert.equal(r.disponibile, Math.round((Math.max(0, r.giacenza) + r.inViaggio + r.giaChiesto) * 1000) / 1000, testo + ': disponibile');
+    assert.equal(r.confezioni, Math.max(0, Math.ceil((r.fabbisogno - r.disponibile) / r.pezziConfezione - 1e-9)), testo + ': confezioni');
+    assert.equal(r.daOrdinare, r.confezioni * r.pezziConfezione, testo + ': da ordinare');
+  };
+  const deg = P.analizza(s, { reparti: 'deg', oggi: OGGI }).righe.find((r) => r.articoloId === 'a1');
+  assert.equal(deg.giacenza, 0);
+  assert.equal(deg.inViaggio, 50);           // d2 partito: in viaggio, non "già chiesto"
+  assert.equal(deg.giaChiesto, 30 + 60 + 20); // q1: residuo 140 − 60 − 50 = 30 e 60 in preparazione; q2 in bozza: 20
+  assert.equal(deg.disponibile, 160);
+  coerente(deg, 'Degenza');
+  // gli stessi numeri della proposta della pagina Richieste (residuo + in preparazione delle richieste aperte)
+  const giaChiesto = s.richieste.filter((r) => r.repartoId === 'deg' && ['evasa', 'chiusa', 'rifiutata', 'annullata'].indexOf(r.stato) < 0)
+    .reduce((t, r) => t + C.avanzamentoRichiesta(s, r.id).reduce((u, x) => u + x.residuo + x.inPreparazione, 0), 0);
+  assert.equal(deg.giaChiesto, giaChiesto);
+  // senza richieste aperte si chiederebbe tutto il fabbisogno (prima della correzione era sempre così)
+  P.svuotaMemoria();
+  const senza = P.analizza(Object.assign({}, s, { richieste: [], richiesteRighe: [], ddt: s.ddt.filter((d) => d.id === 'd2') }), { reparti: 'deg', oggi: OGGI })
+    .righe.find((r) => r.articoloId === 'a1');
+  assert.equal(senza.giaChiesto, 0);
+  assert.ok(senza.daOrdinare >= deg.daOrdinare + 100, 'senza richieste ' + senza.daOrdinare + ', con ' + deg.daOrdinare);
+  coerente(senza, 'Degenza senza richieste');
+  // un'altra richiesta chiusa con gli stessi movimenti: si ricalcola (la memoria guarda anche le richieste)
+  const s2 = Object.assign({}, s, { richieste: s.richieste.map((r) => (r.id === 'q2' ? Object.assign({}, r, { stato: 'annullata' }) : r)) });
+  assert.equal(P.analizza(s2, { reparti: 'deg', oggi: OGGI }).righe.find((r) => r.articoloId === 'a1').giaChiesto, 90);
+  // Chirurgia vede solo la sua richiesta; per tutta la struttura e per farmacia + Degenza le richieste sono interne
+  P.svuotaMemoria();
+  assert.equal(P.analizza(s, { reparti: 'chi', oggi: OGGI }).righe.find((r) => r.articoloId === 'a1').giaChiesto, 25);
+  const tutta = P.analizza(s, { oggi: OGGI }).righe.find((r) => r.articoloId === 'a1');
+  assert.equal(tutta.giaChiesto, 0);
+  assert.equal(tutta.inViaggio, 50);
+  coerente(tutta, 'struttura');
+  const insieme = P.analizza(s, { reparti: ['far', 'deg'], oggi: OGGI }).righe.find((r) => r.articoloId === 'a1');
+  assert.equal(insieme.giaChiesto, 0);
+  coerente(insieme, 'farmacia + Degenza');
+  // e la proposta d'ordine di tutta la struttura non cambia con le richieste
+  P.svuotaMemoria();
+  const tuttaSenza = P.analizza(Object.assign({}, s, { richieste: [], richiesteRighe: [] }), { oggi: OGGI }).righe.find((r) => r.articoloId === 'a1');
+  assert.equal(tuttaSenza.daOrdinare, tutta.daOrdinare);
+});
