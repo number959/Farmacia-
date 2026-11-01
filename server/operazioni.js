@@ -458,11 +458,32 @@ function validaImpostazioni(dati) {
   };
   if (nuove.giorniAvvisoScadenza > 3650) nuove.giorniAvvisoScadenza = 3650;
   if (dati.logo !== undefined) {
+    // '' = marchio incorporato (brand/), 'nessuno' = nessun logo, altrimenti un'immagine caricata dall'amministratore
     var logo = String(dati.logo || '');
-    if (logo && !/^data:image\/(png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(logo)) throw errore(400, 'Il logo deve essere un’immagine PNG, JPEG, GIF, WebP o SVG.');
+    if (logo && logo !== 'nessuno' && !/^data:image\/(png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(logo)) throw errore(400, 'Il logo deve essere un’immagine PNG, JPEG, GIF, WebP o SVG.');
     if (logo.length > 600000) throw errore(400, 'Il logo è troppo grande: usa un’immagine sotto i 400 KB.');
     nuove.logo = logo;
   }
+  // versione 3.0: si cambiano solo se arrivano (docs/NOVITA-3.0.md, "Impostazioni nuove")
+  if (dati.nomeProdotto !== undefined) nuove.nomeProdotto = testo(dati.nomeProdotto, 60, 'nome del prodotto') || 'NefroCenter Pharmacy';
+  if (dati.sigla !== undefined) nuove.sigla = testo(dati.sigla, 20, 'sigla');
+  if (dati.coloreAccento !== undefined) {
+    var col = String(dati.coloreAccento || '').trim();
+    if (col && !/^#[0-9a-fA-F]{6}$/.test(col)) throw errore(400, 'Il colore deve essere nella forma #RRGGBB.');
+    nuove.coloreAccento = col;
+  }
+  if (dati.tema !== undefined) {
+    if (['automatico', 'chiaro', 'scuro'].indexOf(dati.tema) < 0) throw errore(400, 'Tema non valido.');
+    nuove.tema = dati.tema;
+  }
+  if (dati.leadTimeGiorni !== undefined) nuove.leadTimeGiorni = Math.min(365, Math.max(0, numero(dati.leadTimeGiorni, 'giorni di consegna', { min: 0 })));
+  if (dati.periodoRevisioneGiorni !== undefined) nuove.periodoRevisioneGiorni = Math.min(365, Math.max(1, numero(dati.periodoRevisioneGiorni, 'periodo di revisione', { min: 1 })));
+  if (dati.livelloServizio !== undefined) {
+    var ls = numero(dati.livelloServizio, 'livello di servizio', { min: 0.5 });
+    if (ls >= 1) throw errore(400, 'Il livello di servizio va da 0,50 a 0,999.');
+    nuove.livelloServizio = ls;
+  }
+  if (dati.storicoGiorni !== undefined) nuove.storicoGiorni = Math.round(Math.min(1095, Math.max(28, numero(dati.storicoGiorni, 'giorni di storico', { min: 28 }))));
   return nuove;
 }
 
