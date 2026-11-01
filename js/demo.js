@@ -2,9 +2,9 @@
  * Dati di prova, inventati, per imparare a usare il programma (POST /api/demo del server e anteprima).
  * Funzioni pure, senza interfaccia, sempre gli stessi dati per lo stesso giorno (generatore con seme fisso).
  *
- *   DemoFarmacia.crea(C, opz) → { articoli, movimenti }
+ *   DemoFarmacia.crea(C, opz) → { articoli, movimenti }   (articoli anche con confezione, pezziConfezione, attributi, leadTime, fornitore)
  *     opz: { centrale: id della farmacia centrale, reparti: [id dei magazzini periferici], oggi: Date,
- *            giorni: quanti giorni di storia (predefinito 150), conOggi: anche qualche consumo di stamattina }
+ *            giorni: quanti giorni di storia (predefinito 150, allungati fino al lunedì prima), conOggi: anche qualche consumo di stamattina }
  *     Circa cinque mesi di carichi dai fornitori, rifornimenti settimanali ai magazzini, consumi giornalieri con il ritmo
  *     della settimana (la sala operatoria e gli ambulatori si fermano nel fine settimana) e qualche tendenza (articoli che
  *     si usano sempre di più o sempre di meno), lotti con scadenze diverse (qualcuno già scaduto o in scadenza),
@@ -100,6 +100,10 @@
     }
   };
 
+  // dotazione fissa dei farmaci delle urgenze (attributo 'urgenza') in ogni magazzino di reparto
+  var URGENZA = { minima: 5, riordino: 6, massima: 10 };
+  function urgenza(a) { return !!a && (a.attributi || []).indexOf('urgenza') >= 0; }
+
   // articoli il cui ultimo ordine al fornitore è in ritardo: in farmacia centrale restano sotto scorta
   var IN_RITARDO = ['demo-f3', 'demo-f17', 'demo-p6'];
   // primo lotto con una scadenza vicina (mesi da oggi; negativo = già scaduto): restano nella pagina Scadenze
@@ -167,6 +171,8 @@
     var adesso = oggi.getTime();
     var oggiInizio = new Date(oggi.getFullYear(), oggi.getMonth(), oggi.getDate());
     var giorni = Math.max(30, Math.min(400, Math.floor(opz.giorni || 150)));
+    // la storia comincia di lunedì: la prima settimana è intera (grafici e previsioni per settimana)
+    giorni += (new Date(oggiInizio.getFullYear(), oggiInizio.getMonth(), oggiInizio.getDate() - giorni).getDay() + 6) % 7;
     var inizio = new Date(oggiInizio.getFullYear(), oggiInizio.getMonth(), oggiInizio.getDate() - giorni);
     var far = opz.centrale;
     var periferici = opz.reparti.slice();
@@ -210,6 +216,8 @@
     articoli.forEach(function (a) {
       totale[a.id] = periferici.reduce(function (s, rep) { var d = domanda[rep + '|' + a.id]; return s + (d ? d.media * (1 + d.tendenza) / 2 : 0); }, 0);
       a.scortaMinima = totale[a.id] > 0 ? arrotonda(totale[a.id] * 7, totale[a.id] * 7 > 50 ? 10 : 5) : 5;
+      // farmaci delle urgenze: la farmacia ne tiene sempre una scorta per rifare i carrelli dei reparti
+      if (urgenza(a)) a.scortaMinima = Math.max(a.scortaMinima, 20);
     });
 
     /* ---------- lotti e movimenti ---------- */
@@ -418,6 +426,8 @@
         var media = mediaDel(rep, art, giornoIdx);
         var massima = Math.max(2, Math.ceil(media * 10));
         var riordino = Math.max(1, Math.ceil(media * 6));
+        // carrello delle urgenze: dotazione fissa, qualunque sia il consumo
+        if (urgenza(a)) { massima = Math.max(massima, URGENZA.massima); riordino = Math.max(riordino, URGENZA.riordino); }
         var g = giac(rep, art);
         if (g > riordino) return;
         var q = arrotonda(massima - g, a.pezziConfezione >= 10 && media * 10 > a.pezziConfezione ? a.pezziConfezione : 1);
@@ -510,9 +520,9 @@
           caricaDaFornitore(giorno, idx, a.id, Math.ceil(q * (primo !== undefined ? 0.75 : 0.5)), mese(oggi, 10 + (i % 14)));
         });
       }
-      // offerte del fornitore con scadenza breve (restano nella pagina Scadenze): una scaduta, due in scadenza
+      // offerte del fornitore con scadenza breve (restano nella pagina Scadenze): una scaduta, una in scadenza questo mese, una il mese prossimo
       if (idx === giorni - 45) caricaDaFornitore(giorno, idx, 'demo-f21', 12, mese(oggi, -1));
-      if (idx === giorni - 14) caricaDaFornitore(giorno, idx, 'demo-f8', 160, mese(oggi, 2));
+      if (idx === giorni - 14) caricaDaFornitore(giorno, idx, 'demo-f8', 160, mese(oggi, 0)); // scade a fine mese: «in scadenza entro 30 giorni»
       if (idx === giorni - 9) caricaDaFornitore(giorno, idx, 'demo-p12', 240, mese(oggi, 1));
       ordini = ordini.filter(function (o) {
         if (o.arrivo !== idx) return true;
@@ -533,10 +543,10 @@
         var t = totale[a.id] || 0.2;
         var inArrivo = ordini.filter(function (o) { return o.art === a.id; }).reduce(function (s, o) { return s + o.quantita; }, 0);
         var lt = a.leadTime || 7;
-        if (giac(far, a.id) + inArrivo > t * (lt + 10)) return;
+        if (giac(far, a.id) + inArrivo > Math.max(t * (lt + 10), urgenza(a) ? a.scortaMinima : 0)) return;
         var arrivo = idx + lt;
         if (IN_RITARDO.indexOf(a.id) >= 0 && arrivo >= ritardoDa) arrivo = giorni + 30; // il fornitore è in ritardo
-        ordini.push({ art: a.id, arrivo: arrivo, quantita: Math.ceil(t * 30) + 10, breve: i % 11 === 3, n: i + idx });
+        ordini.push({ art: a.id, arrivo: arrivo, quantita: Math.max(Math.ceil(t * 30) + 10, urgenza(a) ? a.scortaMinima * 2 : 0), breve: i % 11 === 3, n: i + idx });
       });
       // 5. qualche imprevisto
       if (logistica) recenti(giorno, idx);
@@ -642,6 +652,15 @@
     // Degenza 2° piano: una richiesta ancora in bozza (la sta scrivendo il responsabile)
     var bozza = nuovaRichiesta(pr1, righeDi(pr1, 4).map(function (x) { return { art: x.art, q: x.q }; }), istante(oggiG, 7, 55), false, '');
     bozza.note = 'Da completare dopo il giro letto';
+    // Degenza 2° piano: un DDT senza richiesta (reintegro del carrello delle urgenze), partito stamattina e da ricevere
+    var reintegro = [{ art: 'demo-f6', q: 20 }, { art: 'demo-p3', q: 25 }, { art: 'demo-p4', q: 10 }].map(function (x) {
+      return { art: x.art, q: Math.min(x.q, Math.floor(giac(far, x.art))) };
+    }).filter(function (x) { return x.q > 0; });
+    if (reintegro.length) {
+      var carrello = nuovoDdt(far, pr1, reintegro, istante(oggiG, 9, 5), null, 'Reintegro del carrello delle urgenze');
+      carrello.note = 'Dopo l’emergenza di stanotte';
+      spedisci(carrello, istante(oggiG, 9, 25), oggiG);
+    }
     // ultimo DDT della Degenza 2° piano ricevuto con una differenza: due pezzi rientrano in farmacia
     var ultimo2 = out.ddt.filter(function (d) { return d.destinazioneId === pr1 && d.stato === 'ricevuto'; }).slice(-1)[0];
     if (ultimo2 && ultimo2._righe.length) segnaDifferenza(ultimo2);
@@ -690,8 +709,11 @@
   function crea(C, opz) {
     var s = simula(opz || {}, false);
     return {
+      // in più i campi della versione 3.0 (confezione, pezzi per confezione, attributi, giorni di consegna, fornitore
+      // abituale): chi non li conosce (archivio della versione per un solo PC) li ignora
       articoli: s.articoli.map(function (a) {
-        return { id: a.id, nome: a.nome, categoria: a.categoria, unita: a.unita, prezzo: a.prezzo, scortaMinima: a.scortaMinima, principio: a.principio, attivo: true };
+        return { id: a.id, nome: a.nome, categoria: a.categoria, unita: a.unita, prezzo: a.prezzo, scortaMinima: a.scortaMinima, principio: a.principio, attivo: true,
+          confezione: a.confezione, pezziConfezione: a.pezziConfezione, attributi: a.attributi.slice(), leadTime: a.leadTime, fornitore: a.fornitore };
       }),
       movimenti: s.movimenti
     };
@@ -787,6 +809,8 @@
         var min = centrale ? art.scortaMinima : Math.max(1, Math.ceil(giorno * 2));
         var riordino = centrale ? Math.ceil(art.scortaMinima * 1.6) : Math.max(min, Math.ceil(giorno * 5));
         var max = centrale ? Math.ceil(art.scortaMinima * 4.5) : Math.max(riordino + 1, Math.ceil(giorno * 10));
+        // carrello delle urgenze dei reparti: dotazione fissa (come nel rifornimento simulato)
+        if (!centrale && urgenza(art)) { min = Math.max(min, URGENZA.minima); riordino = Math.max(riordino, URGENZA.riordino); max = Math.max(max, URGENZA.massima); }
         // qualche articolo resta da sistemare negli armadi (per provare "Disponi")
         var dove = i % 9 === 7 ? null : scegli(art);
         assortimento.push({

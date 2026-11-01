@@ -36,7 +36,7 @@
     }).join('') + '</ul>' +
     '<p class="anteprima-nota"><b>Verifica in due passaggi:</b> dopo la password il programma chiede il codice di 6 cifre dell’app del telefono, che cambia ogni 30 secondi. Qui il codice compare sotto il campo, con il pulsante «Scrivi il codice». Codice di recupero di prova: <code>' + h(A.RECUPERO) + '</code>.</p>' +
     '<p class="anteprima-mio" hidden></p>' +
-    '<p class="anteprima-nota"><b>Da provare:</b> con <code>farma</code> prendi la richiesta urgente della Degenza 1° piano e prepara il DDT; con <code>reparto</code> ricevi il DDT in viaggio; poi Armadi, Previsioni e, da <code>admin</code>, Struttura, Sistema e Sicurezza.</p>' +
+    '<p class="anteprima-nota"><b>Da provare:</b> con <code>farma</code> prendi la richiesta urgente della Degenza 1° piano e prepara il DDT; con <code>reparto</code> o <code>reparto2</code> ricevi il DDT in viaggio; poi Armadi, Previsioni e, da <code>admin</code>, Struttura, Sistema e Sicurezza.</p>' +
     '<p><button type="button" class="anteprima-collega">👥 Un collega registra un consumo</button></p>' +
     '<p class="anteprima-nota">Guarda come cambiano da soli Oggi, Giacenze e la Nota consumi.</p>' +
     '<details class="anteprima-lettore"><summary>Prova il lettore di codici a barre</summary>' +

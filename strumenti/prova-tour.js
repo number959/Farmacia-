@@ -4,12 +4,20 @@
  *   node strumenti/prova-tour.js [--foto <cartella>] [--solo amministratore,reparto] [--schermi desktop,telefono] [--exe <eseguibile>]
  *
  * Avvia un server di prova (porta libera, dati in una cartella temporanea), crea l'amministratore, carica i dati di prova
- * e crea un utente per ogni ruolo. Per ogni ruolo, a 1440×900 e a 390×800 (telefono):
+ * e crea un utente per ogni ruolo. Poi, con l'API, prepara quello che serve ai giri della 3.0: armadi con le ubicazioni
+ * e assortimenti con le scorte (farmacia e Degenza), richieste in ogni stato (bozza, inviata, in lavorazione con DDT da
+ * spedire, con DDT in viaggio, evasa con un DDT ricevuto con differenze), un DDT di reso da spedire dalla Degenza,
+ * un utente con la verifica in due passaggi attiva e una copia di sicurezza verificata; lo storico dei consumi per le
+ * previsioni è quello dei dati di prova (circa cinque mesi). Per ogni ruolo, a 1440×900 e a 390×800 (telefono):
  * - l'invito al primo accesso (Sì / Non ora / Non chiedere più, ricordato nel browser per utente);
- * - l'elenco dei giri segue i permessi; il pulsante 🧭 Guidami avvia il giro della pagina o apre l'elenco;
+ * - l'elenco dei giri segue i permessi; il pulsante 🧭 Guidami avvia il giro della pagina o apre l'elenco; su ogni
+ *   pagina permessa (computer) Guidami avvia il giro di quella pagina, anche sulle viste (modulo di una richiesta);
  * - percorre TUTTI i giri passo per passo: ogni elemento evidenziato esiste, è visibile e non è coperto
  *   (sul telefono i passi sul menu aprono il menu), il riquadro luminoso è sull'elemento, il fumetto sta nello schermo
- *   e non copre l'elemento; tastiera (frecce, Invio, Esc), pulsanti Indietro / Avanti / Fine;
+ *   e non copre l'elemento; tastiera (frecce, Invio, Esc), pulsanti Indietro / Avanti / Fine; finita il giro, menu
+ *   dell'utente, finestre e modalità Disponi aperti dal giro sono di nuovo chiusi;
+ * - Indietro e Avanti in fretta mentre la pagina scorre ancora (amministratore, computer, con le animazioni): l'elemento
+ *   del passo finisce comunque in vista;
  * - con righe scritte e non registrate un giro che cambia pagina chiede prima; il giro della pagina non le tocca;
  *   una finestra con dati scritti non si chiude (Guidami raggiunto con Tab);
  * - casi limite (amministratore): il fuoco torna su Guidami anche partendo dall'elenco; finestra ristretta durante il
@@ -26,6 +34,8 @@ const os = require('os');
 const path = require('path');
 const net = require('net');
 const { chromium } = require('playwright');
+const Calcoli = require('../js/calcoli.js');
+const Totp = require('../js/totp.js');
 
 const arg = (n) => { const i = process.argv.indexOf(n); return i > 0 ? process.argv[i + 1] : null; };
 const FOTO = arg('--foto');
@@ -87,6 +97,92 @@ function clienteApi(base) {
     if (!r.ok) throw new Error(metodo + ' ' + percorso + ' → ' + r.status + ' ' + (dati && dati.errore || testo));
     return dati;
   };
+}
+
+/*
+ * Dati della 3.0 per i giri (con l'API, come farebbero gli utenti): armadi e ubicazioni, assortimenti con le scorte,
+ * richieste e DDT in ogni stato, un utente con la verifica in due passaggi, una copia verificata.
+ * Restituisce un piccolo riassunto (per il resoconto della prova).
+ */
+async function preparaDati(admin, base) {
+  const FARMACIA = 'r-farmacia', DEGENZA = 'r-degenza';
+  const stato = await admin('GET', '/api/dati?da=0');
+  const giac = Calcoli.tutteLeGiacenze(stato);
+  const g = (art, rep) => giac[art + '|' + rep] || 0;
+  const attivi = stato.articoli.filter((a) => a.attivo !== false);
+  // articoli con abbastanza merce in un magazzino (dal più presente), per richieste e DDT che vanno a buon fine
+  const conMerce = (rep, min) => attivi.filter((a) => g(a.id, rep) >= min).sort((x, y) => g(y.id, rep) - g(x.id, rep));
+
+  /* --- armadi --- */
+  const armadio = async (repartoId, nome, tipo, ripiani, colonne) => (await admin('POST', '/api/armadi', { repartoId, nome, tipo, ripiani, colonne })).armadio;
+  const armF = await armadio(FARMACIA, 'Armadio farmaci', 'armadio', 4, 6);
+  await armadio(FARMACIA, 'Frigorifero', 'frigorifero', 3, 4);
+  await armadio(FARMACIA, 'Cassaforte stupefacenti', 'cassaforte', 2, 3);
+  const armD = await armadio(DEGENZA, 'Armadio di reparto', 'armadio', 4, 5);
+  await armadio(DEGENZA, 'Carrello delle urgenze', 'carrello', 3, 4);
+
+  /* --- assortimento con le scorte: qualcuno sotto scorta, qualcuno da riordinare, gli altri in ordine --- */
+  const assortimento = async (rep, quanti) => {
+    const scelti = attivi.filter((a) => g(a.id, rep) > 0).slice(0, quanti);
+    const righe = scelti.map((a, i) => {
+      const q = Math.max(4, Math.round(g(a.id, rep)));
+      const min = i % 4 === 0 ? q + 5 : Math.max(1, Math.round(q * 0.3));   // uno su quattro sotto scorta
+      const riordino = i % 4 === 1 ? q + 2 : Math.max(min, Math.round(q * 0.6)); // uno su quattro da riordinare
+      return { articoloId: a.id, scortaMin: min, puntoRiordino: Math.max(min, riordino), scortaMax: Math.max(riordino, min, q) * 2 };
+    });
+    await admin('PUT', '/api/assortimento', { repartoId: rep, righe });
+    return scelti;
+  };
+  const assF = await assortimento(FARMACIA, 16);
+  const assD = await assortimento(DEGENZA, 12);
+
+  /* --- ubicazioni: quasi tutti al loro posto, gli ultimi tre ancora da disporre --- */
+  const ubica = async (rep, arm, articoli) => {
+    const righe = articoli.slice(0, Math.max(0, articoli.length - 3)).map((a, i) => ({
+      articoloId: a.id, armadioId: arm.id, ripiano: Math.floor(i / arm.colonne) + 1, posizione: (i % arm.colonne) + 1
+    })).filter((x) => x.ripiano <= arm.ripiani);
+    await admin('PUT', '/api/ubicazioni', { repartoId: rep, righe });
+  };
+  await ubica(FARMACIA, armF, assF);
+  await ubica(DEGENZA, armD, assD);
+
+  /* --- richieste e DDT (dalla Degenza alla farmacia centrale) --- */
+  const merceF = conMerce(FARMACIA, 30);
+  if (merceF.length < 12) throw new Error('dati di prova: poca merce in farmacia per le richieste (' + merceF.length + ' articoli)');
+  const righe = (da, n, q) => merceF.slice(da, da + n).map((a, i) => ({ articoloId: a.id, quantita: q + i }));
+  const richiesta = (corpo) => admin('POST', '/api/richieste', Object.assign({ repartoId: DEGENZA, fornitoreId: FARMACIA }, corpo));
+  await richiesta({ righe: righe(0, 2, 3), note: 'Da completare prima dell’invio', invia: false });                 // bozza
+  await richiesta({ righe: righe(2, 3, 4), urgente: true, note: 'Nuovi ingressi in reparto', invia: true });     // inviata, urgente
+  const daSpedire = await richiesta({ righe: righe(5, 2, 2), invia: true });
+  await admin('POST', '/api/richieste/' + daSpedire.richiesta.id + '/ddt', {});                                     // DDT da spedire
+  const inViaggio = await richiesta({ righe: righe(7, 2, 2), invia: true });
+  const ddtViaggio = await admin('POST', '/api/richieste/' + inViaggio.richiesta.id + '/ddt', {});
+  await admin('POST', '/api/ddt/' + ddtViaggio.ddt.id + '/spedisci', { trasportatoreNome: 'Giuseppe Esposito', colli: 2 }); // in viaggio
+  const evasa = await richiesta({ righe: righe(9, 3, 2), invia: true });
+  const ddtRic = await admin('POST', '/api/richieste/' + evasa.richiesta.id + '/ddt', {});
+  await admin('POST', '/api/ddt/' + ddtRic.ddt.id + '/spedisci', { trasportatoreNome: 'Giuseppe Esposito' });
+  await admin('POST', '/api/ddt/' + ddtRic.ddt.id + '/ricevi', {                                                      // ricevuto con differenze
+    righe: ddtRic.righe.map((r, i) => ({ id: r.id, ricevuta: i === 0 ? Math.max(0, r.quantita - 1) : r.quantita, esito: i === 0 ? 'rientro' : '', nota: i === 0 ? 'Una confezione rotta' : '' })),
+    note: 'Consegnata alle 15:20'
+  });
+  // un reso dalla Degenza alla farmacia, preparato e da spedire (il responsabile di magazzino vede «Da preparare»)
+  const merceD = conMerce(DEGENZA, 4);
+  if (merceD.length) {
+    await admin('POST', '/api/ddt', { origineId: DEGENZA, destinazioneId: FARMACIA, causale: 'Reso alla farmacia', colli: 1,
+      righe: [{ articoloId: merceD[0].id, quantita: 2 }] });
+  }
+
+  /* --- un utente con la verifica in due passaggi attiva (la pagina Sicurezza mostra «Azzera») --- */
+  await admin('POST', '/api/utenti', { username: 'tecnico', nome: 'Paolo Tecnico', ruolo: 'farmacista', reparti: [], password: PROVVISORIA });
+  const t = clienteApi(base);
+  await t('POST', '/api/login', { username: 'tecnico', password: PROVVISORIA });
+  await t('POST', '/api/password', { attuale: PROVVISORIA, nuova: PW });
+  const inizio = await t('POST', '/api/2fa/inizia', {});
+  await t('POST', '/api/2fa/conferma', { codice: Totp.totp(inizio.segretoBase32, Date.now()) });
+
+  /* --- una copia di sicurezza verificata (pagina Sistema) --- */
+  await admin('POST', '/api/sistema/copia', {});
+  return { assF: assF.length, assD: assD.length, articoliConMerce: merceF.length };
 }
 
 /* ---------- controlli dentro la pagina ---------- */
@@ -187,9 +283,11 @@ function leggiPasso() {
       await c('POST', '/api/login', { username: u.username, password: PROVVISORIA });
       await c('POST', '/api/password', { attuale: PROVVISORIA, nuova: PW });
     }
+    const preparati = await preparaDati(admin, base);
     const revDati = async () => (await admin('GET', '/api/dati?da=0')).rev;
     const rev0 = await revDati();
-    ok(true, 'server di prova con dati di prova e un utente per ruolo');
+    ok(true, 'server di prova con dati di prova, un utente per ruolo, armadi, assortimenti (' + preparati.assF + ' + ' + preparati.assD +
+      ' articoli), richieste e DDT in ogni stato, verifica in due passaggi e una copia');
 
     for (const schermo of SCHERMI) {
       for (const u of RUOLI) {
@@ -337,6 +435,40 @@ function leggiPasso() {
         await p.waitForTimeout(250);
         ok(await p.locator('.tour').count() === 0, chi + ': chiuso il giro non resta niente sullo schermo');
 
+        /* --- Guidami su ogni pagina permessa (computer): parte il giro di quella pagina --- */
+        if (schermo.nome === 'desktop') {
+          const conGiro = permessi.perPagina.filter((x) => x[1] && permessi.pagine.includes(x[0]));
+          const sbagliati = [];
+          for (const [pagina] of conGiro) {
+            await p.evaluate((x) => { location.hash = '#' + x; }, pagina);
+            await attendi(async () => (await p.evaluate(() => App.paginaCorrente)) === pagina, 3000);
+            await p.waitForTimeout(150);
+            const atteso = await p.evaluate((x) => Tour.perPagina(x), pagina);
+            await p.click('#guidami');
+            const s = await attendi(async () => { const x = await stato(); return x.attivo ? x : null; }, 3000);
+            if (!s || s.giro !== atteso) sbagliati.push(pagina + ' → ' + (s ? s.giro : 'niente'));
+            await p.keyboard.press('Escape');
+            await attendi(async () => !(await stato()).attivo, 2000);
+          }
+          ok(sbagliati.length === 0, chi + ': Guidami avvia il giro di ogni pagina (' + conGiro.length + ' pagine)' + (sbagliati.length ? ': ' + sbagliati.join(', ') : ''));
+          // Richieste: chi evade vede il giro "Evadere"; sul modulo di una richiesta nuova, "Chiedere merce"
+          if (permessi.pagine.includes('richieste')) {
+            const giroDi = async (parametri) => {
+              await p.evaluate((x) => App.vai('richieste', x), parametri);
+              await p.waitForTimeout(400);
+              await p.click('#guidami');
+              const s = await attendi(async () => { const x = await stato(); return x.attivo && !x.inAttesa ? x : null; }, 5000);
+              await p.keyboard.press('Escape');
+              await attendi(async () => !(await stato()).attivo, 2000);
+              return s ? s.giro : null;
+            };
+            const evade = await p.evaluate(() => App.puo('evadiRichieste'));
+            ok((await giroDi({})) === (evade ? 'richieste-evadi' : 'richieste'), chi + ': Guidami sull’elenco delle richieste: giro "' + (evade ? 'Evadere le richieste' : 'Chiedere merce') + '"');
+            ok((await giroDi({ nuova: true })) === 'richieste', chi + ': Guidami sul modulo di una richiesta nuova: giro "Chiedere merce alla farmacia"');
+            await p.evaluate(() => App.vai('richieste', {}));
+          }
+        }
+
         /* --- tastiera nel fumetto e "Altri giri" sull'ultimo passo --- */
         if (schermo.nome === 'desktop') {
           await p.evaluate(() => { location.hash = '#giacenze'; });
@@ -389,6 +521,19 @@ function leggiPasso() {
           const rimasti = await p.evaluate(() => [document.querySelector('#righe tr:first-child .r-art').value, document.querySelector('#righe tr:first-child .r-q').value]);
           ok(rimasti[0] === 'KETOROLAC 30 mg/ml f' && rimasti[1] === '7', chi + ': dopo il giro del Carico le righe scritte sono ancora lì');
           ok((await p.evaluate(() => document.activeElement && document.activeElement.id)) === 'guidami', chi + ': chiuso il giro il fuoco torna al pulsante Guidami');
+        }
+
+        /* --- la causale proposta dalla pagina Trasferimenti non è "qualcosa di scritto": il giro parte senza domande --- */
+        if (schermo.nome === 'desktop' && permessi.pagine.includes('trasferimenti')) {
+          await p.evaluate(() => { location.hash = '#trasferimenti'; });
+          await p.waitForSelector('#t-causale');
+          await p.waitForTimeout(200);
+          await p.evaluate(() => Tour.avvia('benvenuto'));
+          const s = await attendi(async () => { const x = await stato(); return x.attivo && !x.inAttesa ? x : null; }, 5000);
+          const domanda = await p.evaluate(() => !document.getElementById('modale').hidden);
+          ok(!!s && s.giro === 'benvenuto' && !domanda, chi + ': dalla pagina Trasferimenti appena aperta il giro parte senza chiedere (la causale proposta non è un dato scritto)');
+          await p.keyboard.press('Escape');
+          await attendi(async () => !(await stato()).attivo, 2000);
         }
 
         /* --- casi limite (solo amministratore): fuoco, finestre aperte, ridimensionamento, rotazione, sessione scaduta --- */
@@ -468,6 +613,49 @@ function leggiPasso() {
             await scade();
             ok((await p.locator('.tour-elenco').count()) === 0, chi + ': sessione scaduta: l’elenco dei giri si chiude');
             await rientra();
+
+            // Indietro e Avanti in fretta mentre la pagina scorre ancora (difetto della 3.0, segnalato dalla parte B):
+            // l'ultimo passo di Distribuzione è in alto, il penultimo in fondo alla pagina
+            await p.evaluate(() => { location.hash = '#distribuzione'; });
+            await p.waitForSelector('#ds-periodo');
+            await p.evaluate(() => Tour.avvia('distribuzione'));
+            for (let i = 0; i < 20; i++) {
+              const s = await pronto();
+              if (!s || s.indice === s.totale) break;
+              await p.evaluate(() => document.querySelector('.tour-fumetto [data-tour="avanti"]').click());
+              await attendi(async () => { const x = await stato(); return x.inAttesa || x.indice !== s.indice ? x : null; }, 3000);
+            }
+            await pronto();
+            await p.waitForTimeout(1200);
+            const inVistaOra = () => p.evaluate(() => {
+              const b = Tour.bersagli()[0];
+              if (!b) return false;
+              const r = b.getBoundingClientRect();
+              const testa = document.querySelector('.testa-fissa').getBoundingClientRect().bottom;
+              return r.top >= testa - 1 && r.bottom <= innerHeight + 1;
+            });
+            const ultimoSel = (await stato()).selettore;
+            const altezza = await p.evaluate(() => document.documentElement.scrollHeight - innerHeight);
+            for (const ritardo of [0, 40, 80, 120]) {
+              // ← e, appena il passo di prima è pronto (più un piccolo ritardo), → : dentro la pagina, mentre lo
+              // scorrimento morbido verso il passo di prima è appena cominciato (senza la correzione, a 40 ms il
+              // giro credeva l'elemento già in vista e la pagina finiva in fondo)
+              await p.evaluate((ms) => new Promise((fatto) => {
+                const tasto = (k) => window.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
+                const prima = Tour.stato().indice;
+                tasto('ArrowLeft');
+                (function guarda() {
+                  const s = Tour.stato();
+                  if (s.indice !== prima && !s.inAttesa) { setTimeout(() => { tasto('ArrowRight'); fatto(); }, ms); return; }
+                  requestAnimationFrame(guarda);
+                })();
+              }), ritardo);
+              await attendi(async () => { const x = await stato(); return !x.inAttesa && x.selettore === ultimoSel ? x : null; }, 3000);
+              await p.waitForTimeout(1500);
+              ok(await inVistaOra(), chi + ': Indietro e subito Avanti (' + ritardo + ' ms) mentre la pagina scorre: l’elemento del passo è in vista (' + ultimoSel + ', pagina più alta di ' + altezza + ' px)');
+            }
+            await p.keyboard.press('Escape');
+            await p.waitForTimeout(250);
           } else {
             // telefono ruotato durante un passo in fondo alla pagina: l'elemento torna in vista ed evidenziato
             await p.evaluate(() => { location.hash = '#carico'; });
@@ -524,6 +712,10 @@ function leggiPasso() {
             const dove = chi + ' · ' + g.id + ' · ' + s.indice + '/' + s.totale + ' "' + s.titolo + '"';
             visti.push(s.indice);
             ok(pr.conta === 'Passo ' + s.indice + ' di ' + s.totale, dove + ': "Passo N di M" giusto');
+            if (g.id === 'benvenuto' && s.indice === 1) {
+              const nome = await p.evaluate(() => App.S.impostazioni.nomeProdotto || 'NefroCenter Pharmacy');
+              ok(pr.titolo === 'Benvenuto in ' + nome, dove + ': il benvenuto usa il nome del programma (' + pr.titolo + ')');
+            }
             ok(pr.fuocoNelFumetto, dove + ': il fuoco è nel fumetto (i tasti non finiscono nella pagina)');
             ok(pr.avantiPremibile, dove + ': il pulsante Avanti si può premere');
             if (s.conElemento) {
@@ -585,6 +777,13 @@ function leggiPasso() {
             await p.waitForTimeout(220);
             const pulito = await p.evaluate(() => !document.querySelector('.tour') && !document.getElementById('app').classList.contains('menu-aperto'));
             ok(pulito, chi + ' · ' + g.id + ': dopo la fine niente riquadro né menu aperto');
+            // quello che il giro ha aperto per un passo (menu dell'utente, finestra, modalità Disponi) è di nuovo chiuso
+            const aperto = await p.evaluate(() => [
+              !document.getElementById('utente-tendina').hidden ? 'menu dell’utente' : '',
+              !document.getElementById('modale').hidden ? 'finestra' : '',
+              document.querySelector('#ar-disponi[aria-pressed="true"]') ? 'modalità Disponi' : ''
+            ].filter(Boolean));
+            ok(aperto.length === 0, chi + ' · ' + g.id + ': dopo la fine niente resta aperto' + (aperto.length ? ' (' + aperto.join(', ') + ')' : ''));
           }
         }
         inGiro = false;
@@ -600,8 +799,11 @@ function leggiPasso() {
     ok(false, 'eccezione: ' + (e && e.stack || e));
   } finally {
     await browser.close();
+    // il server, chiudendosi, fa ancora una copia di sicurezza nella cartella dati: la tolgo quando è uscito davvero
+    const uscito = new Promise((fatto) => { if (proc.exitCode !== null) fatto(); else { proc.once('exit', fatto); setTimeout(fatto, 10000); } });
     proc.kill('SIGTERM');
-    try { fs.rmSync(dati, { recursive: true, force: true }); } catch (e) { /* niente */ }
+    await uscito;
+    try { fs.rmSync(dati, { recursive: true, force: true }); } catch (e) { nota('cartella temporanea non tolta: ' + dati); }
   }
   if (pagineLarghe.size) {
     console.log('\nPagine più larghe dello schermo anche senza il giro (da sistemare nella pagina, non nel giro):');

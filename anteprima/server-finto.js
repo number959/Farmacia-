@@ -25,6 +25,7 @@
 
   // revisione di partenza verosimile: cinque mesi di lavoro (le righe dei dati di prova contano come già lette)
   var rev = 4817;
+  var REV_INIZIALE = rev; // per "scritte in questa sessione" (pagina Sistema)
   var revBase = 0;
   var storia = Math.random().toString(16).slice(2);
   var revRiga = {};          // 'tabella|id' -> revisione dell'ultima modifica
@@ -150,13 +151,81 @@
     S.richieste.forEach(function (r) { var k = 'prog_ric_' + r.anno; meta[k] = Math.max(meta[k] || 0, r.progressivo); });
     S.ddt.forEach(function (d) { var k = 'prog_ddt_' + d.anno; meta[k] = Math.max(meta[k] || 0, d.progressivo); });
     S.movimenti.forEach(function (m) { if (m.creato > ultimoCreato) ultimoCreato = m.creato; });
-    // un po' di storia nel registro attività
     var ieri = new Date(Date.now() - 86400000);
-    [['u-farma', 'farma', 'accesso.entrata', {}], ['u-reparto', 'reparto', 'accesso.entrata', {}], ['u-admin', 'admin', 'accesso.entrata', {}]].forEach(function (x, i) {
-      eventi.unshift({ id: ++nEventi, quando: new Date(ieri.getTime() + i * 3600000).toISOString(), username: x[1], azione: x[2], dettagli: x[3], ip: '10.0.0.' + (21 + i) });
-    });
-    UTENTI.forEach(function (u, i) { if (u.username !== 'sicura') u.ultimoAccesso = new Date(ieri.getTime() + i * 1800000).toISOString(); });
+    UTENTI.forEach(function (u, i) { u.ultimoAccesso = new Date(ieri.getTime() + i * 1800000).toISOString(); });
+    registroDiProva(nomi);
   })();
+
+  /*
+   * Registro attività dei dati di prova: gli ultimi 10 giorni di richieste e DDT (stesse azioni e stessi dettagli del
+   * server vero), gli accessi di ogni mattina, i consumi della sera e l'attivazione della verifica in due passaggi.
+   * Solo per le persone che hanno un utente nell'anteprima.
+   */
+  function registroDiProva(nomi) {
+    var dal = new Date(Date.now() - 10 * 86400000).toISOString();
+    var lista = [];
+    var ip = { 'u-admin': '10.0.0.21', 'u-farma': '10.0.0.34', 'u-reparto': '10.0.1.12', 'u-reparto2': '10.0.2.15', 'u-direzione': '10.0.0.8', 'u-sicura': '10.0.0.35' };
+    function chiE(id) { return UTENTI.filter(function (u) { return u.id === id; })[0] || null; }
+    function chiNome(nome) { return UTENTI.filter(function (u) { return u.nome === nome; })[0] || null; }
+    function ev(u, quando, azione, dettagli) {
+      if (!u || !quando || quando < dal) return;
+      lista.push({ quando: quando, username: u.username, azione: azione, dettagli: dettagli, ip: ip[u.id] || '10.0.0.40' });
+    }
+    function nomeArt(id) { var a = articolo(id); return a ? a.nome : id; }
+    S.richieste.forEach(function (r) {
+      var righe = S.richiesteRighe.filter(function (x) { return x.richiestaId === r.id; });
+      var chi = chiE(r.creataDa);
+      ev(chi, r.creataIl, 'richieste.crea', { numero: r.numero, reparto: nomi[r.repartoId], fornitore: nomi[r.fornitoreId], urgente: r.urgente || undefined, inviata: false,
+        righe: righe.map(function (x) { return { articolo: nomeArt(x.articoloId), quantita: x.quantita }; }) });
+      ev(chi, r.inviataIl, 'richieste.invia', { numero: r.numero });
+      if (r.presaIl && r.stato !== 'rifiutata') ev(chiE(r.presaDa), r.presaIl, 'richieste.prendi', { numero: r.numero });
+      if (r.stato === 'rifiutata') ev(chiE(r.chiusaDa), r.chiusaIl, 'richieste.rifiuta', { numero: r.numero, motivo: r.motivo });
+      if (r.stato === 'annullata') ev(chiE(r.chiusaDa), r.chiusaIl, 'richieste.annulla', { numero: r.numero, motivo: r.motivo });
+      if (r.stato === 'chiusa') ev(chiE(r.chiusaDa), r.chiusaIl, 'richieste.chiudi', { numero: r.numero, motivo: r.motivo, righeConResiduo: 1 });
+    });
+    S.ddt.forEach(function (d) {
+      var righe = S.ddtRighe.filter(function (x) { return x.ddtId === d.id; });
+      var ric = d.richiestaId ? richiesta(d.richiestaId) : null;
+      var prep = chiE(d.preparatoDa);
+      if (ric) ev(prep, d.preparatoIl, 'ddt.crea', { numero: d.numero, richiesta: ric.numero, da: nomi[d.origineId], a: nomi[d.destinazioneId] });
+      else ev(prep, d.preparatoIl, 'ddt.crea', { numero: d.numero, da: nomi[d.origineId], a: nomi[d.destinazioneId], causale: d.causale,
+        righe: righe.map(function (x) { return { articolo: nomeArt(x.articoloId), quantita: x.quantita, lotto: x.lotto || undefined }; }) });
+      ev(prep, d.partitoIl, 'ddt.spedisci', { numero: d.numero, trasportatore: d.trasportatoreNome, colli: d.colli, richiesta: ric && ric.stato === 'evasa' ? 'evasa' : undefined });
+      var diff = righe.filter(function (x) { return x.ricevuta !== null && x.ricevuta < x.quantita; });
+      ev(chiE(d.ricevutoDa), d.ricevutoIl, 'ddt.ricevi', { numero: d.numero, a: nomi[d.destinazioneId],
+        differenze: diff.length ? diff.map(function (x) { return { articolo: nomeArt(x.articoloId), partita: x.quantita, ricevuta: x.ricevuta, esito: x.esito }; }) : undefined });
+      if (d.stato === 'annullato') ev(chiNome(d.annullatoDa), d.annullatoIl, 'ddt.annulla', { numero: d.numero, motivo: d.motivoAnnullo });
+    });
+    // consumi registrati la sera (un evento per magazzino e giorno, come "Registra" della pagina Consumi)
+    var sera = {};
+    S.movimenti.forEach(function (m) {
+      if (m.tipo !== 'consumo' || !m.utenteId) return;
+      var t = new Date(m.creato).toISOString();
+      if (t < dal) return;
+      var k = m.repartoId + '|' + m.data;
+      (sera[k] = sera[k] || { u: chiE(m.utenteId), t: t, righe: [] }).righe.push({ tipo: 'consumo', data: m.data, articolo: nomeArt(m.articoloId), reparto: m.repartoId, quantita: m.quantita });
+    });
+    Object.keys(sera).forEach(function (k) { ev(sera[k].u, sera[k].t, 'movimenti.registra', { movimenti: sera[k].righe }); });
+    // accessi del mattino (chi lavora quel giorno) e verifica in due passaggi di Chiara Verdi
+    for (var g = 10; g >= 1; g--) {
+      var giorno = new Date(Date.now() - g * 86400000);
+      var festivo = giorno.getDay() === 0;
+      UTENTI.forEach(function (u, i) {
+        if (festivo && u.ruolo !== 'reparto') return;
+        if (u.ruolo === 'consultazione' && g % 3) return;
+        var t = new Date(giorno.getFullYear(), giorno.getMonth(), giorno.getDate(), 7, 20 + i * 7).toISOString();
+        ev(u, t, 'accesso.entrata', u.totpAttivo ? { dueFattori: g % 4 ? 'computer attendibile' : 'codice' } : {});
+      });
+    }
+    var sicura = utente('u-sicura');
+    if (sicura && sicura.totpAttivatoIl) {
+      dal = '';
+      ev(sicura, sicura.totpAttivatoIl, 'accesso.2fa.attivata', { codiciRecupero: 10 });
+      ev(sicura, new Date(Date.parse(sicura.totpAttivatoIl) + 60000).toISOString(), 'accesso.2fa.ricorda-computer', { giorni: 30 });
+    }
+    lista.sort(function (a, b) { return a.quando < b.quando ? -1 : a.quando > b.quando ? 1 : 0; });
+    lista.forEach(function (e) { e.id = ++nEventi; eventi.unshift(e); });
+  }
 
   /* ======================= scritture "in transazione" ======================= */
 
@@ -2100,7 +2169,7 @@
     u.cambioPassword = true;
     UTENTI.push(u);
     evento(ctx, 'utenti.crea', { utente: v.username, nome: v.nome, ruolo: v.ruolo, reparti: v.reparti });
-    return { utente: vistaUtente(u), nota: 'Nell’anteprima entra con la password scelta oppure con «' + PASSWORD + '».' };
+    return { utente: vistaUtente(u) };
   }
   function modificaUtente(ctx, id, dati) {
     var u = utente(String(id));
@@ -2312,23 +2381,42 @@
     return d.getFullYear() + '-' + due(d.getMonth() + 1) + '-' + due(d.getDate()) + '_' + due(d.getHours()) + due(d.getMinutes()) + due(d.getSeconds());
   }
   var copie = []; // { nome, prefisso, tipo, data, dimensione, verificata, verificataIl, errore, rev, base, firma, conteggi, seconda, dati }
+  // righe per tabella di SQLite, come la scheda di verifica di una copia del programma vero (server/backup.js)
+  var TABELLE_SQL = { armadi: 'armadi', articoli: 'articoli', assortimento: 'assortimento', ddt: 'ddt', ddtRighe: 'ddt_righe', movimenti: 'movimenti',
+    reparti: 'reparti', richieste: 'richieste', richiesteRighe: 'richieste_righe' };
   function conteggiDi(dati) {
+    var d = dati ? JSON.parse(dati) : S;
     var c = {};
-    TABELLE.forEach(function (t) { c[t] = dati ? JSON.parse(dati)[t].length : S[t].length; });
-    return c;
+    TABELLE.forEach(function (t) { c[TABELLE_SQL[t]] = (d[t] || []).length; });
+    c.cancellati = dati ? 0 : cancellati.length;
+    c.impostazioni = Object.keys(d.impostazioni || {}).length;
+    c.meta = Object.keys(dati ? d.meta || {} : meta).length + 3;
+    var o = {};
+    Object.keys(c).sort().forEach(function (k) { o[k] = c[k]; });
+    return o;
+  }
+  function conteggiAccessi() {
+    return { dispositivi: dispositivi.length, eventi: eventi.length, sessioni: sessione ? 1 : 0, utenti: UTENTI.length };
   }
   function dimensioneStimata() { return Math.round(S.movimenti.length * 230 + S.articoli.length * 400 + S.ddtRighe.length * 120 + S.richiesteRighe.length * 90 + 180000); }
   function dimensioneAccessi() { return 98304 + eventi.length * 160 + UTENTI.length * 600; }
   function nuovaCopia(prefisso, tipo, d, dati, opz) {
     opz = opz || {};
+    d = new Date(Math.floor(d.getTime() / 1000) * 1000); // la data viene dal nome del file: al secondo
     var c = {
       nome: prefisso + '_' + marcaTempo(d) + '_' + tipo + '.db', prefisso: prefisso, tipo: tipo, data: d.toISOString(),
       dimensione: opz.dimensione || (prefisso === 'farmacia' ? dimensioneStimata() : dimensioneAccessi()), verificata: true,
       verificataIl: new Date(d.getTime() + 900).toISOString(), errore: null, rev: prefisso === 'farmacia' ? (opz.rev || rev) : null, base: prefisso === 'farmacia' ? revBase : null,
-      firma: null, conteggi: prefisso === 'farmacia' ? (opz.conteggi || conteggiDi()) : { utenti: UTENTI.length, eventi: eventi.length }, seconda: false, dati: dati || null
+      firma: prefisso === 'accessi' ? nEventi + ':' + UTENTI.length : null,
+      conteggi: prefisso === 'farmacia' ? (opz.conteggi || conteggiDi(dati)) : conteggiAccessi(), seconda: false, dati: dati || null
     };
     copie.unshift(c);
-    copie.sort(function (a, b) { return a.data < b.data ? 1 : a.data > b.data ? -1 : 0; });
+    // come perRecenza di server/backup.js: dalla più recente; nello stesso secondo prima la revisione più alta
+    copie.sort(function (a, b) {
+      var ta = Date.parse(a.data);
+      var tb = Date.parse(b.data);
+      return tb - ta || (b.rev || 0) - (a.rev || 0) || (a.nome < b.nome ? 1 : -1);
+    });
     return c;
   }
   // copie automatiche a scaglioni (come le farebbe il programma installato): tutte rifanno i dati di quando si è aperta la pagina
@@ -2346,7 +2434,7 @@
     momenti.forEach(function (d, i) {
       var quota = Math.max(0.35, 1 - (adesso - d) / (160 * 86400000));
       nuovaCopia('farmacia', 'auto', d, null, { dimensione: Math.round(dim * quota), rev: Math.max(1, Math.round(rev * quota)), conteggi: null });
-      nuovaCopia('accessi', 'auto', new Date(d.getTime() + 1000), null);
+      nuovaCopia('accessi', 'auto', d, null);
       void i;
     });
   })();
@@ -2437,7 +2525,7 @@
         oreDallUltima: ultimaVer ? Math.round((adesso - new Date(ultimaVer.data).getTime()) / 36e5 * 10) / 10 : null
       },
       giornale: { cartella: 'C:\\Programmi\\Pharmacy\\dati (anteprima)\\giornale', file: 14, dimensione: 2400000 + rev * 900, dal: statoSalute.crescita[136].giorno,
-        ultimaRevisione: rev, ultimaScrittura: new Date(adesso - 45000).toISOString(), errore: null },
+        ultimaRevisione: rev, ultimaScrittura: new Date(adesso - 45000).toISOString(), errore: null, scritteSessione: rev - REV_INIZIALE },
       disco: { libero: 187.4 * 1024 * 1024 * 1024, totale: 256 * 1024 * 1024 * 1024 },
       secondaCartella: copia(statoSalute.seconda), secondaDaConfigurazione: false, provaRipristino: copia(statoSalute.provaRipristino),
       crescita: cr.slice(-120), erroreCopie: null, problema: null
@@ -2466,7 +2554,7 @@
   function copiaSistema(ctx) {
     var d = new Date();
     var a = nuovaCopia('farmacia', 'manuale', d, istantanea());
-    var b = nuovaCopia('accessi', 'manuale', new Date(d.getTime() + 1000), null);
+    var b = nuovaCopia('accessi', 'manuale', d, null);
     var nomi = [a.nome, b.nome];
     var nuove = elencoCopie().filter(function (c) { return nomi.indexOf(c.nome) >= 0; });
     evento(ctx, 'sistema.copia', { copie: nomi, verificate: true });
@@ -2476,17 +2564,44 @@
   function provaRipristino(ctx) {
     var base = elencoCopie().filter(function (c) { return c.prefisso === 'farmacia' && c.verificata === true; })[0];
     if (!base) throw errore(409, 'Non c’è ancora nessuna copia verificata del magazzino da cui partire: fai prima una copia (“Copia adesso”).');
+    // stessi riassunti del programma vero (server/salute.js riassuntoTabella): righe, somma delle revisioni, somma delle
+    // quantità o dei prezzi, impronta delle coppie id+revisione; qui ricostruita e attuale coincidono
     var tabelle = TABELLE.map(function (t) {
-      var n = S[t].length;
-      return { tabella: t, attuale: { righe: n }, ricostruita: { righe: n }, uguale: true };
+      var a = riassuntoTabella(t);
+      return { tabella: t, attuale: a, ricostruita: copia(a), uguale: true };
     });
-    tabelle.push({ tabella: 'impostazioni', attuale: { righe: Object.keys(S.impostazioni).length }, ricostruita: { righe: Object.keys(S.impostazioni).length }, uguale: true });
+    var imp = { righe: Object.keys(S.impostazioni).length, sommaRev: null, somma: null, campoSomma: null, impronta: impronta(JSON.stringify(S.impostazioni)) };
+    tabelle.push({ tabella: 'impostazioni', attuale: imp, ricostruita: copia(imp), uguale: true });
     var p = { quando: new Date().toISOString(), esito: 'ok', copia: base.nome, copiaData: base.data, revCopia: base.rev, riapplicate: Math.max(0, rev - (base.rev || rev)),
       revRicostruita: rev, revAttuale: rev, tabelle: tabelle, messaggi: [], durataMs: 1200 + Math.round(Math.random() * 600) };
     statoSalute.provaRipristino = p;
     evento(ctx, 'sistema.prova-ripristino', { esito: p.esito, copia: p.copia, riapplicate: p.riapplicate, durataMs: p.durataMs });
     nellAnteprima('Nell’anteprima la prova è simulata: nel programma installato ricostruisce davvero i dati da una copia e dal giornale, in una cartella a parte.');
     return { prova: p, sistema: statoSistema() };
+  }
+  // impronta corta (16 cifre esadecimali) di un testo: due FNV-1a a 32 bit con semi diversi
+  function impronta(testo) {
+    var a = 0x811c9dc5;
+    var b = 0x01000193 ^ 0x5bd1e995;
+    for (var i = 0; i < testo.length; i++) {
+      var c = testo.charCodeAt(i);
+      a = Math.imul(a ^ c, 0x01000193) >>> 0;
+      b = Math.imul(b ^ c, 0x01000193) >>> 0;
+    }
+    return ('0000000' + a.toString(16)).slice(-8) + ('0000000' + b.toString(16)).slice(-8);
+  }
+  function riassuntoTabella(t) {
+    var righe = S[t];
+    var campo = t === 'movimenti' || t === 'richiesteRighe' || t === 'ddtRighe' ? 'quantita' : t === 'articoli' ? 'prezzo' : null;
+    var sommaRev = 0;
+    var somma = 0;
+    var ids = righe.map(function (x) {
+      var r = revRiga[t + '|' + x.id] || 1;
+      sommaRev += r;
+      if (campo) somma += Number(x[campo]) || 0;
+      return x.id + ':' + r;
+    }).sort();
+    return { righe: righe.length, sommaRev: sommaRev, somma: campo ? Math.round(somma * 1e6) / 1e6 : null, campoSomma: campo, impronta: impronta(ids.join(';')) };
   }
   function secondaCartella(ctx, percorso) {
     percorso = String(percorso === undefined || percorso === null ? '' : percorso).trim();

@@ -1,23 +1,37 @@
 /*
- * Guida sullo schermo ("Guidami"): giri passo per passo sulle pagine del Gestionale Farmacia.
+ * Guida sullo schermo ("Guidami"): giri passo per passo sulle pagine del programma (NefroCenter Pharmacy).
  *
  * window.Tour
  *   avvia(id)          avvia un giro (false se non esiste o non è permesso all'utente)
  *   ferma()            chiude il giro aperto
- *   elenco()           [{ id, titolo, descrizione, pagina, ico }] dei giri permessi all'utente
- *   perPagina(pagina)  id del giro della pagina (null se la pagina non ne ha uno)
+ *   elenco()           [{ id, titolo, descrizione, pagina, ico, gruppo }] dei giri permessi all'utente, nell'ordine
+ *                      dell'elenco (raggruppati come il menu: GRUPPI)
+ *   perPagina(pagina)  id del giro della pagina (null se la pagina non ne ha uno); se una pagina ne ha più d'uno
+ *                      (Richieste: chiedere ed evadere) sceglie quello adatto all'utente e a quello che sta guardando
  *   apriElenco()       piccolo elenco dei giri, sotto il pulsante Guidami
  *   stato(), bersagli() per le prove automatiche (strumenti/prova-tour.js)
  *
- * Un passo: { pagina?, el?: selettore | function () → selettore o elemento, titolo, testo,
+ * Un giro: { id, gruppo, perPagina?, pagina (id | function | null), ico, titolo, descrizione, se?, qui?, passi }
+ *   qui?: function () → true se il giro è quello giusto per la vista aperta (perPagina sceglie lui fra più giri)
+ *
+ * Un passo: { pagina?, el?: selettore | function () → selettore o elemento, titolo, testo (testo o function () → testo),
  *             posizione?: 'sopra'|'sotto'|'destra'|'sinistra', facoltativo?: true, prima?: function () {},
  *             se?: function () → false per saltarlo, insieme?: true (evidenzia tutti gli elementi trovati),
  *             risali?: selettore (evidenzia il contenitore più vicino, per esempio l'etichetta di una spunta),
- *             riparo?: 'fondo'|'cima' (dove appoggiare il fumetto se non c'è posto accanto all'elemento) }
+ *             riparo?: 'fondo'|'cima' (dove appoggiare il fumetto se non c'è posto accanto all'elemento),
+ *             vista?: { segno, parametri } (una vista della pagina, aperta con App.vai(pagina, parametri): il dettaglio
+ *                     di una richiesta, il modulo di una richiesta nuova, la ricezione di un DDT, una scheda…;
+ *                     "segno" è un selettore (dentro #contenuto) o una funzione che dice se quella vista è già aperta:
+ *                     allora il giro non ridisegna la pagina. "parametri" può essere una funzione che restituisce null
+ *                     quando la vista non si può aprire (per esempio nessuna richiesta da evadere): il passo facoltativo
+ *                     allora manca, quello obbligatorio resta sulla vista che c'è),
+ *             ambiente?: { id, apri, chiudi, aperto } (una finestra o un menu che il giro apre per il passo e chiude
+ *                     quando si passa a un passo che non ne ha bisogno, o alla fine; apri() → null se non si può) }
  * Senza "pagina" il passo usa la pagina del giro; con pagina: null resta dove si trova.
  *
- * Il giro non scrive niente e non preme pulsanti: apre le pagine (App.vai), le porta in vista e,
- * sul telefono, apre il menu laterale quando il passo è lì.
+ * Il giro non scrive niente: apre le pagine e le loro viste (App.vai), le porta in vista, sul telefono apre il menu
+ * laterale quando il passo è lì; preme solo i pulsanti che cambiano quello che si vede (il menu del tuo utente, la
+ * modalità Disponi degli armadi) e alla fine li rimette come erano.
  */
 (function (root) {
   'use strict';
@@ -30,10 +44,13 @@
   var MARGINE = 6;         // aria tra l'elemento e il riquadro luminoso
   var DISTANZA = 14;       // tra il riquadro e il fumetto (ci sta la freccia)
   var BORDO = 10;          // il fumetto resta a questa distanza dai bordi dello schermo
+  var DURATA_SCORRIMENTO = 1000; // uno scorrimento morbido della pagina finisce entro questo tempo
 
   /* ======================= condizioni comuni ======================= */
 
   function puo(p) { return function () { return App.puo(p); }; }
+
+  function valore(x) { return typeof x === 'function' ? x() : x; }
 
   // movimenti che l'utente può annullare: amministratore e farmacista tutti, il reparto i propri consumi e perdite
   function puoAnnullareQualcosa() { return App.puo('annullaTutti') || App.puo('consumo') || App.puo('perdita'); }
@@ -63,6 +80,180 @@
     return celle[Math.min(new Date().getDate(), celle.length) - 1];
   }
 
+  function nomeProdotto() {
+    var imp = App.S && App.S.impostazioni;
+    return (imp && imp.nomeProdotto) || 'NefroCenter Pharmacy';
+  }
+
+  function dati(nome) { return (App.S && App.S[nome]) || []; }
+
+  // la farmacia centrale (farmacista, amministratore): evade le richieste dei magazzini di piano
+  function eFarmacia() { return App.puo('evadiRichieste'); }
+
+  // chi può chiedere merce alla farmacia per almeno un magazzino
+  function puoChiedere() { return App.puo('richieste') && App.repartiScrivibili().length > 0; }
+
+  // responsabile di magazzino: vede e lavora solo sui suoi magazzini
+  function soloSuoiMagazzini() { return !!(App.permessi && App.permessi.reparti); }
+
+  // la finestra "Sicurezza dell'account" (js/sicurezza.js) c'è e il menu dell'utente ha la sua voce
+  function conAccount() {
+    return !!(App.Sicurezza && typeof App.Sicurezza.apriAccount === 'function' && document.getElementById('utente-sicurezza'));
+  }
+
+  // il modulo di una richiesta (nuova o da modificare) è aperto
+  function moduloRichiestaAperto() { return App.paginaCorrente === 'richieste' && !!document.querySelector('#contenuto #rn-rep'); }
+
+  /* ---------- i dati che i giri mostrano nelle viste di dettaglio (sempre gli stessi, finché i dati non cambiano) ---------- */
+
+  function perData(campo) { return function (a, b) { return String(a[campo] || '').localeCompare(String(b[campo] || '')); }; }
+
+  // una richiesta che la farmacia deve evadere: prima quelle appena inviate (si vede "Prendi in carico"), le urgenti in cima
+  function richiestaDaEvadere() {
+    if (!eFarmacia()) return null;
+    var aperte = dati('richieste').filter(function (r) {
+      return (r.stato === 'inviata' || r.stato === 'in_lavorazione') && App.repartoPermesso(r.fornitoreId);
+    });
+    aperte.sort(function (a, b) {
+      return (a.stato === 'inviata' ? 0 : 1) - (b.stato === 'inviata' ? 0 : 1) ||
+        (b.urgente ? 1 : 0) - (a.urgente ? 1 : 0) || perData('inviataIl')(a, b);
+    });
+    return aperte[0] || null;
+  }
+
+  // un DDT pronto da spedire da un magazzino dell'utente
+  function ddtDaSpedire() {
+    if (!App.puo('ddt')) return null;
+    return dati('ddt').filter(function (d) { return d.stato === 'in_preparazione' && App.repartoPermesso(d.origineId); })
+      .sort(perData('preparatoIl'))[0] || null;
+  }
+
+  // un DDT in viaggio verso un magazzino dell'utente
+  function ddtDaRicevere() {
+    if (!App.puo('riceviDdt')) return null;
+    return dati('ddt').filter(function (d) { return d.stato === 'in_transito' && App.repartoPermesso(d.destinazioneId); })
+      .sort(perData('partitoIl'))[0] || null;
+  }
+
+  // numero del documento mostrato nell'intestazione del dettaglio (richiesta o DDT)
+  function numeroMostrato() {
+    var n = document.querySelector('#contenuto .log-intestazione .log-numero');
+    return n ? n.textContent.trim() : '';
+  }
+
+  /* ---------- armadi ---------- */
+
+  function conArmadi(repId) { return dati('armadi').some(function (a) { return a.repartoId === repId && a.attivo !== false; }); }
+
+  function puoDisporreIn(repId) { return App.puo('ubicazioni') && App.repartoPermesso(repId); }
+
+  // il magazzino da mostrare negli armadi: uno dei tuoi con armadi, altrimenti uno qualsiasi con armadi
+  function magazzinoConArmadi() {
+    var lista = App.repartiAttivi().filter(function (r) { return conArmadi(r.id); });
+    return lista.filter(function (r) { return puoDisporreIn(r.id); })[0] || lista[0] || null;
+  }
+
+  function magazzinoMostrato() {
+    var s = document.getElementById('ar-magazzino');
+    return s ? s.value : null;
+  }
+
+  /* ---------- viste delle pagine (App.vai con i parametri) ---------- */
+
+  var V_RICHIESTE = { segno: '#ric-pannello', parametri: {} };
+  var V_RICHIESTA_NUOVA = { segno: '#rn-rep', parametri: { nuova: true } };
+  var V_RICHIESTA_APERTA = {
+    segno: function () { var r = richiestaDaEvadere(); return !!r && !!document.querySelector('#contenuto #ric-indietro') && numeroMostrato() === r.numero; },
+    parametri: function () { var r = richiestaDaEvadere(); return r ? { id: r.id } : null; }
+  };
+  var V_DDT = { segno: '#ddt-pannello', parametri: {} };
+  var V_DDT_DA_SPEDIRE = {
+    segno: function () { var d = ddtDaSpedire(); return !!d && !!document.querySelector('#contenuto #ddt-indietro') && numeroMostrato() === d.numero; },
+    parametri: function () { var d = ddtDaSpedire(); return d ? { id: d.id } : null; }
+  };
+  var V_DDT_DA_RICEVERE = {
+    segno: function () { var d = ddtDaRicevere(); return !!d && !!document.querySelector('#contenuto #ddt-indietro') && numeroMostrato() === d.numero; },
+    parametri: function () { var d = ddtDaRicevere(); return d ? { id: d.id } : null; }
+  };
+  var V_RICEZIONE = {
+    segno: function () {
+      var d = ddtDaRicevere();
+      var t = document.querySelector('#contenuto .log-ricezione h2');
+      return !!d && !!t && t.textContent.indexOf(d.numero) >= 0;
+    },
+    parametri: function () { var d = ddtDaRicevere(); return d ? { id: d.id, ricevi: true } : null; }
+  };
+  // gli armadi di un magazzino che ne ha (meglio uno dei tuoi)
+  var V_ARMADI = {
+    segno: function () {
+      var m = magazzinoMostrato();
+      if (!m || !conArmadi(m)) return false;
+      if (puoDisporreIn(m)) return true;
+      var x = magazzinoConArmadi();
+      return !x || !puoDisporreIn(x.id);
+    },
+    parametri: function () { var x = magazzinoConArmadi(); return x ? { repartoId: x.id } : null; }
+  };
+  // gli armadi di un magazzino dove puoi disporre gli articoli
+  var V_ARMADI_MIO = {
+    segno: function () { var m = magazzinoMostrato(); return !!m && conArmadi(m) && puoDisporreIn(m); },
+    parametri: function () { var x = magazzinoConArmadi(); return x && puoDisporreIn(x.id) ? { repartoId: x.id } : null; }
+  };
+  var V_MG_DATI = { segno: '#mg-tab-dati[aria-selected="true"]', parametri: { scheda: 'dati' } };
+  var V_MG_ARMADI = { segno: '#mg-tab-armadi[aria-selected="true"]', parametri: { scheda: 'armadi' } };
+  var V_MG_ASSORTIMENTO = { segno: '#mg-tab-assortimento[aria-selected="true"]', parametri: { scheda: 'assortimento' } };
+
+  /* ---------- finestre e menu che il giro apre (e richiude) da solo ---------- */
+
+  function pausa(ms) { return new Promise(function (ok) { setTimeout(ok, ms); }); }
+
+  // il menu del tuo utente (in alto a destra): password, Sicurezza dell'account, tema, Esci.
+  // Si apre come con un clic dell'utente (js/app.js segna il tema scelto e mostra le voci giuste).
+  var TENDINA_UTENTE = {
+    id: 'tendina-utente',
+    aperto: function () { var t = document.getElementById('utente-tendina'); return !!t && !t.hidden; },
+    apri: function () {
+      var b = document.getElementById('utente-btn');
+      if (!b || !document.getElementById('utente-tendina')) return null;
+      b.click();
+      return pausa(rid() ? 30 : 280); // la tendina entra con una breve animazione
+    },
+    chiudi: function () {
+      var b = document.getElementById('utente-btn');
+      if (b && TENDINA_UTENTE.aperto()) b.click();
+    }
+  };
+
+  // la finestra "Sicurezza dell'account" (js/sicurezza.js): legge lo stato dal server, non cambia niente
+  var FINESTRA_ACCOUNT = {
+    id: 'finestra-account',
+    aperto: function () {
+      var m = document.getElementById('modale');
+      return !!m && !m.hidden && !!m.querySelector('#sic-account');
+    },
+    apri: function () {
+      if (!conAccount()) return null;
+      App.Sicurezza.apriAccount();
+      // aspetto lo stato letto dal server e che la finestra abbia finito di comparire (e di prendere il fuoco)
+      return aspettaChe(function () { return document.querySelector('#sic-account .sic-stato, #sic-account .banda'); }, ATTESA_MAX)
+        .then(function () { return pausa(rid() ? 80 : 320); });
+    },
+    chiudi: function () { if (FINESTRA_ACCOUNT.aperto()) App.chiudiModale(); }
+  };
+
+  // la modalità Disponi della pagina Armadi (pulsante "✋ Disponi" / "✓ Fine disposizione"): solo la vista cambia
+  var MODO_DISPONI = {
+    id: 'disponi',
+    aperto: function () { var b = document.getElementById('ar-disponi'); return !!b && b.getAttribute('aria-pressed') === 'true'; },
+    apri: function () {
+      var b = document.getElementById('ar-disponi');
+      if (!b || b.hidden) return null;
+      b.click();
+      return aspettaChe(function () { return document.querySelector('#ar-voci'); }, 1500);
+    },
+    chiudi: function () { if (MODO_DISPONI.aperto()) document.getElementById('ar-disponi').click(); }
+  };
+
   /* ======================= i giri ======================= */
 
   var BARRA_LETTORE = {
@@ -78,42 +269,93 @@
     return x;
   }
 
+  // titoli dei gruppi nell'elenco dei giri (nell'ordine del menu)
+  var GRUPPI = {
+    inizio: 'Per cominciare',
+    giorno: 'Lavoro di ogni giorno',
+    magazzino: 'Magazzino',
+    analisi: 'Analisi',
+    archivio: 'Registri e archivio',
+    amministrazione: 'Amministrazione'
+  };
+
   var GIRI = [
+    /* ---------------- per cominciare ---------------- */
     {
-      id: 'benvenuto', perPagina: 'oggi', pagina: 'oggi', ico: '👋',
+      id: 'benvenuto', gruppo: 'inizio', perPagina: 'oggi', pagina: 'oggi', ico: '👋',
       titolo: 'Primo giro del programma',
-      descrizione: 'Menu, pagina Oggi, ricerca rapida, il tuo utente e dove trovare la guida.',
+      descrizione: 'Menu, pagina Oggi con i numeri del giorno e le cose da fare, ricerca rapida, il tuo utente e la guida.',
       passi: [
-        { titolo: 'Benvenuto nel Gestionale Farmacia',
+        { titolo: function () { return 'Benvenuto in ' + nomeProdotto(); },
           testo: 'In un minuto ti mostro dove sono le cose. Vai avanti con <b>Avanti</b> o con la freccia <kbd>→</kbd>; esci quando vuoi con <kbd>Esc</kbd>.' },
         { el: '#menu', posizione: 'destra', riparo: 'fondo', titolo: 'Il menu',
-          testo: 'Qui ci sono tutte le pagine che il tuo ruolo può usare. La lettera a destra è il <b>tasto rapido</b>: premila (fuori dai campi) per aprire la pagina.' },
+          testo: 'Qui ci sono tutte le pagine che il tuo ruolo può usare, divise per argomento. Il numero accanto a una voce dice quante cose ti aspettano (richieste, DDT, scadenze). La lettera a destra è il <b>tasto rapido</b>: premila (fuori dai campi) per aprire la pagina.' },
         { el: '.azioni-rapide', facoltativo: true, posizione: 'sotto', titolo: 'Il lavoro di ogni giorno',
-          testo: 'I pulsanti per le operazioni più frequenti, con il loro tasto rapido.' },
-        { el: '.indicatori', posizione: 'sotto', titolo: 'Cosa controllare oggi',
-          testo: 'Articoli sotto la scorta minima, lotti scaduti e lotti in scadenza. Toccane uno per aprire l’elenco completo.' },
+          testo: 'I pulsanti per le operazioni più frequenti del tuo ruolo, con il loro tasto rapido.' },
+        { el: '#cr-vista', facoltativo: true, posizione: 'sotto', titolo: 'Quale magazzino guardare',
+          testo: function () {
+            return (soloSuoiMagazzini() ? 'Tutti i tuoi magazzini' : 'Tutta la struttura') + ' oppure un magazzino solo: numeri, grafici ed elenchi della pagina cambiano subito.';
+          } },
+        { el: '#contenuto .indicatori', posizione: 'sotto', titolo: 'I numeri di oggi',
+          testo: 'Valore della merce, articoli sotto scorta, lotti scaduti e in scadenza, richieste e DDT da seguire, consumi di oggi. Tocca un numero per aprire l’elenco completo.' },
+        { el: '#cr-andamento', facoltativo: true, posizione: 'destra', titolo: 'Andamento dei consumi',
+          testo: 'I consumi degli ultimi 30 giorni, in unità o in euro, con la media degli ultimi 7 giorni. Passa sopra una barra (o toccala) per leggere il giorno.' },
+        { el: '#cr-fare', facoltativo: true, posizione: 'sinistra', titolo: 'Cosa fare adesso',
+          testo: 'Le cose da sbrigare, dalla più urgente: richieste da evadere, DDT da spedire o da ricevere, lotti scaduti da togliere, articoli da riordinare. Un clic e sei sulla pagina giusta.' },
         { el: '#apri-ricerca', posizione: 'sotto', titolo: 'Ricerca rapida',
           testo: 'Premi <kbd>Ctrl</kbd> <kbd>K</kbd> (oppure <kbd>/</kbd>) da qualsiasi pagina, scrivi il nome di un articolo o di una pagina e premi Invio.' },
-        { el: '#utente-menu', posizione: 'sotto', titolo: 'Il tuo utente',
-          testo: 'Da qui cambi la password ed esci. Se il computer è condiviso, esci sempre a fine turno.' },
+        { el: '#utente-btn', posizione: 'sotto', titolo: 'Il tuo utente',
+          testo: 'Il pulsante con le tue iniziali apre il menu del tuo utente. Te lo apro io.' },
+        { el: '#utente-tendina', ambiente: TENDINA_UTENTE, posizione: 'sinistra', titolo: 'Password, sicurezza e tema',
+          testo: function () {
+            return 'Da qui cambi la password' + (conAccount() ? ', apri <b>Sicurezza dell’account</b> (la verifica in due passaggi con il telefono)' : '') +
+              ', scegli il tema dello schermo (<b>chiaro</b>, <b>scuro</b> o <b>automatico</b>) ed esci. Se il computer è condiviso, esci sempre a fine turno.';
+          } },
         { el: '#collegamento', facoltativo: true, posizione: 'sotto', titolo: 'Collegamento al server',
           testo: '<b>● In linea</b>: quello che registrano gli altri lo vedi subito. Se compare <b>⚠ Server non raggiungibile</b>, non registrare finché il collegamento non torna.' },
         { el: '#guidami', posizione: 'sotto', titolo: 'Guidami',
-          testo: 'In ogni pagina questo pulsante ti mostra, passo per passo, cosa fare lì.' },
+          testo: 'In ogni pagina questo pulsante ti mostra, passo per passo, cosa fare lì. Dalla pagina Guida ti propone tutti i giri.' },
         { el: '#menu a[data-pagina="guida"]', posizione: 'destra', titolo: 'Guida e videoguide',
           testo: 'Nella Guida trovi le istruzioni scritte e i video di ogni operazione. Buon lavoro!' }
       ]
     },
     {
-      id: 'carico', perPagina: 'carico', pagina: 'carico', ico: '📥',
+      id: 'account', gruppo: 'inizio', pagina: null, ico: '🔐', se: conAccount,
+      titolo: 'Sicurezza dell’account',
+      descrizione: 'Attivare la verifica in due passaggi con il telefono: app, codice QR e codici di recupero.',
+      passi: [
+        { titolo: 'Verifica in due passaggi',
+          testo: 'Oltre alla password, per entrare serve un codice di 6 cifre che un’app sul tuo telefono cambia ogni 30 secondi. Se qualcuno scopre la tua password, senza il tuo telefono non entra.' },
+        { el: '#utente-btn', posizione: 'sotto', titolo: 'Il menu del tuo utente',
+          testo: 'Si parte dal pulsante con le tue iniziali, in alto a destra.' },
+        { el: '#utente-sicurezza', ambiente: TENDINA_UTENTE, posizione: 'sinistra', titolo: 'Sicurezza dell’account',
+          testo: 'Questa voce apre la finestra della sicurezza del tuo utente. Te la apro io.' },
+        { el: '#sic-account .sic-stato', ambiente: FINESTRA_ACCOUNT, posizione: 'sotto', titolo: 'A che punto sei',
+          testo: 'Qui vedi se la verifica è attiva e da quando. Se l’amministratore la chiede al tuo ruolo c’è scritto: allora non si può togliere.' },
+        { el: '#sic-attiva', ambiente: FINESTRA_ACCOUNT, facoltativo: true, posizione: 'sopra', titolo: 'Attivala in tre passi',
+          testo: '<b>1.</b> Installa sul telefono un’app come Google Authenticator, Microsoft Authenticator o FreeOTP. <b>2.</b> Premi questo pulsante, inquadra con l’app il codice QR che compare e scrivi il codice di 6 cifre che l’app ti mostra. <b>3.</b> Salva i <b>10 codici di recupero</b>: scaricali, stampali o copiali.' },
+        { el: '#sic-nuovi-codici', ambiente: FINESTRA_ACCOUNT, facoltativo: true, posizione: 'sopra', titolo: 'Nuovi codici di recupero',
+          testo: 'Quando ne restano pochi creane di nuovi (serve la password): quelli vecchi smettono di valere.' },
+        { el: '#sic-cambia', ambiente: FINESTRA_ACCOUNT, facoltativo: true, posizione: 'sopra', titolo: 'Telefono nuovo',
+          testo: 'Hai cambiato telefono o reinstallato l’app? Collega di nuovo l’app con un codice QR nuovo: il telefono vecchio smette di valere.' },
+        { ambiente: FINESTRA_ACCOUNT, titolo: 'I codici di recupero',
+          testo: 'Servono per entrare se non hai il telefono: ognuno vale una volta sola. Tienili lontano dal computer, per esempio stampati in un cassetto chiuso. Se perdi telefono e codici, l’amministratore può azzerare la verifica del tuo utente.' },
+        { ambiente: FINESTRA_ACCOUNT, titolo: 'Come si entra dopo',
+          testo: 'Scrivi utente e password come sempre, poi il codice dell’app. Sul computer che usi di solito puoi spuntare <b>Ricorda questo computer per 30 giorni</b>: per un mese lì non te lo chiede più.' }
+      ]
+    },
+
+    /* ---------------- lavoro di ogni giorno ---------------- */
+    {
+      id: 'carico', gruppo: 'giorno', perPagina: 'carico', pagina: 'carico', ico: '📥',
       titolo: 'Carico della merce',
       descrizione: 'Registrare la merce arrivata dal fornitore, con lotto e scadenza.',
       passi: [
         { el: '#contenuto .scheda .modulo', posizione: 'sotto', titolo: 'Intestazione del carico',
-          testo: 'Data, reparto che riceve (di solito la Farmacia), fornitore e numero del DDT o della fattura.' },
+          testo: 'Data, magazzino che riceve (di solito la farmacia centrale), fornitore e numero del documento di trasporto o della fattura.' },
         BARRA_LETTORE,
         { el: '#righe tr:first-child .r-art', posizione: 'sotto', titolo: 'Articolo',
-          testo: 'Scrivi le prime lettere e scegli dall’elenco. Sotto compare la giacenza attuale del reparto.' },
+          testo: 'Scrivi le prime lettere e scegli dall’elenco. Sotto compare la giacenza attuale del magazzino.' },
         { el: '#righe tr:first-child .r-q', posizione: 'sotto', titolo: 'Quantità',
           testo: 'Quante unità sono arrivate: compresse, fiale, pezzi… come l’unità dell’articolo.' },
         { el: '#righe tr:first-child .r-lotto, #righe tr:first-child .r-scad', insieme: true, posizione: 'sotto', titolo: 'Lotto e scadenza',
@@ -131,17 +373,17 @@
       ]
     },
     {
-      id: 'consumi', perPagina: 'consumi', pagina: 'consumi', ico: '💊',
+      id: 'consumi', gruppo: 'giorno', perPagina: 'consumi', pagina: 'consumi', ico: '💊',
       titolo: 'Consumi del giorno',
       descrizione: 'Il foglio dei consumi di un reparto: scrivi le quantità usate e registra.',
       passi: [
         { el: '#c-data, #c-rep', insieme: true, posizione: 'sotto', titolo: 'Giorno e reparto',
-          testo: 'Scegli la data e il reparto. Vedi solo i reparti in cui puoi registrare.' },
+          testo: 'Scegli la data e il reparto (il suo magazzino). Vedi solo quelli in cui puoi registrare.' },
         copia(BARRA_LETTORE, { testo: 'Ogni lettura aggiunge il consumo dell’articolo letto: una unità, o una confezione intera se lo scegli.' }),
         { el: '#c-cat, #c-cerca', insieme: true, posizione: 'sotto', titolo: 'Trova in fretta',
           testo: 'Filtra per categoria (farmaci o presidi) o scrivi parte del nome.' },
         { el: '#c-tutti', risali: '.spunta', posizione: 'sotto', titolo: 'Articoli senza giacenza',
-          testo: 'Di solito vedi solo gli articoli presenti nel reparto. Spunta qui se quello che cerchi non c’è.' },
+          testo: 'Di solito vedi solo gli articoli presenti nel magazzino del reparto. Spunta qui se quello che cerchi non c’è.' },
         { el: '#c-foglio input.q', facoltativo: true, posizione: 'sinistra', titolo: 'Quantità usate',
           testo: 'Scrivi quante unità sono state usate. <kbd>Invio</kbd> passa alla riga sotto; le righe compilate diventano verdi.' },
         { el: '#c-registra', posizione: 'sotto', titolo: 'Registra consumi',
@@ -151,32 +393,138 @@
       ]
     },
     {
-      id: 'trasferimenti', perPagina: 'trasferimenti', pagina: 'trasferimenti', ico: '🔁',
-      titolo: 'Trasferimenti ai reparti',
-      descrizione: 'Dalla Farmacia ai reparti (o tra reparti), con il lotto che si sposta.',
+      id: 'richieste', gruppo: 'giorno', perPagina: 'richieste', pagina: 'richieste', ico: '📝', se: puoChiedere,
+      // "Guidami" sul modulo di una richiesta: questo giro anche per la farmacia
+      qui: moduloRichiestaAperto,
+      titolo: 'Chiedere merce alla farmacia',
+      descrizione: 'Richiesta dal magazzino di piano: lettore, «Proponi le quantità», invio e attesa del DDT.',
       passi: [
-        { el: '#t-da, #t-a', insieme: true, posizione: 'sotto', titolo: 'Da dove, a dove',
-          testo: 'Di solito dalla Farmacia al reparto. Per la Farmacia è uno scarico, per il reparto un carico.' },
-        BARRA_LETTORE,
-        { el: '#righe tr:first-child .r-art, #righe tr:first-child .r-q', insieme: true, posizione: 'sotto', titolo: 'Articolo e quantità',
-          testo: 'Scegli l’articolo e scrivi quanto consegni. Sotto vedi la giacenza nel reparto di partenza.' },
-        { el: '#righe tr:first-child .r-lotto-scelta', posizione: 'sotto', titolo: 'Lotto',
-          testo: 'Lascia <b>automatico</b>: parte per primo il lotto che scade prima. Scegline uno solo se consegni proprio quello.' },
-        { el: '#t-note', posizione: 'sotto', titolo: 'Note',
-          testo: 'Numero della richiesta, chi ritira… quello che serve per ritrovarlo.' },
-        { el: '#registra', posizione: 'sopra', titolo: 'Registra trasferimento',
-          testo: 'Le giacenze dei due reparti cambiano insieme, nello stesso momento.' },
-        { el: '#recenti', facoltativo: true, posizione: 'sopra', titolo: 'Ultimi trasferimenti',
-          testo: 'Un trasferimento sbagliato si annulla da qui, con il motivo.' }
+        { el: '.log-schede', vista: V_RICHIESTE, posizione: 'sotto', titolo: 'Le richieste',
+          testo: function () {
+            return '<b>Da inviare</b>: le bozze salvate. ' + (eFarmacia()
+              ? '<b>Da evadere</b>: quelle arrivate alla farmacia. '
+              : '<b>In attesa</b>: quelle inviate, finché la farmacia non ha spedito tutto. ') +
+              '<b>Archivio</b>: evase, chiuse, rifiutate o annullate. Il numero dice quante sono.';
+          } },
+        { el: '#ric-cerca', vista: V_RICHIESTE, posizione: 'sotto', titolo: 'Cerca',
+          testo: 'Per numero (per esempio RIC-2026-0012), per magazzino o per nome di un articolo.' },
+        { el: '#ric-nuova', vista: V_RICHIESTE, posizione: 'sotto', titolo: 'Nuova richiesta',
+          testo: 'Apre il modulo per chiedere alla farmacia quello che serve al tuo magazzino. Ti mostro com’è fatto.' },
+        { el: '#rn-rep, #rn-forn', insieme: true, vista: V_RICHIESTA_NUOVA, posizione: 'sotto', titolo: 'Chi chiede, a chi',
+          testo: 'Il magazzino che chiede (il tuo) e a chi chiedi: di solito la farmacia centrale, già scelta.' },
+        { el: '#rn-urgente', risali: '.spunta', vista: V_RICHIESTA_NUOVA, posizione: 'sotto', titolo: 'Urgente',
+          testo: 'Spunta solo se serve subito: la farmacia vede la richiesta in cima all’elenco, in rosso.' },
+        copia(BARRA_LETTORE, { vista: V_RICHIESTA_NUOVA,
+          testo: 'Leggi le confezioni con il lettore (o con la fotocamera): ogni lettura aggiunge l’articolo alla richiesta, o ne aumenta la quantità.' }),
+        { el: '#rn-proponi', vista: V_RICHIESTA_NUOVA, posizione: 'sotto', titolo: 'Proponi le quantità',
+          testo: 'Il programma guarda l’assortimento del magazzino: per gli articoli arrivati al punto di riordino propone quanto serve per tornare alla scorta massima e coprire il consumo previsto. Contano anche la merce in viaggio e le richieste già aperte. Controlla e correggi prima di inviare.' },
+        { el: '#righe tr:first-child .r-art, #righe tr:first-child .r-q', insieme: true, vista: V_RICHIESTA_NUOVA, posizione: 'sotto', titolo: 'Articoli e quantità',
+          testo: 'Scrivi le prime lettere, scegli dall’elenco e scrivi la quantità. Sotto la riga vedi la giacenza del magazzino, la sua scorta e quanto ne ha libero la farmacia.' },
+        { el: '#rn-note', vista: V_RICHIESTA_NUOVA, posizione: 'sotto', titolo: 'Note per la farmacia',
+          testo: 'Facoltative: per esempio «per il paziente del letto 12» o «servono entro le 14».' },
+        { el: '#rn-bozza, #rn-invia', insieme: true, vista: V_RICHIESTA_NUOVA, posizione: 'sopra', titolo: 'Salva o invia',
+          testo: '<b>Salva come bozza</b> la tiene da parte (la ritrovi in «Da inviare»). <b>Invia la richiesta</b> la manda alla farmacia, che riceve subito un avviso. Finché la farmacia non la prende in carico puoi ancora modificarla o annullarla.' },
+        { el: '.log-schede', vista: V_RICHIESTE, posizione: 'sotto', titolo: 'E poi?',
+          testo: 'La farmacia approva le quantità e prepara il DDT. Quando la merce parte la trovi in <b>DDT e consegne</b>, nella scheda «Da ricevere»: lì registri la ricezione.' }
       ]
     },
     {
-      id: 'perdite', perPagina: 'perdite', pagina: 'perdite', ico: '🗑️',
+      id: 'richieste-evadi', gruppo: 'giorno', perPagina: 'richieste', pagina: 'richieste', ico: '✋', se: puo('evadiRichieste'),
+      qui: function () { return eFarmacia() && !moduloRichiestaAperto(); },
+      titolo: 'Evadere le richieste',
+      descrizione: 'Farmacia centrale: prendere in carico una richiesta, approvare le quantità e preparare il DDT.',
+      passi: [
+        { el: '#ric-evadere', vista: V_RICHIESTE, posizione: 'sotto', titolo: 'Da evadere',
+          testo: 'Le richieste arrivate dai magazzini di piano: le urgenti in cima, poi dalla più vecchia. Il numero nel menu ti dice quante sono.' },
+        { el: '#ric-pannello .log-voce', vista: V_RICHIESTE, facoltativo: true, posizione: 'sotto', titolo: 'Una richiesta',
+          testo: 'Numero, magazzino che chiede, primi articoli e quanto è già partito. Tocca la richiesta per aprirla: te ne apro una io.' },
+        { el: '.log-intestazione', vista: V_RICHIESTA_APERTA, facoltativo: true, posizione: 'sotto', titolo: 'Chi chiede e che cosa',
+          testo: 'Numero, stato, urgenza e note del reparto. La barra dice quanta merce approvata è già partita.' },
+        { el: '#ric-prendi', vista: V_RICHIESTA_APERTA, facoltativo: true, posizione: 'sotto', titolo: 'Prendi in carico',
+          testo: 'Il reparto vede che te ne stai occupando e da quel momento non può più cambiarla. Anche «Prepara DDT» la prende in carico da solo.' },
+        { el: '.ric-appr', vista: V_RICHIESTA_APERTA, facoltativo: true, posizione: 'sotto', titolo: 'Quantità approvata',
+          testo: 'All’inizio è quella chiesta: puoi approvarne meno, o di più per arrivare alla confezione intera. La colonna <b>Libera</b> dice quanto ne hai, senza la merce già messa in altri DDT.' },
+        { el: '#ric-prepara', vista: V_RICHIESTA_APERTA, facoltativo: true, posizione: 'sotto', titolo: 'Prepara DDT',
+          testo: 'Prepara il documento di trasporto con quello che resta da spedire, scegliendo i lotti che scadono prima. Se in farmacia manca qualcosa te lo dice: il resto lo spedisci con un altro DDT.' },
+        { el: '#ric-rifiuta, #ric-chiudi', insieme: true, vista: V_RICHIESTA_APERTA, facoltativo: true, posizione: 'sotto', titolo: 'Rifiuta o chiudi',
+          testo: '<b>Rifiuta</b> se non si può evadere, scrivendo il motivo. Dopo un DDT parziale, <b>Chiudi con residuo</b> chiude la richiesta senza spedire il resto.' },
+        { el: '.log-scheda-cron', vista: V_RICHIESTA_APERTA, facoltativo: true, posizione: 'sinistra', titolo: 'Cronologia',
+          testo: 'Chi ha chiesto, chi ha preso in carico, chi ha preparato, chi ha portato la merce e chi l’ha ricevuta, con data e ora.' },
+        { el: '.log-schede', vista: V_RICHIESTE, posizione: 'sotto', titolo: 'Dopo il DDT',
+          testo: 'Il DDT preparato lo trovi in <b>DDT e consegne</b>, nella scheda «Da preparare»: lì scegli chi porta la merce e lo spedisci.' }
+      ]
+    },
+    {
+      id: 'consegne', gruppo: 'giorno', perPagina: 'consegne', pagina: 'consegne', ico: '🚚',
+      titolo: 'DDT e consegne',
+      descrizione: 'Spedire un DDT con chi lo trasporta, stamparlo con QR e firme, riceverlo con il lettore e segnare le differenze.',
+      passi: [
+        { el: '.log-schede', vista: V_DDT, posizione: 'sotto', titolo: 'Le schede',
+          testo: function () {
+            return (App.puo('ddt') ? '<b>Da preparare</b>: DDT pronti, ancora da spedire. ' : '') +
+              '<b>In viaggio</b>: merce partita e non ancora arrivata. ' +
+              (App.puo('riceviDdt') ? '<b>Da ricevere</b>: DDT in arrivo nei tuoi magazzini. ' : '') +
+              '<b>Archivio</b>: ricevuti o annullati. Il numero dice quanti sono.';
+          } },
+        copia(BARRA_LETTORE, { vista: V_DDT, titolo: 'Leggi il DDT',
+          testo: 'Leggi con il lettore il codice a barre o il QR stampato sul DDT: si apre da solo. Puoi anche scrivere il numero (per esempio DDT-2026-0007) e premere Invio.' }),
+        { el: '#ddt-cerca', vista: V_DDT, posizione: 'sotto', titolo: 'Cerca',
+          testo: 'Per numero, magazzino, trasportatore o causale.' },
+        { el: '#ddt-nuovo', vista: V_DDT, facoltativo: true, posizione: 'sotto', titolo: 'Nuovo DDT',
+          testo: 'Per spostare merce senza una richiesta, anche un reso alla farmacia: apre la pagina Trasferimenti.' },
+        { el: '.log-intestazione', vista: V_DDT_DA_SPEDIRE, facoltativo: true, posizione: 'sotto', titolo: 'Un DDT da spedire',
+          testo: 'Te ne apro uno. In alto: numero, da quale magazzino a quale, causale, colli e la richiesta da cui è nato. Finché non parte, le giacenze non cambiano.' },
+        { el: '#ddt-modifica', vista: V_DDT_DA_SPEDIRE, facoltativo: true, posizione: 'sotto', titolo: 'Modifica righe',
+          testo: 'Prima della partenza puoi cambiare righe, lotti, causale e colli, oppure annullare il DDT.' },
+        { el: '#ddt-stampa', vista: V_DDT_DA_SPEDIRE, facoltativo: true, posizione: 'sotto', titolo: 'Stampa con QR e firme',
+          testo: 'Il DDT su un foglio A4: codice a barre e QR del numero, articoli con lotto e scadenza, e gli spazi per le firme di chi prepara, di chi trasporta e di chi riceve. Mettilo nella scatola.' },
+        { el: '#ddt-spedisci', vista: V_DDT_DA_SPEDIRE, facoltativo: true, posizione: 'sotto', titolo: 'Spedisci',
+          testo: 'Scegli chi porta la merce (un collega dall’elenco, oppure scrivi nome e cognome) e quanti colli. Da quel momento la merce è <b>in viaggio</b>: esce dal magazzino di partenza e chi la riceve vede l’avviso.' },
+        { el: '.log-codici', vista: V_DDT_DA_SPEDIRE, facoltativo: true, posizione: 'sopra', titolo: 'Codice a barre e QR',
+          testo: 'Contengono il numero del DDT: chi lo riceve lo legge con il lettore e il DDT si apre da solo.' },
+        { el: '#ddt-ricevi', vista: V_DDT_DA_RICEVERE, facoltativo: true, posizione: 'sotto', titolo: 'Registra la ricezione',
+          testo: 'Ecco un DDT in arrivo. Quando la merce arriva, controlla le confezioni e premi qui: ti mostro il modulo.' },
+        { el: '.log-tab-ricezione', vista: V_RICEZIONE, facoltativo: true, posizione: 'sopra', titolo: 'Quanto è arrivato',
+          testo: 'Una riga per articolo e lotto. La quantità ricevuta è già quella partita: correggi solo quello che manca.' },
+        copia(BARRA_LETTORE, { vista: V_RICEZIONE, titolo: 'Conta con il lettore',
+          testo: 'Leggi le confezioni una per una: la quantità ricevuta diventa quella letta, e quelle che non leggi risultano mancanti.' }),
+        { el: '.log-tab-ricezione .rc-esito', vista: V_RICEZIONE, facoltativo: true, posizione: 'sotto', titolo: 'Se manca qualcosa',
+          testo: 'Scegli se la differenza <b>rientra</b> nel magazzino che l’ha spedita o se è <b>persa in viaggio</b> (rotta, smarrita). Accanto puoi scrivere una nota.' },
+        { el: '#rc-conferma', vista: V_RICEZIONE, facoltativo: true, posizione: 'sopra', titolo: 'Conferma la ricezione',
+          testo: 'La merce entra nel tuo magazzino e il DDT va in archivio come ricevuto, o ricevuto con differenze. Chi l’ha spedito lo vede subito.' },
+        { el: '.log-schede', vista: V_DDT, posizione: 'sotto', titolo: 'Tutto tracciato',
+          testo: 'Ogni DDT conserva chi l’ha preparato, chi l’ha portato, chi l’ha ricevuto e quando, con le eventuali differenze: lo ritrovi in <b>Archivio</b>.' }
+      ]
+    },
+    {
+      id: 'trasferimenti', gruppo: 'giorno', perPagina: 'trasferimenti', pagina: 'trasferimenti', ico: '🔁',
+      titolo: 'Trasferimenti con un DDT',
+      descrizione: 'Spostare merce fra due magazzini, anche i resi alla farmacia, preparando un DDT.',
+      passi: [
+        { el: '#t-da, #t-a', insieme: true, posizione: 'sotto', titolo: 'Da dove, a dove',
+          testo: 'Il magazzino che spedisce e quello che riceve: dalla farmacia a un piano, fra due piani, oppure un reso alla farmacia.' },
+        BARRA_LETTORE,
+        { el: '#t-causale, #t-colli', insieme: true, posizione: 'sotto', titolo: 'Causale e colli',
+          testo: 'La causale si scrive da sola (rifornimento, reso alla farmacia, trasferimento interno): cambiala se serve. I colli sono le scatole che partono.' },
+        { el: '#righe tr:first-child .r-art, #righe tr:first-child .r-q', insieme: true, posizione: 'sotto', titolo: 'Articolo e quantità',
+          testo: 'Scegli l’articolo e scrivi quanto spedisci. Sotto vedi la giacenza del magazzino di partenza e quanta è libera (senza la merce già messa in altri DDT).' },
+        { el: '#righe tr:first-child .r-lotto-scelta', posizione: 'sotto', titolo: 'Lotto',
+          testo: 'Lascia <b>automatico</b>: parte per primo il lotto che scade prima. Scegline uno solo se spedisci proprio quello.' },
+        { el: '#t-note', posizione: 'sotto', titolo: 'Note',
+          testo: 'Chi ritira, per quale paziente o richiesta… quello che serve per ritrovarlo.' },
+        { el: '#registra', posizione: 'sopra', titolo: 'Prepara il DDT',
+          testo: 'Il DDT nasce <b>da spedire</b>: le giacenze non cambiano ancora. Lo spedisci da <b>DDT e consegne</b>, scegliendo chi porta la merce; chi la riceve registra la ricezione.' },
+        { el: '#recenti', facoltativo: true, posizione: 'sopra', titolo: 'Ultimi DDT preparati qui',
+          testo: 'Un clic apre il DDT: da lì lo stampi, lo spedisci o lo annulli.' }
+      ]
+    },
+    {
+      id: 'perdite', gruppo: 'giorno', perPagina: 'perdite', pagina: 'perdite', ico: '🗑️',
       titolo: 'Perdite e scaduti',
       descrizione: 'Confezioni scadute, rotte, smarrite o rese al fornitore.',
       passi: [
-        { el: '#t-data, #t-rep', insieme: true, posizione: 'sotto', titolo: 'Data e reparto',
-          testo: 'Il giorno e il reparto da cui escono le confezioni.' },
+        { el: '#t-data, #t-rep', insieme: true, posizione: 'sotto', titolo: 'Data e magazzino',
+          testo: 'Il giorno e il magazzino da cui escono le confezioni.' },
         BARRA_LETTORE,
         { el: '#righe tr:first-child .r-art, #righe tr:first-child .r-q', insieme: true, posizione: 'sotto', titolo: 'Articolo e quantità',
           testo: 'Cosa togli dal magazzino e quante unità.' },
@@ -189,31 +537,98 @@
       ]
     },
     {
-      id: 'giacenze', perPagina: 'giacenze', pagina: 'giacenze', ico: '📦',
-      titolo: 'Giacenze',
-      descrizione: 'Quanto c’è in ogni reparto, valore del magazzino, articoli sotto scorta.',
+      id: 'scanner', gruppo: 'giorno', pagina: paginaLettore, se: conLettore, ico: '📷',
+      titolo: 'Lettore di codici a barre',
+      descrizione: 'Caricare, scaricare, chiedere e ricevere merce leggendo le confezioni, con il lettore o la fotocamera.',
       passi: [
-        { el: '#g-rep', posizione: 'sotto', titolo: 'Reparto',
-          testo: '<b>Tutti i reparti</b> mette un reparto per colonna; scegliendone uno vedi anche la prossima scadenza.' },
+        { titolo: 'Lettore di codici a barre',
+          testo: 'Puoi leggere le confezioni con un <b>lettore USB o Bluetooth</b>, oppure con la <b>fotocamera</b> del telefono o del tablet.' },
+        { el: '.barra-scanner', facoltativo: true, posizione: 'sotto', titolo: 'La barra di lettura',
+          testo: 'Compare in cima alle pagine dove registri: carico, consumi, trasferimenti, perdite, inventario, nuova richiesta, DDT e ricezione dei DDT.' },
+        { el: '#scanner-campo', facoltativo: true, posizione: 'sotto', titolo: 'Campo di lettura',
+          testo: 'Clicca qui e leggi il codice. Se il lettore non lo legge, scrivi il codice a mano e premi <kbd>Invio</kbd>. Il lettore funziona anche con il cursore in un altro campo.' },
+        { el: '#scanner-modo', facoltativo: true, posizione: 'sotto', titolo: 'Quanto vale una lettura',
+          testo: 'Una <b>unità</b> o una <b>confezione</b> intera (i pezzi per confezione si scrivono nell’articolo). La scelta si ricorda per ogni pagina.' },
+        { el: '#scanner-fotocamera', facoltativo: true, posizione: 'sotto', titolo: 'Fotocamera',
+          testo: 'Inquadra il codice: la finestra si chiude alla prima lettura, oppure scegli la lettura continua per molte confezioni.' },
+        { titolo: 'Codice sconosciuto',
+          testo: 'Se il programma non conosce il codice te lo dice. Chi gestisce gli articoli lo collega a un articolo (o ne crea uno nuovo): da quel momento viene riconosciuto.' },
+        { titolo: 'Nelle altre pagine',
+          testo: 'In Oggi, Giacenze e Scadenze una lettura apre la scheda dell’articolo; in Armadi mostra dove si trova; in DDT e consegne il codice o il QR di un DDT apre il DDT.' }
+      ]
+    },
+
+    /* ---------------- magazzino ---------------- */
+    {
+      id: 'struttura', gruppo: 'magazzino', perPagina: 'struttura', pagina: 'struttura', ico: '🏥',
+      titolo: 'Struttura: la mappa dei piani',
+      descrizione: 'L’edificio piano per piano con i magazzini, e i DDT in viaggio da un piano all’altro.',
+      passi: [
+        { el: '.st-sommario', posizione: 'sotto', titolo: 'In breve',
+          testo: 'Quanti magazzini e piani ci sono, gli articoli sotto scorta in tutta la struttura e i DDT in viaggio adesso.' },
+        { el: '#st-corpo', posizione: 'sopra', titolo: 'Lo spaccato dell’edificio',
+          testo: 'Ogni piano con i suoi magazzini, dal più basso al più alto. La farmacia centrale ha la croce ✚.' },
+        { el: '.st-stanza', posizione: 'sotto', titolo: 'Un magazzino',
+          testo: 'Nome, articoli sotto scorta e in scadenza, quanti armadi e quanti articoli ha. Toccalo per vedere i suoi armadi.' },
+        { el: '.st-viaggio', facoltativo: true, posizione: 'sopra', titolo: 'DDT in viaggio',
+          testo: 'Ogni DDT partito e non ancora ricevuto, con chi lo sta portando. Sulla mappa è un punto che va dal magazzino che spedisce a quello che riceve, passando dal vano scale. <b>Apri</b> mostra il DDT.' },
+        { el: '#st-gestisci', se: puo('struttura'), facoltativo: true, posizione: 'sotto', titolo: 'Gestisci magazzini',
+          testo: 'Per aggiungere un magazzino o cambiarne piano, colore e descrizione: pagina <b>Magazzini e assortimento</b>.' }
+      ]
+    },
+    {
+      id: 'armadi', gruppo: 'magazzino', perPagina: 'armadi', pagina: 'armadi', ico: '🗄️',
+      titolo: 'Armadi: dove si trova ogni cosa',
+      descrizione: 'Trovare un farmaco negli armadi (anche con il lettore), leggere il pannello, disporre gli articoli trascinandoli.',
+      passi: [
+        { el: '#ar-magazzino', vista: V_ARMADI, posizione: 'sotto', titolo: 'Magazzino',
+          testo: 'Scegli il magazzino: sotto compaiono i suoi armadi.' },
+        { el: '#ar-cerca', vista: V_ARMADI, posizione: 'sotto', titolo: 'Dove si trova?',
+          testo: 'Scrivi il nome di un farmaco: si apre l’armadio giusto e la sua scatola lampeggia. Puoi anche leggere la confezione con il lettore di codici a barre, da qualsiasi punto della pagina.' },
+        { el: '#ar-armadi', vista: V_ARMADI, facoltativo: true, posizione: 'sotto', titolo: 'Gli armadi del magazzino',
+          testo: 'Armadi, frigorifero, cassettiere, carrelli e cassaforte. La barra colorata sotto il nome dice se dentro c’è qualcosa da controllare.' },
+        { el: '#ar-vista', vista: V_ARMADI, posizione: 'destra', titolo: 'L’armadio aperto',
+          testo: 'Ogni scatola è un articolo al suo posto (ripiano e posto). Colore e segno dicono lo stato: in ordine, da riordinare, sotto scorta, in scadenza. L’altezza dice quanta merce c’è rispetto alla scorta massima. Tocca una scatola per i dettagli.' },
+        { el: '#ar-legenda', vista: V_ARMADI, facoltativo: true, posizione: 'sopra', titolo: 'Legenda',
+          testo: 'Tocca uno stato per far risaltare solo quelle scatole; toccalo di nuovo per vederle tutte.' },
+        { el: '#ar-lato', vista: V_ARMADI, posizione: 'sinistra', titolo: 'Il pannello',
+          testo: 'Il riepilogo dell’armadio. Dopo aver toccato una scatola: giacenza, scorte, lotti e scadenze dell’articolo, con i pulsanti per consumi, perdite, richiesta alla farmacia e scheda dell’articolo.' },
+        { el: '#ar-disponi', vista: V_ARMADI_MIO, se: puo('ubicazioni'), facoltativo: true, posizione: 'sotto', titolo: 'Disponi',
+          testo: 'Per sistemare gli articoli negli armadi dei tuoi magazzini. Te lo apro io: niente si sposta finché non lo fai tu.' },
+        { el: '#ar-voci', vista: V_ARMADI_MIO, ambiente: MODO_DISPONI, se: puo('ubicazioni'), facoltativo: true, posizione: 'sinistra', titolo: 'Trascina al posto giusto',
+          testo: 'Trascina un articolo dall’elenco in una casella dell’armadio (con il mouse, o con il dito sulla maniglia ⠿). Trascina una scatola su un’altra casella per spostarla, oppure qui sull’elenco per toglierla. Da tastiera: <b>Metti</b>, poi le frecce e Invio.' },
+        { el: '#ar-auto', vista: V_ARMADI_MIO, ambiente: MODO_DISPONI, se: puo('ubicazioni'), facoltativo: true, posizione: 'sotto', titolo: 'Disposizione automatica',
+          testo: 'Sistema da sola gli articoli ancora senza posto, per categoria e per nome, ripiano dopo ripiano. Gli articoli da frigorifero vanno nel frigorifero, gli stupefacenti nella cassaforte. <b>Svuota</b> toglie tutto dall’armadio.' },
+        { el: '#ar-disponi', vista: V_ARMADI_MIO, ambiente: MODO_DISPONI, se: puo('ubicazioni'), facoltativo: true, posizione: 'sotto', titolo: 'Ogni spostamento si salva',
+          testo: 'Gli spostamenti si salvano subito e li vedono tutti. Quando hai finito premi <b>✓ Fine disposizione</b> (lo stesso pulsante) per tornare alla vista normale.' }
+      ]
+    },
+    {
+      id: 'giacenze', gruppo: 'magazzino', perPagina: 'giacenze', pagina: 'giacenze', ico: '📦',
+      titolo: 'Giacenze',
+      descrizione: 'Quanto c’è in ogni magazzino, valore della merce, articoli sotto scorta.',
+      passi: [
+        { el: '#g-rep', posizione: 'sotto', titolo: 'Magazzino',
+          testo: '<b>Tutti</b> mette un magazzino per colonna; scegliendone uno vedi anche la prossima scadenza.' },
         { el: '#g-cat, #g-cerca', insieme: true, posizione: 'sotto', titolo: 'Cerca',
           testo: 'Per categoria, nome, principio attivo o codice.' },
         { el: '#g-sotto', risali: '.spunta', posizione: 'sotto', titolo: 'Solo sotto scorta',
-          testo: 'Gli articoli sotto la scorta minima nella Farmacia: è la lista da ordinare.' },
+          testo: 'Gli articoli sotto la scorta minima: quella dell’assortimento di ogni magazzino (per la farmacia centrale anche quella dell’anagrafica). È la lista da riordinare.' },
         { el: '#g-tab', posizione: 'sopra', titolo: 'La tabella',
-          testo: 'Tocca una riga per aprire la scheda dell’articolo, con lotti e ultimi movimenti. In fondo il valore del magazzino.' },
+          testo: 'Tocca una riga per aprire la scheda dell’articolo, con lotti e ultimi movimenti. In fondo il valore della merce.' },
         { el: '#g-stampa, #g-excel', insieme: true, posizione: 'sotto', titolo: 'Stampa ed Excel',
           testo: 'Stampano o esportano esattamente quello che vedi, con gli stessi filtri.' }
       ]
     },
     {
-      id: 'scadenze', perPagina: 'scadenze', pagina: 'scadenze', ico: '⏳',
+      id: 'scadenze', gruppo: 'magazzino', perPagina: 'scadenze', pagina: 'scadenze', ico: '⏳',
       titolo: 'Scadenze',
       descrizione: 'Lotti in giacenza ordinati per scadenza; togliere gli scaduti.',
       passi: [
         { el: '#z-entro', posizione: 'sotto', titolo: 'Quali lotti',
           testo: 'Solo scaduti, entro 30 o 60 giorni, entro il preavviso impostato, o tutti.' },
-        { el: '#z-rep, #z-cat', insieme: true, posizione: 'sotto', titolo: 'Reparto e categoria',
-          testo: 'Per vedere un reparto solo, o solo farmaci o presidi.' },
+        { el: '#z-rep, #z-cat', insieme: true, posizione: 'sotto', titolo: 'Magazzino e categoria',
+          testo: 'Per vedere un magazzino solo, o solo farmaci o presidi.' },
         { el: '#z-tab', posizione: 'sopra', titolo: 'Dal più urgente',
           testo: 'Le etichette rosse sono lotti scaduti o che scadono entro 30 giorni; le arancioni entro il preavviso.' },
         { el: '#z-tab [data-perdita]', se: puo('perdita'), facoltativo: true, posizione: 'sinistra', titolo: 'Togli dal magazzino',
@@ -223,31 +638,31 @@
       ]
     },
     {
-      id: 'movimenti', perPagina: 'movimenti', pagina: 'movimenti', ico: '🧾',
+      id: 'movimenti', gruppo: 'magazzino', perPagina: 'movimenti', pagina: 'movimenti', ico: '🧾',
       titolo: 'Movimenti e annullo',
       descrizione: 'L’elenco completo con i filtri; annullare un movimento sbagliato.',
       passi: [
         { el: '#v-dal, #v-al', insieme: true, posizione: 'sotto', titolo: 'Periodo',
           testo: 'Di base dal primo del mese a oggi.' },
         { el: '#v-tipo, #v-rep, #v-cerca', insieme: true, posizione: 'sotto', titolo: 'Filtri',
-          testo: 'Tipo di movimento, reparto, e una ricerca su articolo, lotto, fornitore o documento.' },
+          testo: 'Tipo di movimento, magazzino, e una ricerca su articolo, lotto, fornitore o documento (anche il numero di un DDT).' },
         { el: '#v-ann', risali: '.spunta', posizione: 'sotto', titolo: 'Annullati',
           testo: 'I movimenti annullati restano nell’elenco, barrati, con chi li ha annullati e perché.' },
         { el: '#v-tab', posizione: 'sopra', titolo: 'Elenco',
           testo: 'Ogni riga ha l’operatore che l’ha registrata. Tocca il nome dell’articolo per aprirne la scheda.' },
         { el: '#v-tab [data-annulla]', se: puoAnnullareQualcosa, facoltativo: true, posizione: 'sinistra', titolo: 'Annullare',
-          testo: 'Un movimento non si cancella: si <b>annulla</b> scrivendo il motivo. Vedi il pulsante solo sui movimenti che puoi annullare.' },
+          testo: 'Un movimento non si cancella: si <b>annulla</b> scrivendo il motivo. Vedi il pulsante solo sui movimenti che puoi annullare; quelli nati da un DDT si annullano annullando il DDT.' },
         { el: '#v-excel', posizione: 'sotto', titolo: 'Excel',
           testo: 'Esporta i movimenti filtrati, con tutte le colonne.' }
       ]
     },
     {
-      id: 'inventario', perPagina: 'inventario', pagina: 'inventario', ico: '✅',
+      id: 'inventario', gruppo: 'magazzino', perPagina: 'inventario', pagina: 'inventario', ico: '✅',
       titolo: 'Inventario',
       descrizione: 'Foglio di conta: le differenze diventano rettifiche.',
       passi: [
-        { el: '#i-data, #i-rep', insieme: true, posizione: 'sotto', titolo: 'Data e reparto',
-          testo: 'Il giorno della conta e il reparto che stai contando.' },
+        { el: '#i-data, #i-rep', insieme: true, posizione: 'sotto', titolo: 'Data e magazzino',
+          testo: 'Il giorno della conta e il magazzino che stai contando.' },
         copia(BARRA_LETTORE, { testo: 'Ogni lettura aggiunge alla quantità contata dell’articolo: puoi contare passando le confezioni al lettore.' }),
         { el: '#i-stampa', posizione: 'sotto', titolo: 'Foglio di conta',
           testo: 'Stampalo e portalo con te mentre conti sugli scaffali.' },
@@ -257,8 +672,77 @@
           testo: 'Le differenze diventano rettifiche d’inventario. Prima di registrare il programma ti chiede conferma.' }
       ]
     },
+
+    /* ---------------- analisi ---------------- */
     {
-      id: 'registro', perPagina: 'registro', pagina: 'registro', ico: '📅',
+      id: 'previsioni', gruppo: 'analisi', perPagina: 'previsioni', pagina: 'previsioni', ico: '📈',
+      titolo: 'Previsioni e fabbisogno',
+      descrizione: 'Filtri, indicatori, grafico con la previsione, fabbisogno per articolo, classi ABC-XYZ e proposta d’ordine con Excel.',
+      passi: [
+        { el: '#pv-rep', posizione: 'sotto', titolo: 'Per quale magazzino',
+          testo: function () {
+            return (soloSuoiMagazzini() ? 'Uno dei tuoi magazzini, o tutti insieme.' : 'Tutta la struttura, la sola farmacia centrale o un magazzino di piano.') +
+              ' Le previsioni nascono dai consumi e dalle perdite registrati (i trasferimenti fra magazzini non sono consumi).';
+          } },
+        { el: '#pv-cat, #pv-cerca', insieme: true, posizione: 'sotto', titolo: 'Categoria e ricerca',
+          testo: 'Solo farmaci o solo presidi, oppure un articolo per nome o principio attivo.' },
+        { el: 'input[name="pv-orizzonte"]', risali: '.an-segmenti', posizione: 'sotto', titolo: 'Quanto lontano guardare',
+          testo: 'Previsione a 7, 30 o 90 giorni. Accanto, <b>Vista</b> raggruppa il grafico per giorno, settimana o mese.' },
+        { el: '#pv-ind', posizione: 'sotto', titolo: 'Gli indicatori',
+          testo: 'Consumo previsto nel periodo e il suo valore, articoli al punto di riordino, quelli che finiranno prima della prossima consegna e quanti ce ne sono da ordinare.' },
+        { el: '#pv-grafico', posizione: 'sopra', titolo: 'Consumi e previsione',
+          testo: 'Linea piena: i consumi veri. Linea tratteggiata: la previsione, con la fascia in cui il consumo cadrà 9 volte su 10 (più si guarda lontano, più si allarga). In alto a destra scegli pezzi o euro.' },
+        { el: '#pv-schede', posizione: 'sotto', titolo: 'Le schede',
+          testo: function () {
+            return '<b>Fabbisogno per articolo</b>, <b>Classi ABC-XYZ</b>' + (App.puo('ordini') ? ' e <b>Proposta d’ordine</b>' : '') + ': toccane una per aprirla.';
+          } },
+        { el: '#pv-tabella thead', facoltativo: true, posizione: 'sotto', titolo: 'Fabbisogno per articolo',
+          testo: function () {
+            return 'Per ogni articolo: consumo medio, tendenza, per quanti giorni basta, quando finirà, scorta di sicurezza, punto di riordino e quanto ' +
+              (eFarmacia() ? 'ordinare' : 'chiedere alla farmacia') + '. Tocca un’intestazione per ordinare la tabella.';
+          } },
+        { el: '#pv-tabella .an-art-btn', facoltativo: true, posizione: 'sotto', titolo: 'Il dettaglio di un articolo',
+          testo: 'Il nome apre una finestra con il grafico dell’articolo, i consumi per giorno della settimana e il confronto dei metodi di previsione: il programma usa quello che ha sbagliato meno nelle ultime 4 settimane.' },
+        { el: '#pv-excel', facoltativo: true, posizione: 'sotto', titolo: 'Excel',
+          testo: 'Esporta la tabella del fabbisogno, con gli stessi filtri.' },
+        { el: '#pv-tab-abc', posizione: 'sotto', titolo: 'Classi ABC-XYZ',
+          testo: '<b>A, B, C</b>: quanto pesa l’articolo sul valore dei consumi (gli A fanno l’80%). <b>X, Y, Z</b>: quanto è regolare il consumo (X costante, Z a sbalzi). Nella matrice tocca una casella per filtrare la tabella: gli <b>AX</b> si seguono da vicino, i <b>CZ</b> si tengono al minimo.' },
+        { el: '#pv-tab-ordine', se: puo('ordini'), facoltativo: true, posizione: 'sotto', titolo: 'Proposta d’ordine',
+          testo: 'Quanto ordinare ai fornitori per tutta la struttura: consumo previsto fino al prossimo ordine più la scorta di sicurezza, meno quello che c’è già (anche in viaggio), arrotondato a confezioni intere e diviso per fornitore. Puoi cambiare le confezioni, poi <b>Excel</b> (un foglio per fornitore) o <b>Stampa</b>.' }
+      ]
+    },
+    {
+      id: 'distribuzione', gruppo: 'analisi', perPagina: 'distribuzione', pagina: 'distribuzione', ico: '🧭',
+      titolo: 'Distribuzione ai magazzini',
+      descrizione: 'Quanto la farmacia centrale ha dato a ogni magazzino, cosa ne è stato e dove si trova la merce adesso.',
+      passi: [
+        { el: '#ds-periodo', posizione: 'sotto', titolo: 'Periodo',
+          testo: 'Il mese in corso, gli ultimi 3, 6 o 12 mesi, oppure due date a scelta.' },
+        { el: '#ds-cat, #ds-cerca', insieme: true, posizione: 'sotto', titolo: 'Categoria e articolo',
+          testo: 'Solo farmaci o presidi, oppure un articolo per nome.' },
+        { el: 'input[name="ds-misura"]', risali: '.an-segmenti', posizione: 'sotto', titolo: 'Pezzi o euro',
+          testo: 'Tutti i numeri e i grafici in pezzi oppure in valore.' },
+        { el: '#ds-ind', posizione: 'sotto', titolo: 'In breve',
+          testo: 'Quanto la farmacia ha dato ai magazzini nel periodo, quanto è stato consumato e perso, i resi e la merce in viaggio.' },
+        { el: '#ds-sankey', posizione: 'sopra', titolo: 'Dalla farmacia ai magazzini',
+          testo: 'La farmacia centrale, quanto ha dato a ogni magazzino (più è spesso il flusso, più merce) e cosa ne è stato: consumato, perso o reso. Passa sopra un flusso (o toccalo) per leggere i numeri.' },
+        { el: '#ds-mesi', posizione: 'sopra', titolo: 'Dato ogni mese',
+          testo: 'Quanto ha ricevuto ogni magazzino, mese per mese.' },
+        { el: '#ds-dove', posizione: 'sopra', titolo: 'Dove si trova la merce adesso',
+          testo: 'La giacenza di oggi magazzino per magazzino, compresa la merce in viaggio: più grande il riquadro, più merce.' },
+        { el: '#ds-art', posizione: 'sotto', titolo: 'Dove si trova un articolo',
+          testo: 'Scegli un articolo: il grafico mostra quante confezioni ci sono in ogni magazzino.' },
+        { el: function () { return document.querySelector('#ds-tabella-box thead') || document.querySelector('#ds-tabella-box'); },
+          posizione: 'sotto', titolo: 'Articolo per magazzino',
+          testo: 'Per ogni articolo e ogni magazzino: <b>Dato</b> dalla farmacia centrale nel periodo, <b>Cons.</b> (consumi e perdite) e <b>Giac.</b>, quanto ne resta adesso. Il camioncino 🚚 indica la merce in viaggio.' },
+        { el: '#ds-excel', posizione: 'sotto', titolo: 'Excel',
+          testo: 'Tre fogli: per magazzino, dato mese per mese e articolo per magazzino.' }
+      ]
+    },
+
+    /* ---------------- registri e archivio ---------------- */
+    {
+      id: 'registro', gruppo: 'archivio', perPagina: 'registro', pagina: 'registro', ico: '📅',
       titolo: 'Nota consumi mensile',
       descrizione: 'Il modulo del mese per reparto: correzioni, stampa ed Excel.',
       passi: [
@@ -267,7 +751,7 @@
         { el: '#r-tutti', risali: '.spunta', posizione: 'sotto', titolo: 'Tutti gli articoli',
           testo: 'Spunta per avere nel modulo anche gli articoli senza movimenti nel mese.' },
         { el: '#r-tab table.registro thead', facoltativo: true, posizione: 'sotto', titolo: 'Le colonne',
-          testo: 'Residui, carichi, consumi giorno per giorno, perdite, residui finali e importo: si calcolano da soli dai movimenti.' },
+          testo: 'Residui, carichi, consumi giorno per giorno, perdite, residui finali e importo: si calcolano da soli dai movimenti. La merce arrivata con un DDT conta il giorno della ricezione.' },
         { el: cellaDiOggi, se: puoCorreggereRegistro, facoltativo: true, posizione: 'sotto', titolo: 'Le caselle dei giorni',
           testo: 'Clicca la casella di un giorno e scrivi il consumo, come sul foglio: il valore sostituisce i consumi di quel giorno.' },
         { el: cellaDiOggi, se: puoCorreggereRegistro, facoltativo: true, posizione: 'sotto', titolo: 'Frecce e Invio',
@@ -281,7 +765,7 @@
       ]
     },
     {
-      id: 'articoli', perPagina: 'articoli', pagina: 'articoli', ico: '🏷️',
+      id: 'articoli', gruppo: 'archivio', perPagina: 'articoli', pagina: 'articoli', ico: '🏷️',
       titolo: 'Articoli',
       descrizione: 'L’anagrafica di farmaci e presidi, importazione da Excel.',
       passi: [
@@ -290,9 +774,9 @@
         { el: '#a-cat, #a-non', insieme: true, posizione: 'sotto', titolo: 'Filtri',
           testo: 'Farmaci o presidi; spunta <b>Mostra non attivi</b> per vedere anche gli articoli nascosti.' },
         { el: '#a-tab .tabella tbody tr', facoltativo: true, posizione: 'sotto', titolo: 'Scheda dell’articolo',
-          testo: 'Tocca una riga per vedere giacenze e lotti di ogni reparto e gli ultimi movimenti.' },
+          testo: 'Tocca una riga per vedere giacenze e lotti di ogni magazzino e gli ultimi movimenti.' },
         { el: '#a-tab [data-modifica]', se: puo('articoli'), facoltativo: true, posizione: 'sinistra', titolo: 'Modifica',
-          testo: 'Per correggere nome, unità, prezzo, scorta minima. Un articolo con movimenti non si elimina: togli la spunta <b>Attivo</b>.' },
+          testo: 'Per correggere nome, unità, prezzo, scorta minima, fornitore abituale e giorni di consegna. Un articolo con movimenti non si elimina: togli la spunta <b>Attivo</b>.' },
         { el: '#a-nuovo', se: puo('articoli'), posizione: 'sotto', titolo: 'Nuovo articolo',
           testo: 'Denominazione, categoria, unità, codice AIC, prezzo e scorta minima.' },
         { el: '#a-importa', se: puo('articoli'), posizione: 'sotto', titolo: 'Importa da Excel',
@@ -302,54 +786,87 @@
       ]
     },
     {
-      id: 'scanner', pagina: paginaLettore, se: conLettore, ico: '📷',
-      titolo: 'Lettore di codici a barre',
-      descrizione: 'Caricare e scaricare leggendo le confezioni, con il lettore o la fotocamera.',
+      id: 'magazzini', gruppo: 'archivio', perPagina: 'magazzini', pagina: 'magazzini', ico: '🏬',
+      titolo: 'Magazzini e assortimento',
+      descrizione: 'Dati dei magazzini, armadi, assortimento con le scorte e «Proponi dai consumi».',
       passi: [
-        { titolo: 'Lettore di codici a barre',
-          testo: 'Puoi leggere le confezioni con un <b>lettore USB o Bluetooth</b>, oppure con la <b>fotocamera</b> del telefono o del tablet.' },
-        { el: '.barra-scanner', facoltativo: true, posizione: 'sotto', titolo: 'La barra di lettura',
-          testo: 'Compare in cima alle pagine dove registri: carico, consumi, trasferimenti, perdite, inventario.' },
-        { el: '#scanner-campo', facoltativo: true, posizione: 'sotto', titolo: 'Campo di lettura',
-          testo: 'Clicca qui e leggi il codice. Se il lettore non lo legge, scrivi il codice a mano e premi <kbd>Invio</kbd>. Il lettore funziona anche con il cursore in un altro campo.' },
-        { el: '#scanner-modo', facoltativo: true, posizione: 'sotto', titolo: 'Quanto vale una lettura',
-          testo: 'Una <b>unità</b> o una <b>confezione</b> intera (i pezzi per confezione si scrivono nell’articolo). La scelta si ricorda per ogni pagina.' },
-        { el: '#scanner-fotocamera', facoltativo: true, posizione: 'sotto', titolo: 'Fotocamera',
-          testo: 'Inquadra il codice: la finestra si chiude alla prima lettura, oppure scegli la lettura continua per molte confezioni.' },
-        { titolo: 'Codice sconosciuto',
-          testo: 'Se il programma non conosce il codice te lo dice. Chi gestisce gli articoli lo collega a un articolo (o ne crea uno nuovo): da quel momento viene riconosciuto.' },
-        { titolo: 'Nelle altre pagine',
-          testo: 'In Oggi, Giacenze e Scadenze una lettura apre la scheda dell’articolo, con giacenze e lotti.' }
+        { el: '#mg-lista', posizione: 'destra', titolo: 'I magazzini',
+          testo: 'La farmacia centrale e i magazzini di piano, raggruppati per piano. Il numero rosso: articoli sotto scorta. Tocca un magazzino per aprirlo.' },
+        { el: '#mg-nuovo', se: puo('struttura'), posizione: 'sotto', titolo: 'Nuovo magazzino',
+          testo: 'Nome, piano, colore… Dopo averlo creato aggiungi i suoi armadi e il suo assortimento.' },
+        { el: '.mg-schede', posizione: 'sotto', titolo: 'Tre schede',
+          testo: '<b>Dati</b> del magazzino, i suoi <b>Armadi</b> e il suo <b>Assortimento</b> con le scorte. Te le mostro una per una.' },
+        { el: '#mg-nome', risali: '.scheda', vista: V_MG_DATI, se: puo('struttura'), facoltativo: true, posizione: 'destra', titolo: 'Dati del magazzino',
+          testo: 'Nome, tipo (farmacia centrale o magazzino di piano), piano e livello, colore e descrizione. La farmacia centrale è una sola. Un magazzino già usato non si elimina: si toglie la spunta «Magazzino attivo».' },
+        { el: '#mg-stanza', vista: V_MG_DATI, se: puo('struttura'), facoltativo: true, posizione: 'sinistra', titolo: 'Come appare sulla mappa',
+          testo: 'L’anteprima cambia mentre scrivi. Poi premi <b>Salva</b>.' },
+        { el: '#mg-pannello', vista: V_MG_ARMADI, facoltativo: true, posizione: 'sopra', titolo: 'Armadi',
+          testo: function () {
+            return 'Armadi, frigorifero, cassettiere, carrelli e cassaforte, ognuno con i suoi ripiani e posti. <b>Apri</b> lo mostra nella pagina Armadi' +
+              (App.puo('struttura') ? '; <b>+ Nuovo armadio</b> ne aggiunge uno.' : '.');
+          } },
+        { el: '#as-tab', vista: V_MG_ASSORTIMENTO, facoltativo: true, posizione: 'sopra', titolo: 'Assortimento e scorte',
+          testo: 'Gli articoli che il magazzino tiene, con <b>scorta minima</b>, <b>punto di riordino</b> e <b>scorta massima</b>, la giacenza e per quanti giorni basta. Le scorte servono agli avvisi «sotto scorta» e a «Proponi le quantità» delle richieste.' },
+        { el: '#as-nuovo, #as-agg', insieme: true, vista: V_MG_ASSORTIMENTO, se: puo('assortimento'), facoltativo: true, posizione: 'sotto', titolo: 'Aggiungi articoli',
+          testo: 'Scrivi il nome e premi <b>Aggiungi</b>, oppure aggiungi in un colpo quelli usati dal magazzino negli ultimi 90 giorni.' },
+        { el: '#as-proponi', vista: V_MG_ASSORTIMENTO, se: puo('assortimento'), facoltativo: true, posizione: 'sotto', titolo: 'Proponi dai consumi',
+          testo: 'Propone le scorte dai consumi medi degli ultimi 90 giorni: minima circa 3 giorni, riordino circa 7, massima circa 14. Controlla e correggi.' },
+        { el: '#as-salva', vista: V_MG_ASSORTIMENTO, se: puo('assortimento'), facoltativo: true, posizione: 'sopra', titolo: 'Salva assortimento',
+          testo: 'Le modifiche restano da parte (anche se cambi scheda) finché non premi <b>Salva assortimento</b>; <b>Annulla le modifiche</b> le toglie.' }
       ]
     },
+
+    /* ---------------- amministrazione ---------------- */
     {
-      id: 'utenti', perPagina: 'utenti', pagina: 'utenti', ico: '👥',
+      id: 'utenti', gruppo: 'amministrazione', perPagina: 'utenti', pagina: 'utenti', ico: '👥',
       titolo: 'Utenti e ruoli',
-      descrizione: 'Creare gli utenti, cambiare ruolo e reparti, dare una nuova password.',
+      descrizione: 'Creare gli utenti, cambiare ruolo e magazzini, dare una nuova password.',
       passi: [
         { el: '#contenuto > .banda.info', posizione: 'sotto', titolo: 'I ruoli',
-          testo: 'Cosa può fare ogni ruolo. Il menu di ogni utente mostra solo le pagine che può usare.' },
+          testo: 'Cosa può fare ogni ruolo: amministratore, farmacista della farmacia centrale, responsabile di magazzino, direzione (sola lettura). Il menu di ogni utente mostra solo le pagine che può usare.' },
         { el: '#u-nuovo', posizione: 'sotto', titolo: 'Nuovo utente',
-          testo: 'Nome utente, nome e cognome, ruolo e una password provvisoria (<b>Genera</b> ne crea una facile da dettare). Al primo accesso l’utente sceglie la sua.' },
+          testo: 'Nome utente, nome e cognome, ruolo, i magazzini (per il responsabile di magazzino) e una password provvisoria (<b>Genera</b> ne crea una facile da dettare). Al primo accesso l’utente sceglie la sua.' },
         { el: '#u-tab', posizione: 'sopra', titolo: 'Elenco',
-          testo: 'Per ognuno lo stato (attivo, password provvisoria, bloccato, disattivato) e l’ultimo accesso.' },
+          testo: 'Per ognuno ruolo, magazzini, stato (attivo, password provvisoria, bloccato, disattivato) e ultimo accesso.' },
         { el: '#u-tab [data-modifica]', facoltativo: true, posizione: 'sinistra', titolo: 'Modifica',
-          testo: 'Cambia ruolo e reparti. Togli la spunta <b>Utente attivo</b> per bloccare l’accesso senza perdere i suoi movimenti.' },
+          testo: 'Cambia ruolo e magazzini. Togli la spunta <b>Utente attivo</b> per bloccare l’accesso senza perdere i suoi movimenti.' },
         { el: '#u-tab [data-password]', facoltativo: true, posizione: 'sinistra', titolo: 'Nuova password',
-          testo: 'Per chi l’ha dimenticata o è bloccato dopo 5 tentativi: dai una password provvisoria, da cambiare al primo accesso.' },
+          testo: function () {
+            return 'Per chi l’ha dimenticata o è bloccato dopo 5 tentativi: dai una password provvisoria, da cambiare al primo accesso.' +
+              (App.paginaPermessa('sicurezza') ? ' La verifica in due passaggi di chi ha perso il telefono si azzera dalla pagina <b>Sicurezza</b>.' : '');
+          } },
         { el: '#u-anche', risali: '.spunta', posizione: 'sotto', titolo: 'Utenti disattivati',
           testo: 'Spunta per vederli e, se serve, riattivarli.' }
       ]
     },
     {
-      id: 'attivita', perPagina: 'attivita', pagina: 'attivita', ico: '📜',
+      id: 'sicurezza', gruppo: 'amministrazione', perPagina: 'sicurezza', pagina: 'sicurezza', ico: '🛡️',
+      titolo: 'Sicurezza: verifica in due passaggi',
+      descrizione: 'Chi deve usare la verifica con il telefono, a che punto sono gli utenti, azzerarla a chi ha perso il telefono.',
+      passi: [
+        { el: '.sic-spiega', posizione: 'sotto', titolo: 'Cos’è',
+          testo: 'Oltre alla password serve un codice di 6 cifre che l’app sul telefono dell’utente cambia ogni 30 secondi. Chi scopre una password, senza il telefono non entra.' },
+        { el: '#sic-mio', posizione: 'sotto', titolo: 'Prima la tua',
+          testo: 'Attivala prima sul tuo utente: questo pulsante apre la finestra <b>Sicurezza dell’account</b> (c’è anche un giro guidato apposta, «Sicurezza dell’account»).' },
+        { el: '.sic-criteri', posizione: 'sotto', titolo: 'Chi deve usarla',
+          testo: '<b>Nessuno</b> (ognuno sceglie), <b>solo gli amministratori</b>, <b>amministratori e farmacisti</b>, oppure <b>tutti</b>. Sotto vedi quanti utenti dovranno ancora attivarla.' },
+        { el: '#sic-salva-criterio', posizione: 'sotto', titolo: 'Salva il criterio',
+          testo: 'Chi deve averla e non l’ha attivata, al prossimo accesso (o subito, se è collegato) viene guidato passo per passo: finché non la attiva non può lavorare.' },
+        { el: '.sic-tabella', facoltativo: true, posizione: 'sopra', titolo: 'Gli utenti',
+          testo: 'Per ognuno: verifica attiva, da attivare o non attiva, codici di recupero rimasti, computer ricordati e ultimo accesso.' },
+        { el: '#sic-utenti [data-azzera]', facoltativo: true, posizione: 'sinistra', titolo: 'Azzera',
+          testo: 'Per chi ha perso il telefono e i codici di recupero: toglie la verifica e i computer ricordati e chiude le sue sessioni. Se il criterio la richiede, al prossimo accesso la riattiva.' }
+      ]
+    },
+    {
+      id: 'attivita', gruppo: 'amministrazione', perPagina: 'attivita', pagina: 'attivita', ico: '📜',
       titolo: 'Registro attività',
       descrizione: 'Chi ha fatto cosa e quando: accessi e operazioni.',
       passi: [
         { el: '#t-dal, #t-al', insieme: true, posizione: 'sotto', titolo: 'Periodo',
           testo: 'Di base l’ultima settimana.' },
         { el: '#t-utente, #t-azione', insieme: true, posizione: 'sotto', titolo: 'Utente e azione',
-          testo: 'Un utente solo, oppure un tipo di azione: accessi, movimenti, correzioni del registro, articoli, utenti…' },
+          testo: 'Un utente solo, oppure un tipo di azione: accessi e sicurezza, movimenti, richieste e DDT, struttura, sistema…' },
         { el: '#t-tab', posizione: 'sopra', titolo: 'Il registro',
           testo: 'Quando, chi, cosa e da quale computer (indirizzo IP). In rosso gli accessi non riusciti.' },
         { el: '#t-aggiorna, #t-excel', insieme: true, posizione: 'sotto', titolo: 'Aggiorna ed Excel',
@@ -357,16 +874,53 @@
       ]
     },
     {
-      id: 'configura', perPagina: 'configura', pagina: 'configura', ico: '⚙️',
-      titolo: 'Configurazione e copie di sicurezza',
-      descrizione: 'Struttura, reparti, copie di sicurezza del server.',
+      id: 'sistema', gruppo: 'amministrazione', perPagina: 'sistema', pagina: 'sistema', ico: '🩺',
+      titolo: 'Sistema: base dati e copie',
+      descrizione: 'Semaforo, controllo, copia, prova di ripristino e seconda cartella delle copie.',
       passi: [
-        { el: '#k-struttura', risali: '.scheda', se: puo('impostazioni'), posizione: 'destra', titolo: 'Struttura',
-          testo: 'Nome e logo (compaiono anche nell’accesso), dati del modulo stampato e giorni di preavviso per le scadenze.' },
-        { el: '#k-reparti', risali: '.scheda', se: puo('impostazioni'), posizione: 'sinistra', titolo: 'Reparti',
-          testo: 'Il reparto <b>centrale</b> è la Farmacia. Un reparto con movimenti non si elimina: togli la spunta <b>Attivo</b>.' },
+        { el: '#sis-semaforo, #sis-stato-titolo, #sis-spiega', insieme: true, posizione: 'sotto', titolo: 'Il semaforo',
+          testo: '<b>Verde</b>: tutto a posto. <b>Giallo</b>: qualcosa da guardare, per esempio una copia vecchia o poco spazio sul disco. <b>Rosso</b>: un problema; accanto c’è scritto cosa fare. Il programma controlla la base dati all’avvio e ogni notte e, se serve, si ripara da solo.' },
+        { el: '#sis-controlla', posizione: 'sotto', titolo: 'Controlla adesso',
+          testo: 'Controllo completo di magazzino e utenti. Si può fare anche mentre gli altri lavorano.' },
+        { el: '#sis-copia', posizione: 'sotto', titolo: 'Copia adesso',
+          testo: 'Fa subito una copia di magazzino e utenti e la verifica (la riapre e la controlla). Utile prima di un cambiamento importante.' },
+        { el: '#sis-prova', posizione: 'sotto', titolo: 'Prova di ripristino',
+          testo: 'Ricostruisce i dati dall’ultima copia più il giornale delle modifiche, da parte e per finta, e li confronta con quelli veri tabella per tabella. Se tutto coincide, in caso di guasto il ripristino funzionerà.' },
+        { el: '#sis-numeri', posizione: 'sotto', titolo: 'I numeri',
+          testo: 'Dimensione della base dati, copie, spazio libero sul disco, ultima revisione e ultimo controllo.' },
+        { el: '#sis-grafico', posizione: 'sopra', titolo: 'Crescita nel tempo',
+          testo: 'Come cresce la base dati e quanto occupano le copie. Sotto il grafico, gli stessi dati in tabella.' },
+        { el: '#sis-copie', posizione: 'sopra', titolo: 'Copie di sicurezza',
+          testo: 'Ogni ora, se c’è stato lavoro, una copia verificata: tutte quelle delle ultime 24 ore, poi una al giorno per 14 giorni, una alla settimana per 8 settimane, una al mese per un anno.' },
+        { el: '#sis-cronologia', posizione: 'sopra', titolo: 'Controlli e cure',
+          testo: 'Quando il programma ha controllato la base dati e, se mai è servito, quando l’ha riparata e da quale copia.' },
+        { el: '#sis-seconda', posizione: 'sopra', titolo: 'Seconda cartella',
+          testo: 'Un disco esterno o una cartella di rete: il server ci mette una seconda copia delle copie e del giornale. Se si rompe il disco del server, i dati si recuperano da lì.' }
+      ]
+    },
+    {
+      id: 'configura', gruppo: 'amministrazione', perPagina: 'configura', pagina: 'configura', ico: '⚙️',
+      titolo: 'Configurazione e copie di sicurezza',
+      descrizione: 'Magazzini, marchio e nome del programma, modulo stampato, previsioni e ordini, copie di sicurezza.',
+      passi: [
+        { el: '#k-reparti', risali: '.scheda', se: puo('impostazioni'), posizione: 'sotto', titolo: 'Magazzini e reparti',
+          testo: 'L’elenco dei magazzini attivi: la farmacia centrale e i magazzini di piano. Si creano e si cambiano, con armadi e assortimento, dalla pagina <b>Magazzini e assortimento</b>.' },
+        { el: '#k-vai-magazzini', se: puo('impostazioni'), posizione: 'sotto', titolo: 'Apri Magazzini e assortimento',
+          testo: 'Questo pulsante ti porta alla pagina dei magazzini.' },
+        { el: '#k-prodotto', risali: '.scheda', se: puo('impostazioni'), posizione: 'sotto', titolo: 'Marchio e nome del programma',
+          testo: function () {
+            return 'Il nome del programma (oggi «' + h(nomeProdotto()) + '»), la sigla, il nome della struttura e il sottotitolo, il logo, il colore d’accento e il tema predefinito. ' +
+              'Compaiono nel menu, nella schermata di accesso e nelle stampe. L’anteprima mostra il menu mentre scrivi; poi premi <b>Salva</b>.';
+          } },
+        { el: '#k-societa', risali: '.scheda', se: puo('impostazioni'), posizione: 'sotto', titolo: 'Modulo stampato e scadenze',
+          testo: 'Società, città e codice che compaiono sulla Nota consumi stampata e in Excel, e con quanti giorni di anticipo avvisare delle scadenze.' },
+        { el: '#k-lead', risali: '.scheda', se: puo('impostazioni'), posizione: 'sotto', titolo: 'Previsioni e ordini',
+          testo: 'Giorni di consegna del fornitore, ogni quanti giorni si ordina, livello di servizio e quanto storico usare: servono alle previsioni e alla proposta d’ordine.' },
         { el: '#k-backup-crea', risali: '.scheda', se: puo('backup'), posizione: 'sopra', titolo: 'Copie di sicurezza',
-          testo: 'Il server fa una copia al giorno e tiene le ultime 30. Puoi crearne una adesso, scaricarla o ripristinarla.' },
+          testo: function () {
+            return 'Il server copia magazzino e utenti ogni ora (se c’è stato lavoro) e verifica ogni copia. Puoi crearne una adesso, scaricarla o ripristinarla.' +
+              (App.paginaPermessa('sistema') ? ' Stato della base dati e seconda cartella delle copie sono nella pagina <b>Sistema</b>.' : '');
+          } },
         { el: '#k-importa-archivio', risali: '.scheda', se: function () { return App.eAmministratore() && App.archivioVuoto(); }, facoltativo: true,
           posizione: 'sopra', titolo: 'Archivio vuoto',
           testo: 'Per cominciare: importa l’archivio della versione per un solo PC, oppure carica i dati di prova per imparare.' }
@@ -436,6 +990,24 @@
     return el.filter(Boolean).map(function (e) { return p.risali ? (e.closest(p.risali) || e) : e; }).filter(visibile);
   }
 
+  /* ---------- viste delle pagine ---------- */
+
+  // parametri per aprire la vista (null: la vista non si può aprire, per esempio non c'è nessun DDT da ricevere)
+  function parametriVista(v) {
+    var x;
+    try { x = typeof v.parametri === 'function' ? v.parametri() : v.parametri; } catch (e) { console.error(e); x = null; }
+    return x || null;
+  }
+
+  // la vista è già quella sullo schermo?
+  function segnoPresente(v) {
+    try {
+      if (typeof v.segno === 'function') return !!v.segno();
+      var cont = document.getElementById('contenuto');
+      return !!(cont && cont.querySelector(v.segno));
+    } catch (e) { return false; }
+  }
+
   function rettangoloDi(elementi) {
     var r = null;
     elementi.forEach(function (e) {
@@ -480,7 +1052,7 @@
     });
   }
 
-  /* Campi scritti e non ancora registrati nella pagina aperta (cambiando pagina andrebbero persi). */
+  /* Campi scritti e non ancora registrati nella pagina aperta (cambiando pagina o vista andrebbero persi). */
   function modificheNonRegistrate() {
     var cont = document.getElementById('contenuto');
     if (!cont) return false;
@@ -489,7 +1061,22 @@
       if (['text', 'number', 'month'].indexOf(t) < 0 && i.tagName !== 'TEXTAREA') return false;
       // filtri, quantità tenute da parte dalle pagine, caselle del registro (si salvano da sole), lettore
       if (i.closest('.strumenti, .barra-scanner') || i.matches('input.q[data-art], td.g input')) return false;
-      return i.value !== i.defaultValue;
+      if (i.value === i.defaultValue) return false;
+      // un valore proposto dalla pagina fra i suggerimenti del campo (per esempio la causale di un DDT): niente di scritto
+      if (i.list && lista(i.list.options).some(function (o) { return o.value === i.value; })) return false;
+      return true;
+    });
+  }
+
+  /* Il giro cambierà pagina o vista (il modulo aperto si ridisegnerebbe): serve chiedere prima di perdere le righe scritte. */
+  function cambiaPaginaOVista(g) {
+    var pag = paginaDelGiro(g);
+    if (pag && pag !== App.paginaCorrente) return true;
+    return g.passi.some(function (p) {
+      if (p.se && !p.se()) return false;
+      var pp = p.pagina === undefined ? pag : p.pagina;
+      if (pp && pp !== App.paginaCorrente) return true;
+      return !!(p.vista && pp && parametriVista(p.vista) && !segnoPresente(p.vista));
     });
   }
 
@@ -514,6 +1101,8 @@
   var radice = null;   // elementi del giro sullo schermo
   var timerPosizione = null;
   var rafPosizione = 0;
+  // scorrimento morbido della pagina chiesto dal giro e forse non ancora finito: { y (destinazione), fino (ms) }
+  var scorrimento = null;
 
   function el(c) { return radice ? radice.querySelector(c) : null; }
 
@@ -524,7 +1113,8 @@
     r.innerHTML =
       '<div class="tour-blocco"></div>' +
       '<div class="tour-luce vuota"></div>' +
-      '<div class="tour-fumetto" role="dialog" aria-modal="true" aria-labelledby="tour-titolo" aria-describedby="tour-testo" hidden>' +
+      // una colonna che può stringersi: il titolo lungo di un giro si accorcia (…) e "Passo N di M" resta nel fumetto
+      '<div class="tour-fumetto" role="dialog" aria-modal="true" aria-labelledby="tour-titolo" aria-describedby="tour-testo" hidden style="grid-template-columns:minmax(0,1fr)">' +
       '<span class="tour-freccia" aria-hidden="true"></span>' +
       '<div class="tour-testa"><span class="tour-giro"></span><span class="tour-conta"></span></div>' +
       '<div class="tour-avanzamento" aria-hidden="true"><span></span></div>' +
@@ -540,6 +1130,8 @@
       '<p class="tour-tasti" aria-hidden="true"><kbd>←</kbd> <kbd>→</kbd> per spostarti · <kbd>Invio</kbd> avanti · <kbd>Esc</kbd> esci</p>' +
       '</div>';
     r.addEventListener('click', function (e) {
+      // i clic nel giro restano nel giro: il menu dell'utente aperto per un passo non si chiude come per un clic fuori
+      e.stopPropagation();
       var b = e.target.closest('[data-tour]');
       if (!b || !corsa) return;
       var cosa = b.getAttribute('data-tour');
@@ -580,7 +1172,42 @@
     if (f) { f.classList.toggle('in-attesa', si); f.setAttribute('aria-busy', si ? 'true' : 'false'); }
   }
 
-  /* Mostra il passo i (verso: 1 avanti, -1 indietro): apre la pagina, aspetta l'elemento, lo porta in vista. */
+  /* ---------- finestre e menu dei passi ---------- */
+
+  function chiudiAmbiente(c) {
+    var a = c.ambiente, mio = c.ambienteMio;
+    c.ambiente = null;
+    c.ambienteMio = false;
+    if (a && mio) { try { a.chiudi(); } catch (e) { console.error(e); } }
+  }
+
+  /* Apre la finestra o il menu del passo (se serve): true, false se non si può aprire, oppure una promessa. */
+  function apriAmbiente(c, p) {
+    var a = p.ambiente;
+    if (!a || corsa !== c) return true;
+    if (a.aperto()) {
+      if (!c.ambiente) { c.ambiente = a; c.ambienteMio = false; } // era già aperto: alla fine resta com'era
+      return true;
+    }
+    var r;
+    try { r = a.apri(); } catch (e) { console.error(e); r = null; }
+    if (r === null || r === false) return false;
+    c.ambiente = a;
+    c.ambienteMio = true;
+    return Promise.resolve(r).then(function () { return true; });
+  }
+
+  /* Il passo i non c'è (elemento facoltativo mancante, vista che non si può aprire): lo tolgo e passo al vicino. */
+  function saltaPasso(c, i, verso) {
+    var p = c.passi[i];
+    c.saltati.push(valore(p.titolo));
+    c.passi.splice(i, 1);
+    if (!c.passi.length) { Tour.ferma(); return; }
+    if (verso < 0) vaiAlPasso(Math.max(0, i - 1), i > 0 ? -1 : 1);
+    else vaiAlPasso(i, 1);
+  }
+
+  /* Mostra il passo i (verso: 1 avanti, -1 indietro): apre la pagina e la vista, aspetta l'elemento, lo porta in vista. */
   function vaiAlPasso(i, verso) {
     var c = corsa;
     if (!c) return;
@@ -592,13 +1219,21 @@
     var p = c.passi[i];
     segnaAttesa(true);
 
+    // la finestra o il menu del passo di prima, se a questo non servono, si chiudono subito (prima di cambiare pagina)
+    if (c.ambiente && (!p.ambiente || p.ambiente.id !== c.ambiente.id)) chiudiAmbiente(c);
+
     var pag = paginaDelPasso(p);
+    var parVista = p.vista && pag ? parametriVista(p.vista) : null;
+    // la vista del passo non si può aprire (per esempio nessun DDT da ricevere): il passo facoltativo manca
+    if (p.vista && pag && !parVista && p.facoltativo) { saltaPasso(c, i, verso); return; }
+    var cambiaVista = !!(parVista && !(App.paginaCorrente === pag && segnoPresente(p.vista)));
     var apertura = Promise.resolve();
-    if (pag && App.paginaCorrente !== pag) {
+    if (pag && (App.paginaCorrente !== pag || cambiaVista)) {
       c.paginaAttesa = pag;
       c.navigatoIl = Date.now();
-      App.vai(pag);
-      apertura = aspettaChe(function () { return App.paginaCorrente === pag; }, ATTESA_MAX);
+      scorrimento = null; // la pagina ridisegnata riparte dall'alto
+      App.vai(pag, cambiaVista ? parVista : undefined);
+      apertura = aspettaChe(function () { return App.paginaCorrente === pag && (!cambiaVista || segnoPresente(p.vista)); }, ATTESA_MAX);
     }
     apertura.then(function () {
       if (!vivo()) return null;
@@ -606,20 +1241,21 @@
       return null;
     }).then(function () {
       if (!vivo()) return null;
+      return apriAmbiente(c, p);
+    }).then(function (ambienteOk) {
+      if (!vivo()) return null;
+      if (ambienteOk === false) return 'manca';
       if (!p.el) return [];
       // dopo un cambio di pagina aspetto fino a ~3 s in tutto; sulla pagina già pronta mezzo secondo basta
       var limite = Math.max(ATTESA_MINIMA, ATTESA_MAX - (Date.now() - c.navigatoIl));
       return aspettaChe(function () { var t = trova(p); return t.length ? t : null; }, limite);
     }).then(function (trovati) {
       if (!vivo()) return null;
-      if (p.el && !(trovati && trovati.length)) {
-        if (p.facoltativo) {
-          // l'elemento non c'è (per esempio una parte non ancora pronta del programma): salto il passo
-          c.saltati.push(p.titolo);
-          c.passi.splice(i, 1);
-          if (!c.passi.length) { Tour.ferma(); return null; }
-          if (verso < 0) vaiAlPasso(Math.max(0, i - 1), i > 0 ? -1 : 1);
-          else vaiAlPasso(i, 1);
+      var manca = trovati === 'manca' || (p.el && !(trovati && trovati.length));
+      if (manca) {
+        if (p.facoltativo || trovati === 'manca') {
+          // l'elemento (o la finestra) non c'è, per esempio una parte senza dati: salto il passo
+          saltaPasso(c, i, verso);
           return null;
         }
         trovati = []; // non c'è e non è facoltativo: fumetto al centro
@@ -687,6 +1323,13 @@
     });
   }
 
+  /* Lo scorrimento morbido chiesto dal giro non è ancora finito: la destinazione, altrimenti null. */
+  function scorrimentoInCorso() {
+    if (!scorrimento) return null;
+    if (Date.now() > scorrimento.fino || Math.abs(root.scrollY - scorrimento.y) < 1) { scorrimento = null; return null; }
+    return scorrimento;
+  }
+
   /* Porta in vista gli elementi: prima i riquadri che scorrono (menu, tabelle), poi la pagina. */
   function portaInVista(elementi) {
     var primo = elementi[0];
@@ -699,15 +1342,22 @@
     var v = vista();
     var alto = Math.max(v.y, altezzaTesta());
     var fondo = v.y + v.h;
-    if (r.t >= alto + 8 && r.b <= fondo - 8) return;
+    // la pagina sta ancora scorrendo verso il passo di prima (Indietro e Avanti in fretta): conta dove sarà l'elemento
+    // alla fine di quello scorrimento, non dove si trova adesso (ora può sembrare già in vista e poi uscire)
+    var inCorso = scorrimentoInCorso();
+    var spostamento = inCorso ? root.scrollY - inCorso.y : 0;
+    if (r.t + spostamento >= alto + 8 && r.b + spostamento <= fondo - 8) return;
     var disponibile = fondo - alto;
     var altezza = r.b - r.t;
     var cima = altezza + 32 < disponibile ? alto + (disponibile - altezza) / 2 : alto + 16;
-    var y = Math.max(0, root.scrollY + r.t - cima);
-    try { root.scrollTo({ top: y, behavior: rid() ? 'auto' : 'smooth' }); } catch (e) { root.scrollTo(0, y); }
+    var massimo = Math.max(0, (document.scrollingElement || document.documentElement).scrollHeight - root.innerHeight);
+    var y = Math.round(Math.min(massimo, Math.max(0, root.scrollY + r.t - cima)));
+    var morbido = !rid();
+    try { root.scrollTo({ top: y, behavior: morbido ? 'smooth' : 'auto' }); } catch (e) { root.scrollTo(0, y); }
+    scorrimento = morbido && Math.abs(root.scrollY - y) >= 1 ? { y: y, fino: Date.now() + DURATA_SCORRIMENTO } : null;
     // finito lo scorrimento controllo che l'elemento si veda davvero
     var c = corsa, i = c ? c.i : -1;
-    setTimeout(function () { if (corsa === c && c && c.i === i) avvicinaVista(elementi); }, rid() ? 0 : 480);
+    setTimeout(function () { if (corsa === c && c && c.i === i) avvicinaVista(elementi); }, morbido ? 480 : 0);
   }
 
   /*
@@ -720,6 +1370,8 @@
     if (!r) return;
     var v = vista();
     if (r.b > v.y + 8 && r.t < v.y + v.h - 8) return;
+    // la pagina sta ancora scorrendo verso l'elemento: ci arriva da sola
+    if (scorrimentoInCorso()) return;
     var sonda = document.createElement('div');
     sonda.className = 'tour-sonda';
     sonda.style.left = Math.round(root.scrollX + v.x + 1) + 'px';
@@ -728,8 +1380,8 @@
     try { sonda.scrollIntoView({ block: 'center', inline: 'nearest' }); } finally { sonda.remove(); }
   }
 
-  /* Fa scorrere i riquadri che contengono l'elemento (menu laterale, tabelle, nota consumi) quel tanto che basta
-     a mostrarlo; la pagina intera la fa scorrere portaInVista, solo in verticale. */
+  /* Fa scorrere i riquadri che contengono l'elemento (menu laterale, tabelle, nota consumi, finestre) quel tanto che
+     basta a mostrarlo; la pagina intera la fa scorrere portaInVista, solo in verticale. */
   function scorriContenitori(e) {
     for (var a = e.parentElement; a && a !== document.body && a !== document.documentElement; a = a.parentElement) {
       var st = getComputedStyle(a);
@@ -776,8 +1428,8 @@
     el('.tour-giro').textContent = (c.giro.ico ? c.giro.ico + ' ' : '') + c.giro.titolo;
     el('.tour-conta').textContent = 'Passo ' + n + ' di ' + tot;
     el('.tour-avanzamento span').style.width = Math.round(n / tot * 100) + '%';
-    el('#tour-titolo').textContent = p.titolo;
-    el('#tour-testo').innerHTML = p.testo || '';
+    el('#tour-titolo').textContent = valore(p.titolo);
+    el('#tour-testo').innerHTML = valore(p.testo) || '';
     var ind = el('[data-tour="indietro"]');
     ind.disabled = c.i === 0;
     ind.hidden = c.i === 0;
@@ -997,11 +1649,14 @@
       centrato: true,
       inAttesa: true,
       menuAperto: false,
+      ambiente: null,
+      ambienteMio: false,
       navigatoIl: 0,
       paginaAttesa: App.paginaCorrente,
       fuocoPrima: document.activeElement,
       dimensioni: [root.innerWidth, root.innerHeight]
     };
+    scorrimento = null;
     corsa.passi = g.passi.filter(function (p) {
       if (p.se && !p.se()) return false;
       var pag = paginaDelPasso(p);
@@ -1029,9 +1684,8 @@
       App.avviso('Prima chiudi la finestra aperta (o salva quello che hai scritto), poi avvia il giro guidato.', 'errore');
       return false;
     }
-    var pag = paginaDelGiro(g);
-    // il giro cambia pagina: se qui c'è qualcosa di scritto e non registrato, chiedo prima
-    if (pag && pag !== App.paginaCorrente && modificheNonRegistrate()) {
+    // il giro cambia pagina o vista: se qui c'è qualcosa di scritto e non registrato, chiedo prima
+    if (modificheNonRegistrate() && cambiaPaginaOVista(g)) {
       App.conferma('Giro guidato', 'Il giro apre un’altra pagina: quello che hai scritto qui e non hai ancora registrato andrebbe perso.', 'Continua lo stesso')
         .then(function (ok) { if (ok) inizia(g); });
       return true;
@@ -1042,6 +1696,7 @@
   Tour.ferma = function () {
     var c = corsa;
     corsa = null;
+    scorrimento = null;
     clearInterval(timerPosizione);
     timerPosizione = null;
     if (rafPosizione) { root.cancelAnimationFrame(rafPosizione); rafPosizione = 0; }
@@ -1050,7 +1705,7 @@
     clearTimeout(timerRidimensiona);
     timerRidimensiona = null;
     if (c && c.menuAperto) document.getElementById('app').classList.remove('menu-aperto');
-    if (c) clearTimeout(c.timerMuove);
+    if (c) { clearTimeout(c.timerMuove); chiudiAmbiente(c); }
     var r = radice;
     radice = null;
     // il fuoco torna dove era solo se è ancora nel giro: se nel frattempo è andato altrove (per esempio nel campo
@@ -1073,13 +1728,16 @@
 
   Tour.elenco = function () {
     return GIRI.filter(giroPermesso).map(function (g) {
-      return { id: g.id, titolo: g.titolo, descrizione: g.descrizione, pagina: paginaDelGiro(g) || null, ico: g.ico };
+      return { id: g.id, titolo: g.titolo, descrizione: g.descrizione, pagina: paginaDelGiro(g) || null, ico: g.ico, gruppo: g.gruppo || '' };
     });
   };
 
   Tour.perPagina = function (pagina) {
-    var g = GIRI.filter(function (x) { return x.perPagina === pagina; })[0];
-    return g ? g.id : null;
+    var candidati = GIRI.filter(function (x) { return x.perPagina === pagina; });
+    if (!candidati.length) return null;
+    var permessi = candidati.filter(giroPermesso);
+    var g = permessi.filter(function (x) { try { return x.qui && x.qui(); } catch (e) { return false; } })[0] || permessi[0] || candidati[0];
+    return g.id;
   };
 
   /* Per le prove automatiche: cosa sta mostrando il giro. */
@@ -1091,13 +1749,14 @@
       giro: corsa.giro.id,
       indice: corsa.i + 1,
       totale: corsa.passi.length,
-      titolo: p.titolo,
+      titolo: valore(p.titolo),
       selettore: typeof p.el === 'string' ? p.el : (p.el ? '(funzione)' : null),
       facoltativo: !!p.facoltativo,
       conElemento: !!p.el,
       centrato: !!corsa.centrato,
       inAttesa: !!corsa.inAttesa,
       menuAperto: !!corsa.menuAperto,
+      ambiente: corsa.ambiente ? corsa.ambiente.id : null,
       saltati: corsa.saltati.slice(),
       pagina: App.paginaCorrente
     };
@@ -1152,11 +1811,16 @@
     if (freccia && g) freccia.style.left = Math.round(limita((r.left + r.right) / 2 - parseFloat(elenco.style.left) - 7, 14, largo - 28)) + 'px';
   }
 
+  // titolo di un gruppo nell'elenco (stile con le variabili del tema: css/tour.css non ha ancora una regola apposta)
+  var STILE_GRUPPO = 'list-style:none;padding:10px 10px 3px;font-size:10.5px;font-weight:700;letter-spacing:.07em;' +
+    'text-transform:uppercase;color:var(--tenue)';
+
   Tour.apriElenco = function () {
     if (!appPronta()) return;
     if (elencoAperto()) { chiudiElenco(); return; }
     var giri = Tour.elenco();
     var qui = Tour.perPagina(App.paginaCorrente);
+    var gruppoPrima = null;
     elenco = document.createElement('div');
     elenco.className = 'tour-elenco';
     elenco.setAttribute('role', 'dialog');
@@ -1164,7 +1828,12 @@
     elenco.innerHTML = '<span class="tour-freccia" aria-hidden="true"></span>' +
       '<div class="tour-elenco-testa"><b>🧭 Giri guidati</b><span>Scegli cosa vuoi vedere: ti accompagno passo per passo, senza registrare niente.</span></div>' +
       '<ul>' + giri.map(function (g) {
-        return '<li><button type="button" data-giro="' + h(g.id) + '"' + (g.id === qui ? ' class="qui"' : '') + '>' +
+        var titoloGruppo = '';
+        if (g.gruppo && g.gruppo !== gruppoPrima && GRUPPI[g.gruppo]) {
+          titoloGruppo = '<li class="tour-elenco-gruppo" role="presentation" style="' + STILE_GRUPPO + '">' + h(GRUPPI[g.gruppo]) + '</li>';
+        }
+        gruppoPrima = g.gruppo;
+        return titoloGruppo + '<li><button type="button" data-giro="' + h(g.id) + '"' + (g.id === qui ? ' class="qui"' : '') + '>' +
           '<span class="ico" aria-hidden="true">' + h(g.ico || '🧭') + '</span>' +
           '<span class="testi"><b>' + h(g.titolo) + '</b><small>' + h(g.descrizione) + '</small></span></button></li>';
       }).join('') + '</ul>' +
@@ -1182,7 +1851,11 @@
     root.addEventListener('keydown', tastiElenco, true);
     root.addEventListener('resize', posizionaElenco);
     var primo = elenco.querySelector('button.qui') || elenco.querySelector('button[data-giro]');
-    if (primo) { try { primo.focus({ preventScroll: true }); } catch (e) { primo.focus(); } }
+    if (primo) {
+      try { primo.focus({ preventScroll: true }); } catch (e) { primo.focus(); }
+      // il giro della pagina in vista anche in fondo a un elenco lungo
+      if (primo.classList.contains('qui')) scorriContenitori(primo);
+    }
   };
 
   /* Pulsante 🧭 Guidami nella barra: il giro della pagina aperta, altrimenti l'elenco. */

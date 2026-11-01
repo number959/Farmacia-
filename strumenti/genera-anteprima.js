@@ -2,7 +2,7 @@
  * Prepara l'ANTEPRIMA del programma (dist/anteprima/): la stessa interfaccia con un server simulato dentro il browser
  * (anteprima/server-finto.js), dati e utenti di prova. Si apre come pagina web statica, per esempio pubblicata come
  * Artifact o aperta con un server web qualsiasi. Non serve per il programma vero.
- *   node strumenti/genera-anteprima.js
+ *   node strumenti/genera-anteprima.js [--uscita <cartella>]     (predefinita: dist/anteprima)
  * Crea anche dist/anteprima/pagina-artifact.html: la stessa pagina senza doctype, <html>, <head> e <body> (la pagina
  * pubblicata come Artifact viene avvolta da sola); gli altri file si pubblicano accanto con gli stessi percorsi.
  *
@@ -19,7 +19,10 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const RADICE = path.join(__dirname, '..');
-const OUT = path.join(RADICE, 'dist', 'anteprima');
+// --uscita <cartella>: prepara l'anteprima altrove (per le prove), invece che in dist/anteprima
+const iUscita = process.argv.indexOf('--uscita');
+const OUT = iUscita > 0 && process.argv[iUscita + 1] ? path.resolve(process.argv[iUscita + 1]) : path.join(RADICE, 'dist', 'anteprima');
+if (OUT === RADICE || RADICE.startsWith(OUT + path.sep)) throw new Error('Cartella di uscita non valida: ' + OUT);
 
 // nomi veri che non devono comparire nell'anteprima (anche nei commenti dei file copiati)
 const VIETATI = /nefro\s*center|posillipo|longevity|me\.mi\.\s*srl|sanseverino/i;
