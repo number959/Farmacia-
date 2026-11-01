@@ -1,1 +1,197 @@
-/* Versione 3.0 – parte A (docs/NOVITA-3.0.md). Usare solo le variabili CSS di css/app.css. */
+/* Versione 3.0 – parte A (docs/NOVITA-3.0.md): richieste, DDT e consegne, trasferimenti, stampa del DDT.
+   Solo variabili di css/app.css (con un valore di riserva per quelle nuove della 3.0). */
+
+.log-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- testa della pagina: schede, ricerca, pulsante ---------- */
+.log-testa { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 12px; }
+.log-testa .spazio { flex: 1; }
+.log-cerca { min-width: 0; flex: 0 1 260px; }
+.log-schede { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; background: var(--superficie-2); border: 1px solid var(--linea); border-radius: calc(var(--raggio) + 2px); max-width: 100%; }
+.log-schede [role=tab] { border: 0; background: transparent; border-radius: var(--raggio); padding: 7px 14px; font-weight: 600; color: var(--tenue); cursor: pointer; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+  transition: background var(--durata, 240ms) var(--curva, ease), color var(--durata, 240ms) var(--curva, ease); }
+.log-schede [role=tab]:hover { color: var(--testo); }
+.log-schede [role=tab][aria-selected=true] { background: var(--superficie); color: var(--primario); box-shadow: var(--ombra); }
+.log-conta { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--primario); color: var(--primario-testo); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* ---------- elenchi di richieste e DDT ---------- */
+.log-elenco { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.log-elenco.compatto { gap: 0; }
+.log-voce { width: 100%; display: grid; gap: 4px; text-align: left; border: 1px solid var(--linea); border-left: 4px solid var(--linea-forte); background: var(--superficie); border-radius: var(--raggio); padding: 10px 14px; cursor: pointer; color: var(--testo); box-shadow: var(--ombra);
+  transition: border-color var(--durata, 240ms) var(--curva, ease), transform var(--durata, 240ms) var(--curva, ease); }
+.log-voce:hover, .log-voce:focus-visible { border-color: var(--primario); }
+.log-voce:hover { transform: translateY(-1px); }
+.log-voce.urgente { border-left-color: var(--accento, var(--pericolo)); }
+.log-elenco.compatto .log-voce { border-radius: 0; border-width: 0 0 1px; border-left: 0; box-shadow: none; padding: 9px 18px; }
+.log-elenco.compatto li:last-child .log-voce { border-bottom: 0; }
+.log-voce > span { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
+.log-voce-articoli { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block !important; }
+.log-voce-piede { font-size: 12.5px; }
+.log-quando { margin-left: auto; font-size: 12px; color: var(--tenue); font-variant-numeric: tabular-nums; }
+.log-numero { font-family: var(--mono); font-weight: 700; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.log-numero.grande { font-size: 20px; }
+.log-percorso { overflow-wrap: anywhere; }
+.log-nota-elenco { padding: 8px 2px; }
+
+.log-barra { display: inline-block; position: relative; width: 120px; max-width: 40vw; height: 6px; border-radius: 999px; background: var(--linea); overflow: hidden; vertical-align: middle; }
+.log-barra-piena { position: absolute; inset: 0 auto 0 0; background: var(--ok); border-radius: inherit; transition: width var(--durata, 240ms) var(--curva, ease); }
+.log-perc { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 3.2em; }
+
+/* ---------- dettaglio ---------- */
+.log-azioni .btn { white-space: nowrap; }
+.log-intestazione { padding: 16px 18px; display: grid; gap: 10px; }
+.log-doc { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.log-percorso.grande { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 15px; }
+.log-percorso.grande > span { display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.log-ruolo { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--tenue); }
+.log-freccia { color: var(--primario); font-weight: 700; font-size: 18px; }
+.log-note { background: var(--superficie-2); border: 1px solid var(--linea); border-radius: 8px; padding: 8px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.log-avanzamento { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.log-avanzamento .log-barra { width: 220px; height: 8px; }
+
+.log-griglia { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
+.log-griglia > * { min-width: 0; }
+.log-tabella td, .log-tabella th { white-space: nowrap; }
+.log-tabella td:nth-child(2), .log-tabella td:first-child { white-space: normal; }
+.log-tabella tr.log-differenza td { background: var(--attenzione-chiaro); }
+.log-tabella tr.log-spuntata td { background: var(--ok-chiaro); }
+.log-nota-tabella { padding: 10px 18px 14px; }
+.log-errore { color: var(--pericolo); font-weight: 600; }
+.log-attenzione { color: var(--attenzione); font-weight: 600; }
+.log-ok { color: var(--ok); font-weight: 600; }
+.log-proposta { color: var(--primario); }
+
+/* ---------- cronologia dei passaggi ---------- */
+.log-cron { position: relative; }
+.log-traccia { position: absolute; left: 11px; top: 6px; bottom: 6px; width: 2px; background: var(--linea); border-radius: 2px; }
+.log-traccia-piena { display: block; width: 100%; height: 0; background: var(--primario); border-radius: inherit; transition: height 900ms var(--curva, cubic-bezier(.2, .8, .2, 1)); }
+.log-cronologia { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; position: relative; }
+.log-passo { display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: start; }
+.log-punto { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--primario); color: var(--primario-testo); box-shadow: 0 0 0 4px var(--superficie); }
+.log-passo.attesa .log-punto { background: var(--superficie); border: 2px dashed var(--linea-forte); }
+.log-passo.errore .log-punto { background: var(--pericolo); }
+.log-passo-testo { min-width: 0; overflow-wrap: anywhere; }
+.log-passo-titolo { font-weight: 700; }
+.log-passo.attesa .log-passo-titolo { color: var(--tenue); font-weight: 600; }
+.log-passo time { font-size: 12px; color: var(--tenue); font-variant-numeric: tabular-nums; margin-left: 4px; }
+
+/* ---------- moduli: nuova richiesta, nuovo DDT, modifica, ricezione ---------- */
+.log-modulo .scheda-corpo { display: grid; gap: 14px; }
+.log-urgente { align-self: end; padding-bottom: 8px; }
+.log-proponi { align-items: center; }
+.log-proponi .piccolo { flex: 1 1 260px; }
+.log-righe-box { margin-top: 2px; }
+.log-righe .log-c-art { min-width: 260px; }
+.log-righe .log-c-q { width: 110px; }
+.log-righe .log-c-lotto { min-width: 200px; }
+.log-righe .log-c-togli { width: 44px; text-align: right; }
+.log-righe input[readonly] { background: var(--superficie-2); }
+.log-righe-piede { align-items: center; }
+.log-righe-piede .piccolo { flex: 1 1 240px; }
+.log-piede-modulo { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--linea); background: var(--superficie-2); border-radius: 0 0 var(--raggio) var(--raggio); }
+.log-piede-modulo .spazio { flex: 1; }
+.log-note-ricezione { max-width: 720px; }
+.log-tab-ricezione select, .log-tab-ricezione .rc-nota { border: 1px solid var(--linea-forte); border-radius: 7px; padding: 5px 8px; background: var(--superficie); max-width: 100%; }
+.log-tab-ricezione select:disabled { opacity: .55; }
+#rc-banda .btn { margin-left: auto; }
+
+/* ---------- codici del DDT (schermo) ---------- */
+.log-codici-box { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 28px; }
+.log-barre svg { display: block; max-width: 100%; height: auto; }
+.log-qr svg { display: block; width: 96px; height: 96px; }
+.log-codici .scheda-corpo { display: grid; gap: 8px; }
+
+/* ---------- movimento ridotto ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .log-voce, .log-schede [role=tab], .log-barra-piena, .log-traccia-piena { transition: none; }
+  .log-voce:hover { transform: none; }
+}
+
+/* ---------- schermi stretti ---------- */
+@media (max-width: 1100px) {
+  .log-griglia { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .log-testa { align-items: stretch; }
+  .log-testa .spazio { display: none; }
+  .log-cerca { flex: 1 1 100%; }
+  .log-testa > .btn { flex: 1 1 100%; }
+  .log-schede { display: flex; width: 100%; }
+  .log-schede [role=tab] { flex: 1 1 auto; justify-content: center; padding: 7px 10px; }
+  .log-quando { margin-left: 0; flex-basis: 100%; }
+  .log-barra { width: 90px; }
+  .log-azioni .btn { flex: 1 1 auto; }
+  .log-azioni .spazio { display: none; }
+  .log-numero.grande { font-size: 18px; }
+
+  /* righe dei moduli: una scheda per riga (articolo sopra, quantità e lotto o nota sotto) */
+  .log-righe thead { display: none; }
+  .log-righe, .log-righe tbody { display: block; }
+  .log-righe tr { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--linea); }
+  .log-righe td { padding: 0; min-width: 0 !important; width: auto !important; }
+  .log-righe .log-c-art { grid-column: 1 / -1; }
+  .log-righe input.q { width: 100%; }
+  .log-righe-box { overflow: visible; }
+
+  /* ricezione: una scheda per riga con le etichette dei campi */
+  .log-tab-ricezione thead { display: none; }
+  .log-tab-ricezione, .log-tab-ricezione tbody { display: block; }
+  .log-tab-ricezione tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 10px; padding: 10px 14px; border-bottom: 1px solid var(--linea); }
+  .log-tab-ricezione td { display: block; border: 0; padding: 0; text-align: left !important; white-space: normal !important; }
+  .log-tab-ricezione td:first-child, .log-tab-ricezione td:nth-child(5), .log-tab-ricezione td:nth-child(6) { grid-column: 1 / -1; }
+  .log-tab-ricezione tr.log-differenza td, .log-tab-ricezione tr.log-spuntata td { background: transparent; }
+  .log-tab-ricezione tr.log-differenza { background: var(--attenzione-chiaro); }
+  .log-tab-ricezione tr.log-spuntata { background: var(--ok-chiaro); }
+  .log-tab-ricezione td[data-titolo]::before { content: attr(data-titolo); display: block; font-size: 11px; font-weight: 700; color: var(--tenue); text-transform: uppercase; letter-spacing: .04em; }
+  .log-tab-ricezione input.q, .log-tab-ricezione select, .log-tab-ricezione .rc-nota { width: 100%; }
+  .log-tab-ricezione + * { margin-top: 0; }
+  .log-ricezione .tabella-contenitore { overflow: visible; }
+  .log-piede-modulo .btn { flex: 1 1 auto; }
+  .log-piede-modulo .spazio { display: none; }
+}
+
+/* ======================= stampa del DDT (A4 verticale) ======================= */
+.log-stampa { display: none; }
+@page ddt { size: A4 portrait; margin: 12mm 12mm 12mm 12mm; }
+.log-stampa, body.stampa-ddt {
+  --st-inchiostro: #000;
+  --st-carta: #fff;
+  --st-linea: #444;
+  --st-tenue: #555;
+  --st-fondo: #eee;
+}
+.log-stampa { color: var(--st-inchiostro); background: var(--st-carta); font: 10pt/1.35 var(--carattere); }
+@media print {
+  body.stampa-ddt { background: var(--st-carta); }
+  body.stampa-ddt > *:not(.log-stampa) { display: none !important; }
+  body.stampa-ddt .log-stampa { display: block; page: ddt; }
+}
+.log-st-pagina { display: grid; gap: 4mm; }
+.log-st-testa { display: flex; justify-content: space-between; align-items: flex-start; gap: 6mm; border-bottom: 1.5pt solid var(--st-inchiostro); padding-bottom: 3mm; }
+.log-st-struttura { display: flex; gap: 4mm; align-items: center; font-size: 9.5pt; }
+.log-st-logo { height: 16mm; width: auto; max-width: 40mm; object-fit: contain; }
+.log-st-codici { display: flex; align-items: center; gap: 4mm; }
+.log-st-codici .log-barre svg { width: 62mm; height: auto; }
+.log-st-codici .log-qr svg { width: 20mm; height: 20mm; }
+.log-st-titolo { font-family: var(--carattere-titoli, var(--carattere)); font-size: 15pt; text-transform: uppercase; letter-spacing: .04em; margin: 0; }
+.log-st-titolo span { font-family: var(--mono); letter-spacing: 0; margin-left: 3mm; }
+.log-st-sotto { margin: -2mm 0 0; font-size: 9.5pt; }
+.log-st-parti { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 3mm; }
+.log-st-parti > div, .log-st-trasporto > div { border: .75pt solid var(--st-linea); padding: 2mm 3mm; min-height: 16mm; }
+.log-st-et { display: block; font-size: 7.5pt; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--st-tenue); margin-bottom: 1mm; }
+.log-st-et.in-riga { display: inline; }
+.log-st-tenue { color: var(--st-tenue); font-size: 8.5pt; }
+.log-st-righe { width: 100%; border-collapse: collapse; font-size: 9pt; }
+.log-st-righe th, .log-st-righe td { border: .75pt solid var(--st-linea); padding: 1.2mm 1.6mm; text-align: left; vertical-align: top; }
+.log-st-righe th { background: var(--st-fondo); font-size: 7.5pt; text-transform: uppercase; letter-spacing: .04em; }
+.log-st-righe .n { text-align: right; font-variant-numeric: tabular-nums; }
+.log-st-righe .mono, .log-stampa .mono { font-family: var(--mono); font-size: 8.5pt; }
+.log-st-righe tr { break-inside: avoid; }
+.log-st-note { font-size: 9pt; }
+.log-st-trasporto { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 3mm; }
+.log-st-trasporto > div { min-height: 12mm; }
+.log-st-firme { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6mm; margin-top: 4mm; break-inside: avoid; }
+.log-st-firme > div { display: grid; gap: 1mm; }
+.log-st-nome { min-height: 5mm; }
+.log-st-linea { display: block; border-bottom: .75pt solid var(--st-inchiostro); height: 12mm; }
+.log-st-piede { margin-top: 4mm; border-top: .5pt solid var(--st-linea); padding-top: 2mm; font-size: 7.5pt; color: var(--st-tenue); }

@@ -101,9 +101,44 @@
     if (t && a.nome.toLowerCase().indexOf(t) < 0) cerca.value = '';
   }
 
+  /* ---------- versione 3.0: DDT interni e merce in viaggio ---------- */
+
+  // il magazzino di sistema "In transito" si mostra come merce in viaggio
+  function nomeMagazzino(r) { return r ? (r.tipo === 'transito' ? 'In viaggio (DDT)' : r.nome) : '—'; }
+  function nomeMagazzinoId(id) { return nomeMagazzino(App.reparto(id)); }
+
+  /*
+   * Movimento nato da un DDT: il magazzino vero che cambia giacenza (non "In transito") e cosa è successo.
+   * null se il movimento non viene da un DDT.
+   */
+  function vistaDdt(m) {
+    var x = m && m.ddtId && C.controparteDdt ? C.controparteDdt(App.S, m) : null;
+    if (!x) return null;
+    var d = x.ddt;
+    var daViaggio = (App.reparto(m.repartoId) || {}).tipo === 'transito';
+    if (m.tipo === 'perdita') return { ddt: d, repartoId: m.repartoId, arrivo: '', testo: 'perso in viaggio verso ' + App.nomeReparto(d.destinazioneId) };
+    if (!daViaggio) return { ddt: d, repartoId: m.repartoId, arrivo: d.destinazioneId, testo: 'partito verso ' + App.nomeReparto(d.destinazioneId) };
+    if (m.repartoDestId === d.destinazioneId) return { ddt: d, repartoId: m.repartoDestId, arrivo: '', testo: 'arrivato da ' + App.nomeReparto(d.origineId) };
+    return { ddt: d, repartoId: m.repartoDestId, arrivo: '', testo: 'rientrato, non arrivato a ' + App.nomeReparto(d.destinazioneId) };
+  }
+
+  // i movimenti dei DDT non si annullano da qui: si annulla il DDT
+  function puoAnnullare(m) { return !m.ddtId && App.puoAnnullare(m); }
+
   function riferimento(m) {
     var parti = [];
-    if (m.tipo === 'trasferimento') parti.push('→ ' + App.nomeReparto(m.repartoDestId));
+    var v = vistaDdt(m);
+    if (v) {
+      parti.push(v.testo);
+      if (/^Annullo DDT/.test(m.causale || '')) parti.push('DDT annullato');
+      else if (m.causale && m.causale !== v.ddt.causale && !/^Differenza alla ricezione/.test(m.causale)) parti.push(m.causale);
+      // le note scritte dal programma ("Verso …", "Da …", "Rientro: …") dicono già quello che c'è nel testo
+      var nota = /^(Verso|Da) /.test(m.note || '') ? '' : String(m.note || '').replace(/^(Rientro|Perdita in viaggio):? ?/, '');
+      if (nota) parti.push(nota);
+      if (m.annullato) parti.push('ANNULLATO' + (m.annullato.motivo ? ': ' + m.annullato.motivo : ''));
+      return parti.join(' · ');
+    }
+    if (m.tipo === 'trasferimento') parti.push('→ ' + nomeMagazzinoId(m.repartoDestId));
     if (m.fornitore) parti.push(m.fornitore);
     if (m.documento) parti.push('doc. ' + m.documento);
     if (m.causale) parti.push(m.causale);
@@ -115,12 +150,13 @@
   // conAnnulla: colonna con il pulsante "Annulla" (solo sui movimenti che l'utente può annullare)
   function tabellaMovimenti(lista, conAnnulla) {
     if (!lista.length) return vuoto('Nessun movimento', '');
-    if (conAnnulla && !lista.some(App.puoAnnullare)) conAnnulla = false;
+    if (conAnnulla && !lista.some(puoAnnullare)) conAnnulla = false;
     return '<div class="tabella-contenitore"><table class="tabella"><thead><tr>' +
       '<th>Data</th><th>Tipo</th><th>Articolo</th><th class="n">Quantità</th><th>Lotto</th><th>Scad.</th><th>Reparto</th><th>Riferimento</th><th>Operatore</th>' +
       (conAnnulla ? '<th></th>' : '') + '</tr></thead><tbody>' +
       lista.map(function (m) {
         var a = App.articolo(m.articoloId);
+        var v = vistaDdt(m);
         return '<tr class="' + (m.annullato ? 'annullato' : '') + '">' +
           '<td>' + App.fmtData(m.data) + '</td>' +
           '<td class="tipo-' + m.tipo + '">' + h(App.TIPI[m.tipo] || m.tipo) + '</td>' +
@@ -128,10 +164,10 @@
           '<td class="n">' + App.fmtNum(m.quantita) + (a && a.unita ? ' <span class="tenue">' + h(a.unita) + '</span>' : '') + '</td>' +
           '<td class="mono">' + h(m.lotto || '') + '</td>' +
           '<td>' + (m.scadenza ? App.fmtScadenza(m.scadenza) : '') + '</td>' +
-          '<td>' + h(App.nomeReparto(m.repartoId)) + '</td>' +
-          '<td class="piccolo">' + h(riferimento(m)) + '</td>' +
+          '<td>' + h(nomeMagazzinoId(v ? v.repartoId : m.repartoId)) + '</td>' +
+          '<td class="piccolo">' + (v ? '<a href="#" class="mono" data-ddt="' + h(v.ddt.id) + '" title="Apri il DDT">' + h(v.ddt.numero) + '</a> · ' : '') + h(riferimento(m)) + '</td>' +
           '<td class="piccolo tenue">' + h(m.operatore || '') + '</td>' +
-          (conAnnulla ? '<td class="azioni">' + (App.puoAnnullare(m) ? '<button class="btn piccolo pericolo" type="button" data-annulla="' + h(m.id) + '">Annulla</button>' : '') + '</td>' : '') +
+          (conAnnulla ? '<td class="azioni">' + (puoAnnullare(m) ? '<button class="btn piccolo pericolo" type="button" data-annulla="' + h(m.id) + '">Annulla</button>' : '') + '</td>' : '') +
           '</tr>';
       }).join('') + '</tbody></table></div>';
   }
@@ -141,6 +177,8 @@
     cont.addEventListener('click', function (e) {
       var s = e.target.closest('[data-scheda]');
       if (s) { e.preventDefault(); App.schedaArticolo(s.getAttribute('data-scheda')); return; }
+      var dd = e.target.closest('[data-ddt]');
+      if (dd) { e.preventDefault(); apriDdt(dd.getAttribute('data-ddt')); return; }
       var b = e.target.closest('[data-annulla]');
       if (!b) return;
       var id = b.getAttribute('data-annulla');
@@ -161,6 +199,16 @@
     });
   }
 
+  /* Apre il DDT nella pagina DDT e consegne (dalla scheda di un articolo la finestra si chiude prima). */
+  function apriDdt(id) {
+    App.chiudiModale();
+    if (App.paginaPermessa('consegne')) App.vai('consegne', { id: id });
+    else {
+      var d = (App.S.ddt || []).filter(function (x) { return x.id === id; })[0];
+      App.avviso(d ? 'DDT ' + d.numero + ': ' + App.nomeReparto(d.origineId) + ' → ' + App.nomeReparto(d.destinazioneId) : 'DDT non trovato', d ? 'ok' : 'errore');
+    }
+  }
+
   function movimentiRecenti(filtro, quanti) {
     return App.S.movimenti.filter(filtro).sort(function (a, b) {
       return (b.creato || 0) - (a.creato || 0);
@@ -176,7 +224,7 @@
     var oggi = App.oggi();
     var righe = App.S.reparti.filter(function (r) { return g[a.id + '|' + r.id]; }).map(function (r) {
       var lotti = C.lotti(App.S, a.id, r.id).filter(function (l) { return l.quantita !== 0; });
-      return '<tr><td><b>' + h(r.nome) + '</b></td><td class="n"><b>' + App.fmtNum(g[a.id + '|' + r.id]) + '</b></td><td>' +
+      return '<tr><td><b>' + h(nomeMagazzino(r)) + '</b></td><td class="n"><b>' + App.fmtNum(g[a.id + '|' + r.id]) + '</b></td><td>' +
         lotti.map(function (l) {
           var st = App.statoScadenza(C.giorniAllaScadenza(l.scadenza, oggi));
           return '<div class="piccolo">' + (l.lotto ? 'Lotto <span class="mono">' + h(l.lotto) + '</span>' : 'Senza lotto') + ' · ' + App.fmtNum(l.quantita) +
@@ -206,7 +254,7 @@
         '<h3>Ultimi movimenti</h3>' + tabellaMovimenti(movs, false),
       piede: (App.puo('articoli') ? '<button class="btn" type="button" id="sa-modifica">Modifica articolo</button>' : '') + '<span class="spazio"></span>' +
         (App.puo('carico') ? '<button class="btn" type="button" data-va="carico">📥 Carico</button>' : '') +
-        (App.puo('trasferimento') ? '<button class="btn" type="button" data-va="trasferimenti">🔁 Trasferisci</button>' : '') +
+        (App.puo('ddt') && App.repartiScrivibili().length ? '<button class="btn" type="button" data-va="trasferimenti">🔁 Trasferisci</button>' : '') +
         (App.puo('perdita') && App.repartiScrivibili().length ? '<button class="btn" type="button" data-va="perdite">🗑️ Perdita</button>' : '') +
         '<button class="btn primario" type="button" data-chiudi>Chiudi</button>',
       dopo: function (m) {
@@ -217,6 +265,9 @@
         });
         m.querySelectorAll('[data-scheda]').forEach(function (l) {
           l.addEventListener('click', function (e) { e.preventDefault(); });
+        });
+        m.querySelectorAll('[data-ddt]').forEach(function (l) {
+          l.addEventListener('click', function (e) { e.preventDefault(); apriDdt(l.getAttribute('data-ddt')); });
         });
       }
     });
@@ -1027,17 +1078,27 @@
       var zero = cont.querySelector('#g-zero').checked;
       var reparti = rep ? [App.reparto(rep)] : App.repartiAttivi();
       var oggi = App.oggi();
+      // merce partita con un DDT e non ancora ricevuta: verso il magazzino scelto, o verso tutti
+      var perArrivo = C.merceInViaggio ? C.merceInViaggio(App.S) : {};
+      var viaggio = {};
+      Object.keys(perArrivo).forEach(function (k) {
+        var p = k.split('|');
+        if (rep && p[1] !== rep) return;
+        viaggio[p[0]] = C.r3((viaggio[p[0]] || 0) + perArrivo[k]);
+      });
+      var conViaggio = Object.keys(perArrivo).length > 0;
       var lista = App.S.articoli.filter(function (a) {
         if (cat && a.categoria !== cat) return false;
         if (testo && (a.nome + ' ' + (a.principio || '') + ' ' + (a.codice || '')).toLowerCase().indexOf(testo) < 0) return false;
         if (sotto && !App.sottoScorta(a)) return false;
         var tot = reparti.reduce(function (s, r) { return s + App.giacenza(a.id, r.id); }, 0);
-        if (!zero && !tot && !sotto) return false;
+        if (!zero && !tot && !sotto && !viaggio[a.id]) return false;
         return true;
       }).sort(function (x, y) { return x.nome.localeCompare(y.nome, 'it'); });
 
       dati.colonne = [{ titolo: 'Articolo', larghezza: 42 }, { titolo: 'Categoria', larghezza: 11 }]
         .concat(reparti.map(function (r) { return { titolo: r.nome, larghezza: 13 }; }))
+        .concat(conViaggio ? [{ titolo: rep ? 'In viaggio verso ' + App.nomeReparto(rep) : 'In viaggio (DDT)', larghezza: 14 }] : [])
         .concat(rep ? [{ titolo: 'Prossima scadenza', larghezza: 16 }] : [{ titolo: 'Totale', larghezza: 11 }])
         .concat([{ titolo: 'Scorta minima', larghezza: 13 }, { titolo: 'Valore €', larghezza: 12 }]);
       dati.righe = [];
@@ -1053,11 +1114,13 @@
           var l = C.lotti(App.S, a.id, rep).filter(function (x) { return x.quantita > 0 && x.scadenza; });
           prossima = l.length ? l[0].scadenza : '';
         }
-        dati.righe.push([a.nome, a.categoria].concat(valori).concat(rep ? [prossima ? App.fmtScadenza(prossima) : ''] : [tot]).concat([a.scortaMinima || '', val]));
+        var inViaggio = viaggio[a.id] || 0;
+        dati.righe.push([a.nome, a.categoria].concat(valori).concat(conViaggio ? [inViaggio] : []).concat(rep ? [prossima ? App.fmtScadenza(prossima) : ''] : [tot]).concat([a.scortaMinima || '', val]));
         var stScad = prossima ? App.statoScadenza(C.giorniAllaScadenza(prossima, oggi)) : null;
         return '<tr class="cliccabile" data-scheda="' + h(a.id) + '"><td>' + h(a.nome) + (a.attivo === false ? ' <span class="etichetta">non attivo</span>' : '') + '</td>' +
           '<td>' + etichettaCategoria(a.categoria) + '</td>' +
           valori.map(function (v) { return '<td class="n' + (v < 0 ? ' neg' : '') + '">' + (v ? App.fmtNum(v) : '<span class="tenue">0</span>') + '</td>'; }).join('') +
+          (conViaggio ? '<td class="n">' + (inViaggio ? '<span class="etichetta info" title="Partito con un DDT e non ancora ricevuto">🚚 ' + App.fmtNum(inViaggio) + '</span>' : '<span class="tenue">—</span>') + '</td>' : '') +
           (rep ? '<td>' + (prossima ? App.fmtScadenza(prossima) + ' <span class="etichetta ' + stScad.classe + '">' + stScad.testo + '</span>' : '<span class="tenue">—</span>') + '</td>'
             : '<td class="n"><b>' + App.fmtNum(tot) + '</b></td>') +
           '<td class="n">' + (a.scortaMinima ? App.fmtNum(a.scortaMinima) + (App.sottoScorta(a) ? ' <span class="etichetta pericolo">sotto</span>' : '') : '<span class="tenue">—</span>') + '</td>' +
@@ -1065,10 +1128,11 @@
       }).join('');
 
       var testa = '<tr><th>Articolo</th><th>Categoria</th>' + reparti.map(function (r) { return '<th class="n">' + h(r.nome) + '</th>'; }).join('') +
+        (conViaggio ? '<th class="n" title="Merce partita con un DDT e non ancora ricevuta">In viaggio</th>' : '') +
         (rep ? '<th>Prossima scadenza</th>' : '<th class="n">Totale</th>') + '<th class="n">Scorta min.</th><th class="n">Valore</th></tr>';
       cont.querySelector('#g-tab').innerHTML = scheda('Giacenze al ' + App.fmtData(oggi) + (rep ? ' · ' + h(App.nomeReparto(rep)) : ''),
         lista.length ? '<div class="tabella-contenitore"><table class="tabella"><thead>' + testa + '</thead><tbody>' + corpo + '</tbody>' +
-          '<tfoot><tr><td colspan="' + (reparti.length + 4) + '">Valore complessivo (prezzo unitario × giacenza)</td><td class="n">' + App.fmtEuro(valoreTot) + '</td></tr></tfoot></table></div>'
+          '<tfoot><tr><td colspan="' + (reparti.length + 4 + (conViaggio ? 1 : 0)) + '">Valore complessivo (prezzo unitario × giacenza, esclusa la merce in viaggio)</td><td class="n">' + App.fmtEuro(valoreTot) + '</td></tr></tfoot></table></div>'
           : vuoto('Nessun articolo da mostrare', 'Cambia i filtri o spunta “Anche a zero”.'),
         '<span class="nota">' + lista.length + ' articoli</span>', true);
     }
@@ -1117,7 +1181,7 @@
         return a.giorni - b.giorni || a.articolo.nome.localeCompare(b.articolo.nome, 'it');
       });
       righeExcel = lista.map(function (l) {
-        return [l.scadenza ? App.fmtScadenza(l.scadenza) : '', l.articolo.nome, l.lotto, l.reparto.nome, l.quantita, App.statoScadenza(l.giorni).testo];
+        return [l.scadenza ? App.fmtScadenza(l.scadenza) : '', l.articolo.nome, l.lotto, nomeMagazzino(l.reparto), l.quantita, App.statoScadenza(l.giorni).testo];
       });
       cont.querySelector('#z-tab').innerHTML = scheda('Lotti in giacenza per scadenza',
         lista.length ? '<div class="tabella-contenitore"><table class="tabella"><thead><tr><th>Scadenza</th><th>Stato</th><th>Articolo</th><th>Lotto</th><th>Reparto</th><th class="n">Quantità</th><th></th></tr></thead><tbody>' +
@@ -1126,7 +1190,7 @@
             return '<tr><td><b>' + (l.scadenza ? App.fmtScadenza(l.scadenza) : '—') + '</b></td>' +
               '<td><span class="etichetta ' + st.classe + '">' + st.testo + (l.giorni !== null && l.giorni >= 0 ? ' · ' + l.giorni + ' gg' : '') + '</span></td>' +
               '<td><a href="#" data-scheda="' + h(l.articolo.id) + '">' + h(l.articolo.nome) + '</a></td>' +
-              '<td class="mono">' + h(l.lotto || '—') + '</td><td>' + h(l.reparto.nome) + '</td>' +
+              '<td class="mono">' + h(l.lotto || '—') + '</td><td>' + h(nomeMagazzino(l.reparto)) + '</td>' +
               '<td class="n">' + App.fmtNum(l.quantita) + '</td>' +
               '<td class="azioni">' + (l.giorni !== null && l.giorni < 0 && App.puo('perdita') && App.repartiScrivibili().some(function (r) { return r.id === l.reparto.id; }) ? '<button class="btn piccolo pericolo" type="button" data-perdita="' + h(l.articolo.id) + '|' + h(l.reparto.id) + '|' + h(l.lotto) + '|' + l.quantita + '">Togli dal magazzino</button>' : '') + '</td></tr>';
           }).join('') + '</tbody></table></div>'
@@ -1195,12 +1259,16 @@
     cont.querySelector('#v-cerca').addEventListener('input', disegna);
     collegaMovimenti(cont.querySelector('#v-tab'), disegna);
     cont.querySelector('#v-excel').addEventListener('click', function () {
-      var col = ['Data', 'Tipo', 'Articolo', 'Categoria', 'Quantità', 'Unità', 'Lotto', 'Scadenza', 'Reparto', 'Reparto di arrivo', 'Fornitore', 'Documento', 'Causale', 'Note', 'Operatore', 'Annullato']
-        .map(function (t, i) { return { titolo: t, larghezza: [11, 14, 40, 10, 10, 8, 14, 10, 16, 16, 20, 14, 16, 24, 14, 30][i] }; });
+      var col = ['Data', 'Tipo', 'Articolo', 'Categoria', 'Quantità', 'Unità', 'Lotto', 'Scadenza', 'Reparto', 'Reparto di arrivo', 'Fornitore', 'Documento', 'DDT', 'Causale', 'Note', 'Operatore', 'Annullato']
+        .map(function (t, i) { return { titolo: t, larghezza: [11, 14, 40, 10, 10, 8, 14, 10, 16, 16, 20, 14, 30, 16, 24, 14, 30][i] }; });
       var righe = filtrati.slice().reverse().map(function (m) {
         var a = App.articolo(m.articoloId) || {};
+        // i movimenti dei DDT si leggono come trasferimenti dal/verso il magazzino vero, non "In transito"
+        var v = vistaDdt(m);
+        var reparto = v ? v.repartoId : m.repartoId;
+        var arrivo = v ? v.arrivo : m.repartoDestId;
         return [App.fmtData(m.data), App.TIPI[m.tipo], a.nome || '', a.categoria || '', m.quantita, a.unita || '', m.lotto || '', m.scadenza ? App.fmtScadenza(m.scadenza) : '',
-          App.nomeReparto(m.repartoId), m.repartoDestId ? App.nomeReparto(m.repartoDestId) : '', m.fornitore || '', m.documento || '', m.causale || '', m.note || '', m.operatore || '',
+          nomeMagazzinoId(reparto), arrivo ? nomeMagazzinoId(arrivo) : '', m.fornitore || '', m.documento || '', v ? v.ddt.numero + ' · ' + v.testo : '', m.causale || '', m.note || '', m.operatore || '',
           m.annullato ? 'Sì' + (m.annullato.motivo ? ': ' + m.annullato.motivo : '') : ''];
       });
       root.ExcelFarmacia.esportaElenco('Movimenti', col, righe).then(function (b) { App.scarica(b, 'Movimenti_' + valore(cont, '#v-dal') + '_' + valore(cont, '#v-al') + '.xlsx'); });
@@ -1385,7 +1453,7 @@
           '<td>' + fmt(r.residuiPrec) + '</td><td>' + fmt(r.carichi) + '</td><td class="tot">' + fmt(r.totaleCarico) + '</td>' +
           r.consumi.map(function (q, i) {
             var tr = trasferimentiUscita[r.articoloId + '|' + (i + 1)];
-            return '<td class="g' + (festivo(i + 1) ? ' festivo' : '') + '"' + (tr ? ' title="Comprende ' + App.fmtNum(tr) + ' trasferiti ad altri reparti"' : '') + '>' +
+            return '<td class="g' + (festivo(i + 1) ? ' festivo' : '') + '"' + (tr ? ' title="Comprende ' + App.fmtNum(tr) + ' trasferiti ad altri reparti (anche con i DDT)"' : '') + '>' +
               (modificabile ? '<input data-giorno="' + (i + 1) + '" value="' + App.fmtCampo(q) + '" inputmode="decimal" aria-label="Giorno ' + (i + 1) + '">' : '<span class="sola">' + fmt(q) + '</span>') + '</td>';
           }).join('') +
           '<td class="tot">' + fmt(r.totaleConsumo) + '</td><td>' + fmt(r.perdite) + '</td><td class="tot">' + fmt(r.totaleScarico) + '</td>' +
@@ -1445,7 +1513,7 @@
       if (inp.value === inp.defaultValue || nuovo === vecchio) { if (prossimo) spostaFuoco(art, prossimo); return; }
       var trasf = trasferimentiUscita[art + '|' + giorno] || 0;
       if (nuovo < trasf) {
-        App.avviso('In questo giorno ci sono ' + App.fmtNum(trasf) + ' trasferiti ad altri reparti: il valore non può essere più basso. Correggi il trasferimento da Movimenti.', 'errore');
+        App.avviso('In questo giorno ci sono ' + App.fmtNum(trasf) + ' trasferiti ad altri reparti: il valore non può essere più basso. Correggi il trasferimento da Movimenti (o annulla il DDT da DDT e consegne).', 'errore');
         inp.value = App.fmtCampo(vecchio);
         inp.removeAttribute('data-gestito');
         return;

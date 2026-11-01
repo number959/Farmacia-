@@ -25,11 +25,12 @@
 
   /* ======================= UTENTI ======================= */
 
+  // etichette da App.RUOLI (uguali a server/accessi.js); qui cosa fa ogni ruolo nella versione 3.0
   var DESCRIZIONE_RUOLI = {
-    amministratore: 'tutto, compresi utenti, struttura, reparti e copie di sicurezza',
-    farmacista: 'carichi, trasferimenti, consumi, perdite, inventario, articoli, correzioni del registro; annulla qualsiasi movimento; vede il registro attività',
-    reparto: 'solo nei suoi reparti: consumi, perdite e correzioni dei consumi nel registro; annulla i propri consumi e perdite; consulta il resto',
-    consultazione: 'solo lettura, stampe ed Excel (per esempio la direzione sanitaria)'
+    amministratore: 'tutto: utenti e sicurezza, piani, magazzini e armadi, impostazioni, copie di sicurezza e stato del sistema',
+    farmacista: 'lavora nella farmacia centrale: carichi dai fornitori, evasione delle richieste, DDT ai magazzini, assortimenti e scorte, previsioni e proposta d’ordine; annulla qualsiasi movimento; vede il registro attività',
+    reparto: 'lavora nei magazzini che gli assegni: consumi, perdite, richieste alla farmacia, ricezione dei DDT, posto dei farmaci negli armadi; annulla i propri consumi e perdite; il resto lo consulta',
+    consultazione: 'per la direzione: vede tutto, anche previsioni e distribuzione, stampa ed esporta in Excel, non modifica niente'
   };
 
   // password provvisoria facile da dettare: niente lettere che si confondono (l, I, O, 0)
@@ -56,11 +57,15 @@
     }).join('');
   }
 
+  // magazzini da assegnare al responsabile (mai "In transito", il magazzino di sistema della merce in viaggio)
   function spunteReparti(scelti) {
-    var lista = App.S.reparti.filter(function (r) { return r.attivo !== false || scelti.indexOf(r.id) >= 0; });
+    var lista = App.S.reparti.filter(function (r) { return r.tipo !== 'transito' && (r.attivo !== false || scelti.indexOf(r.id) >= 0); })
+      .sort(function (a, b) { return (Number(b.livello) || 0) - (Number(a.livello) || 0) || (a.ordine || 0) - (b.ordine || 0); });
     return '<div class="spunte-reparti">' + lista.map(function (r) {
+      var centrale = r.tipo === 'centrale' || r.centrale;
       return '<label class="spunta"><input type="checkbox" class="u-rep" value="' + h(r.id) + '"' + (scelti.indexOf(r.id) >= 0 ? ' checked' : '') + '> ' +
-        h(r.nome) + (r.attivo === false ? ' <span class="etichetta">non attivo</span>' : '') + '</label>';
+        h(r.nome) + (r.piano ? ' <span class="tenue piccolo">· ' + h(r.piano) + '</span>' : '') + (centrale ? ' <span class="etichetta info">centrale</span>' : '') +
+        (r.attivo === false ? ' <span class="etichetta">non attivo</span>' : '') + '</label>';
     }).join('') + '</div>';
   }
 
@@ -82,7 +87,7 @@
     });
   }
 
-  // mostra le spunte dei reparti solo per il ruolo "reparto"
+  // mostra le spunte dei magazzini solo per il ruolo "reparto" (responsabile di magazzino)
   function collegaRuolo(m) {
     var sel = m.querySelector('#u-ruolo');
     var box = m.querySelector('#u-reparti');
@@ -108,7 +113,8 @@
 
     function nomiReparti(u) {
       if (u.ruolo !== 'reparto') return '<span class="tenue">tutti</span>';
-      var n = (u.reparti || []).map(App.nomeReparto);
+      // "In transito" non si assegna: se c'è (utenti di prima) non lo mostro
+      var n = (u.reparti || []).filter(function (id) { var r = App.reparto(id); return !r || r.tipo !== 'transito'; }).map(App.nomeReparto);
       return n.length ? h(n.join(', ')) : '<span class="etichetta pericolo">nessuno</span>';
     }
 
@@ -116,7 +122,7 @@
       var anche = cont.querySelector('#u-anche').checked;
       var lista = utenti.filter(function (u) { return anche || u.attivo !== false; });
       cont.querySelector('#u-tab').innerHTML = scheda('Utenti',
-        lista.length ? '<div class="tabella-contenitore"><table class="tabella"><thead><tr><th>Utente</th><th>Nome</th><th>Ruolo</th><th>Reparti</th><th>Stato</th><th>Ultimo accesso</th><th></th></tr></thead><tbody>' +
+        lista.length ? '<div class="tabella-contenitore"><table class="tabella"><thead><tr><th>Utente</th><th>Nome</th><th>Ruolo</th><th>Magazzini</th><th>Stato</th><th>Ultimo accesso</th><th></th></tr></thead><tbody>' +
           lista.map(function (u) {
             var stato = u.attivo === false ? '<span class="etichetta">disattivato</span>'
               : u.bloccato ? '<span class="etichetta pericolo">bloccato</span>'
@@ -163,7 +169,7 @@
           '<label class="campo"><span>Nome e cognome *</span><input id="u-nome" autocomplete="off"></label>' +
           '<label class="campo"><span>Ruolo</span><select id="u-ruolo">' + opzioniRuolo('reparto') + '</select></label>' +
           campoPassword('u-password', 'Password provvisoria *') +
-          '<div class="campo largo" id="u-reparti"><span>Reparti in cui registra</span>' + spunteReparti([]) + '</div>' +
+          '<div class="campo largo" id="u-reparti"><span>Magazzini di cui è responsabile</span>' + spunteReparti([]) + '</div>' +
           '</div><p class="piccolo tenue">Nome utente: da 3 a 40 caratteri, lettere minuscole, numeri, punto, trattino.</p>',
         piede: '<button class="btn" type="button" data-chiudi>Annulla</button><button class="btn primario" type="button" id="u-salva">Crea utente</button>',
         dopo: function (m) {
@@ -182,7 +188,7 @@
             if (!dati.username) { App.avviso('Scrivi il nome utente.', 'errore'); return; }
             if (!dati.nome) { App.avviso('Scrivi nome e cognome.', 'errore'); return; }
             if (dati.password.length < 8) { App.avviso('La password provvisoria deve avere almeno 8 caratteri.', 'errore'); return; }
-            if (dati.ruolo === 'reparto' && !dati.reparti.length) { App.avviso('Scegli almeno un reparto.', 'errore'); return; }
+            if (dati.ruolo === 'reparto' && !dati.reparti.length) { App.avviso('Scegli almeno un magazzino di cui è responsabile.', 'errore'); return; }
             b.disabled = true;
             Api.richiesta('POST', '/api/utenti', dati).then(function () {
               App.chiudiModale();
@@ -204,7 +210,7 @@
           '<label class="campo"><span>Nome utente</span><input value="' + h(u.username) + '" readonly class="mono"></label>' +
           '<label class="campo"><span>Nome e cognome *</span><input id="u-nome" value="' + h(u.nome) + '" autocomplete="off"></label>' +
           '<label class="campo"><span>Ruolo</span><select id="u-ruolo">' + opzioniRuolo(u.ruolo) + '</select></label>' +
-          '<div class="campo largo" id="u-reparti"><span>Reparti in cui registra</span>' + spunteReparti(u.reparti || []) + '</div>' +
+          '<div class="campo largo" id="u-reparti"><span>Magazzini di cui è responsabile</span>' + spunteReparti(u.reparti || []) + '</div>' +
           '<label class="spunta largo"><input type="checkbox" id="u-attivo"' + (u.attivo !== false ? ' checked' : '') + '> Utente attivo (può entrare nel programma)</label>' +
           '</div><p class="piccolo tenue">Disattivare un utente chiude subito le sue sessioni aperte; i movimenti che ha registrato restano con il suo nome.</p>',
         piede: '<button class="btn" type="button" data-chiudi>Annulla</button><button class="btn primario" type="button" id="u-salva">Salva</button>',
@@ -220,7 +226,7 @@
             };
             if (dati.ruolo === 'reparto') dati.reparti = repartiScelti(m);
             if (!dati.nome) { App.avviso('Scrivi nome e cognome.', 'errore'); return; }
-            if (dati.ruolo === 'reparto' && !dati.reparti.length) { App.avviso('Scegli almeno un reparto.', 'errore'); return; }
+            if (dati.ruolo === 'reparto' && !dati.reparti.length) { App.avviso('Scegli almeno un magazzino di cui è responsabile.', 'errore'); return; }
             var procedi = Promise.resolve(true);
             if (App.utente && u.id === App.utente.id && (dati.ruolo !== 'amministratore' || !dati.attivo)) {
               procedi = App.conferma('Modifichi il tuo utente', 'Stai togliendo a te stesso il ruolo di amministratore' + (dati.attivo ? '' : ' (e disattivi il tuo utente)') + ': dopo non potrai più gestire gli utenti. Procedo?', 'Procedi', true);
@@ -292,7 +298,13 @@
     { codice: 'articoli', testo: 'Articoli' },
     { codice: 'utenti', testo: 'Utenti' },
     { codice: 'impostazioni', testo: 'Impostazioni' },
-    { codice: 'reparti', testo: 'Reparti' },
+    { codice: 'reparti', testo: 'Reparti (versione 2)' },
+    { codice: 'magazzini', testo: 'Magazzini' },
+    { codice: 'armadi', testo: 'Armadi' },
+    { codice: 'assortimento', testo: 'Assortimento e scorte' },
+    { codice: 'ubicazioni', testo: 'Posto negli armadi' },
+    { codice: 'richieste', testo: 'Richieste' },
+    { codice: 'ddt', testo: 'DDT e consegne' },
     { codice: 'backup', testo: 'Copie di sicurezza' },
     { codice: 'archivio', testo: 'Archivio' }
   ];
@@ -314,6 +326,14 @@
     'impostazioni.modifica': 'Modifica impostazioni',
     'reparti.modifica': 'Modifica reparti',
     'reparti.elimina': 'Eliminazione reparto',
+    'magazzini.crea': 'Nuovo magazzino',
+    'magazzini.modifica': 'Modifica magazzino',
+    'magazzini.elimina': 'Eliminazione magazzino',
+    'armadi.crea': 'Nuovo armadio',
+    'armadi.modifica': 'Modifica armadio',
+    'armadi.elimina': 'Eliminazione armadio',
+    'assortimento.modifica': 'Modifica assortimento e scorte',
+    'ubicazioni.modifica': 'Posto degli articoli negli armadi',
     'utenti.crea': 'Nuovo utente',
     'utenti.primo-amministratore': 'Primo amministratore',
     'utenti.modifica': 'Modifica utente',
@@ -337,7 +357,11 @@
     utente: 'utente', nome: 'nome', ruolo: 'ruolo', reparti: 'reparti', attivo: 'attivo', categoria: 'categoria',
     origine: 'da', righe: 'righe', nuovi: 'nuovi', carichi: 'carichi', registratoDa: 'registrato da', prima: 'prima',
     dopo: 'dopo', cambi: 'cambi', articoli: 'articoli', movimenti: 'movimenti', scartati: 'scartati', copia: 'copia',
-    copiaDiSicurezza: 'copia dello stato precedente', sicurezza: 'copia di sicurezza', prezzo: 'prezzo', scortaMinima: 'scorta minima', testo: ''
+    copiaDiSicurezza: 'copia dello stato precedente', sicurezza: 'copia di sicurezza', prezzo: 'prezzo', scortaMinima: 'scorta minima', testo: '',
+    magazzino: 'magazzino', armadio: 'armadio', piano: 'piano', livello: 'livello', colore: 'colore', descrizione: 'descrizione', ordine: 'ordine',
+    exCentrale: 'ex farmacia centrale', liberati: 'caselle liberate', utentiAggiornati: 'utenti aggiornati', assortimento: 'righe di assortimento',
+    nuove: 'nuovi', modificate: 'modificati', tolte: 'tolti', aggiunte: 'aggiunti all’assortimento', min: 'min', riordino: 'riordino', max: 'max',
+    ripiano: 'ripiano', posto: 'posto', posti: 'posti', ripiani: 'ripiani', colonne: 'posti per ripiano', note: 'note'
   };
 
   // valore leggibile: id di reparti e articoli diventano nomi, tipi e ruoli in italiano

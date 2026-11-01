@@ -153,3 +153,171 @@ test('decimali: nessun resto da arrotondamento', () => {
   const s2 = stato([mov('carico', '2026-10-01', 1, { lotto: 'A', scadenza: '2027-01' }), mov('carico', '2026-10-01', 5, { lotto: 'B', scadenza: '2028-01' }), mov('consumo', '2026-10-02', 0.9)]);
   assert.deepEqual(C.allocaUscita(s2, 'a1', 'far', '2026-10-03', 0.1), [{ lotto: 'A', scadenza: '2027-01', quantita: 0.1 }]);
 });
+
+/* ---------- versione 3.0: richieste, DDT interni e merce in viaggio ---------- */
+
+function statoLogistica() {
+  return {
+    richiesteRighe: [
+      { id: 'rr1', richiestaId: 'R1', articoloId: 'a1', quantita: 10, approvata: 8, ordine: 0, nota: '' },
+      { id: 'rr2', richiestaId: 'R1', articoloId: 'a2', quantita: 5, approvata: null, ordine: 1, nota: 'urgente' },
+      { id: 'rr3', richiestaId: 'R2', articoloId: 'a1', quantita: 3, approvata: null, ordine: 0, nota: '' }
+    ],
+    ddt: [
+      { id: 'D1', richiestaId: 'R1', stato: 'ricevuto_con_differenze', origineId: 'far', destinazioneId: 'deg' },
+      { id: 'D2', richiestaId: 'R1', stato: 'in_preparazione', origineId: 'far', destinazioneId: 'deg' },
+      { id: 'D3', richiestaId: 'R1', stato: 'annullato', origineId: 'far', destinazioneId: 'deg' },
+      { id: 'D4', richiestaId: null, stato: 'in_transito', origineId: 'far', destinazioneId: 'deg' },
+      { id: 'D5', richiestaId: 'R1', stato: 'in_transito', origineId: 'far', destinazioneId: 'deg' }
+    ],
+    ddtRighe: [
+      { id: 'x1', ddtId: 'D1', articoloId: 'a1', richiestaRigaId: 'rr1', lotto: 'A', quantita: 3, ricevuta: 2 },
+      { id: 'x2', ddtId: 'D1', articoloId: 'a1', richiestaRigaId: 'rr1', lotto: 'B', quantita: 1, ricevuta: 1 },
+      { id: 'x3', ddtId: 'D2', articoloId: 'a1', richiestaRigaId: 'rr1', lotto: 'B', quantita: 2 },
+      { id: 'x4', ddtId: 'D3', articoloId: 'a2', richiestaRigaId: 'rr2', lotto: '', quantita: 5 },
+      { id: 'x5', ddtId: 'D4', articoloId: 'a1', richiestaRigaId: null, lotto: 'A', quantita: 7 },
+      { id: 'x6', ddtId: 'D5', articoloId: 'a2', richiestaRigaId: 'rr2', lotto: '', quantita: 1.5 }
+    ]
+  };
+}
+
+test('avanzamento di una richiesta: approvata, in preparazione, spedita (DDT annullati esclusi), residuo', () => {
+  const s = statoLogistica();
+  const r = C.avanzamentoRichiesta(s, 'R1');
+  assert.deepEqual(r.map((x) => [x.rigaId, x.base, x.inPreparazione, x.spedita, x.residuo]), [
+    ['rr1', 8, 2, 4, 2],     // approvate 8: 4 partite (anche se ricevute con differenze), 2 in preparazione
+    ['rr2', 5, 0, 1.5, 3.5]  // non ancora approvata: vale la quantità richiesta; il DDT annullato non conta
+  ]);
+  assert.equal(r[1].nota, 'urgente');
+  const t = C.totaliRichiesta(s, 'R1');
+  assert.equal(t.righe, 2);
+  assert.equal(t.base, 13);
+  assert.equal(t.spedita, 5.5);
+  assert.equal(t.residuo, 5.5);
+  assert.equal(t.percentuale, 42);
+  assert.deepEqual(C.avanzamentoRichiesta(s, 'R2').map((x) => x.residuo), [3]);
+  assert.deepEqual(C.avanzamentoRichiesta({}, 'R1'), []);
+  // spedito più dell'approvato (approvazione ridotta dopo): il residuo non va sotto zero
+  s.richiesteRighe[0].approvata = 3;
+  assert.equal(C.avanzamentoRichiesta(s, 'R1')[0].residuo, 0);
+  assert.equal(C.totaliRichiesta(s, 'R1').percentuale, 56);
+});
+
+test('merce in viaggio: solo i DDT partiti e non ancora ricevuti, per articolo e magazzino di arrivo', () => {
+  const v = C.merceInViaggio(statoLogistica());
+  assert.deepEqual(v, { 'a1|deg': 7, 'a2|deg': 1.5 });
+  assert.deepEqual(C.merceInViaggio({}), {});
+});
+
+test('movimenti dei DDT: il magazzino vero dall\'altra parte al posto di "In transito"', () => {
+  const s = statoLogistica();
+  const partenza = { tipo: 'trasferimento', repartoId: 'far', repartoDestId: 'r-transito', ddtId: 'D4' };
+  const arrivo = { tipo: 'trasferimento', repartoId: 'r-transito', repartoDestId: 'deg', ddtId: 'D4' };
+  const rientro = { tipo: 'trasferimento', repartoId: 'r-transito', repartoDestId: 'far', ddtId: 'D4' };
+  const perdita = { tipo: 'perdita', repartoId: 'r-transito', ddtId: 'D4' };
+  assert.equal(C.controparteDdt(s, partenza).controparteId, 'deg');
+  assert.equal(C.controparteDdt(s, arrivo).controparteId, 'far');
+  assert.equal(C.controparteDdt(s, rientro).controparteId, 'deg');
+  assert.equal(C.controparteDdt(s, perdita).controparteId, null);
+  assert.equal(C.controparteDdt(s, partenza).ddt.id, 'D4');
+  assert.equal(C.controparteDdt(s, { tipo: 'consumo' }), null);
+  assert.equal(C.controparteDdt(s, { tipo: 'trasferimento', ddtId: 'nessuno' }), null);
+});
+
+test('nota consumi con i DDT: l\'origine esce alla partenza, il destinatario entra alla ricezione', () => {
+  const T = 'r-transito';
+  const s = stato([
+    mov('carico', '2026-10-01', 50, { lotto: 'A', scadenza: '2027-03' }),
+    // DDT partito il 30 ottobre, ricevuto il 2 novembre: 18 arrivano, 1 rientra, 1 perso in viaggio
+    mov('trasferimento', '2026-10-30', 20, { repartoDestId: T, lotto: 'A', scadenza: '2027-03', ddtId: 'D' }),
+    mov('trasferimento', '2026-11-02', 18, { repartoId: T, repartoDestId: 'deg', lotto: 'A', scadenza: '2027-03', ddtId: 'D' }),
+    mov('trasferimento', '2026-11-02', 1, { repartoId: T, repartoDestId: 'far', lotto: 'A', scadenza: '2027-03', ddtId: 'D' }),
+    mov('perdita', '2026-11-02', 1, { repartoId: T, lotto: 'A', scadenza: '2027-03', ddtId: 'D' })
+  ]);
+  const ottFar = C.registroMensile(s, { repartoId: 'far', anno: 2026, mese: 10, categoria: 'FARMACI' }).righe[0];
+  assert.equal(ottFar.consumi[29], 20);
+  assert.equal(ottFar.residui, 30);
+  const ottDeg = C.registroMensile(s, { repartoId: 'deg', anno: 2026, mese: 10, categoria: 'FARMACI' });
+  assert.equal(ottDeg.righe.length, 0, 'a ottobre la Degenza non ha ancora ricevuto niente');
+  const novDeg = C.registroMensile(s, { repartoId: 'deg', anno: 2026, mese: 11, categoria: 'FARMACI' }).righe[0];
+  assert.equal(novDeg.carichi, 18);
+  assert.equal(novDeg.residui, 18);
+  assert.equal(novDeg.scadenza, '2027-03');
+  const novFar = C.registroMensile(s, { repartoId: 'far', anno: 2026, mese: 11, categoria: 'FARMACI' }).righe[0];
+  assert.equal(novFar.carichi, 1, 'la differenza rientrata è un carico per l\'origine');
+  assert.equal(C.giacenza(s, 'a1', T, '2026-10-31'), 20);
+  assert.equal(C.giacenza(s, 'a1', T), 0);
+  assert.deepEqual(C.lotti(s, 'a1', 'deg'), [{ lotto: 'A', scadenza: '2027-03', quantita: 18 }]);
+});
+
+/* ---------- Code 128 dei DDT (js/codice128.js) ---------- */
+
+const K = require('../js/codice128.js');
+
+// lettore indipendente dall'encoder: dalle larghezze ai valori, controllo e testo
+function leggi128(moduli) {
+  const mappa = {};
+  K.SIMBOLI.forEach((p, v) => { mappa[p] = v; });
+  const valori = [];
+  for (let i = 0; i < moduli.length;) {
+    const lung = moduli.length - i === 7 ? 7 : 6;
+    const v = mappa[moduli.slice(i, i + lung).join('')];
+    assert.notEqual(v, undefined, 'simbolo sconosciuto alla posizione ' + i);
+    valori.push(v);
+    i += lung;
+  }
+  assert.equal(valori[valori.length - 1], 106, 'manca lo stop');
+  const dati = valori.slice(0, -2);
+  let somma = dati[0];
+  for (let j = 1; j < dati.length; j++) somma += dati[j] * j;
+  assert.equal(somma % 103, valori[valori.length - 2], 'cifra di controllo sbagliata');
+  let set = dati[0] === 105 ? 'C' : dati[0] === 104 ? 'B' : 'A';
+  let testo = '';
+  dati.slice(1).forEach((v) => {
+    if (set === 'B' && v === 99) { set = 'C'; return; }
+    if (set === 'C' && v === 100) { set = 'B'; return; }
+    testo += set === 'C' ? String(v).padStart(2, '0') : String.fromCharCode(v + 32);
+  });
+  return testo;
+}
+
+test('Code 128: tabella dei simboli coerente (11 moduli, barre pari, tutti diversi)', () => {
+  assert.equal(K.SIMBOLI.length, 107);
+  assert.equal(new Set(K.SIMBOLI).size, 107);
+  K.SIMBOLI.forEach((p, v) => {
+    const w = p.split('').map(Number);
+    assert.equal(w.reduce((a, b) => a + b, 0), v === 106 ? 13 : 11, 'simbolo ' + v);
+    const barre = w.filter((_, i) => i % 2 === 0).reduce((a, b) => a + b, 0);
+    assert.equal(barre % 2, 0, 'le barre del simbolo ' + v + ' devono sommare un numero pari');
+  });
+});
+
+test('Code 128: numeri dei DDT e altri testi si rileggono uguali, con il set C per le cifre', () => {
+  for (const t of ['DDT-2026-0001', 'DDT-2026-1234', 'RIC-2027-0042', '12345678', '1234567', 'A1', 'x', 'Lotto 12/a', '9', '0001-ABC', 'AB-123456-CD']) {
+    assert.equal(leggi128(K.codifica(t).moduli), t, t);
+  }
+  const v = K.valori('DDT-2026-0001');
+  assert.equal(v[0], 104, 'inizia con il set B');
+  assert.ok(v.includes(99), 'passa al set C per le ultime cifre');
+  assert.equal(v.length, 15);
+  assert.equal(K.valori('12345678')[0], 105, 'solo cifre: set C dall\'inizio');
+  // "PJJ123C" resta tutto nel set B: controllo = (start 104 + somma dei valori per la posizione) modulo 103 = 55
+  const pjj = K.valori('PJJ123C');
+  assert.equal(pjj[0], 104);
+  assert.equal(pjj[pjj.length - 2], 55);
+  assert.throws(() => K.valori(''), /vuoto/);
+  assert.throws(() => K.valori('àè'), /non ammesso/);
+});
+
+test('Code 128: SVG con zona di silenzio, barre e testo leggibile', () => {
+  const s = K.svg('DDT-2026-0007', { modulo: 2, altezza: 40 });
+  assert.match(s, /^<svg [^>]*viewBox="0 0 \d+ 54"/);
+  assert.match(s, /aria-label="Codice a barre DDT-2026-0007"/);
+  assert.match(s, />DDT-2026-0007<\/text>/);
+  const larghezza = Number(/viewBox="0 0 (\d+)/.exec(s)[1]);
+  const moduli = K.codifica('DDT-2026-0007').moduli.reduce((a, b) => a + b, 0);
+  assert.equal(larghezza, moduli + 2 * K.ZONA_SILENZIO);
+  assert.equal((s.match(/M\d+ 0h/g) || []).length, Math.ceil(K.codifica('DDT-2026-0007').moduli.length / 2), 'una barra ogni due larghezze');
+  assert.doesNotMatch(K.svg('A<&"', { testo: false }), /<text/);
+  assert.match(K.svg('A<&"'), /A&lt;&amp;&quot;/);
+});

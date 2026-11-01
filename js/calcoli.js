@@ -281,6 +281,97 @@
     return { righe: righe, giorni: nGiorni, inizio: inizio, fine: fine, totali: totali };
   }
 
+  /* ======================= richieste e DDT interni (versione 3.0) ======================= */
+  /*
+   * Lo stato può essere App.S o un oggetto più piccolo con le sole tabelle che servono:
+   * { richiesteRighe, ddt, ddtRighe } (le forme sono quelle di docs/NOVITA-3.0.md).
+   */
+
+  // DDT che contano come "spediti": partiti e non annullati
+  var DDT_PARTITI = ['in_transito', 'ricevuto', 'ricevuto_con_differenze'];
+
+  function lista(stato, chiave) { return (stato && Array.isArray(stato[chiave])) ? stato[chiave] : []; }
+
+  /*
+   * Avanzamento delle righe di una richiesta:
+   * [{ rigaId, articoloId, quantita, approvata, base, inPreparazione, spedita, residuo, ordine, nota }]
+   *   base           quantità da consegnare: l'approvata, oppure la richiesta finché la farmacia non ha approvato
+   *   inPreparazione quantità già messa in DDT ancora in preparazione
+   *   spedita        quantità partita con DDT non annullati (in viaggio o ricevuti)
+   *   residuo        quanto resta da preparare (mai sotto zero)
+   */
+  function avanzamentoRichiesta(stato, richiestaId) {
+    var ddtStato = {};
+    lista(stato, 'ddt').forEach(function (d) { if (d.richiestaId === richiestaId) ddtStato[d.id] = d.stato; });
+    var preparata = {};
+    var spedita = {};
+    lista(stato, 'ddtRighe').forEach(function (r) {
+      var st = ddtStato[r.ddtId];
+      if (!st || !r.richiestaRigaId) return;
+      if (st === 'in_preparazione') preparata[r.richiestaRigaId] = r3((preparata[r.richiestaRigaId] || 0) + r.quantita);
+      else if (DDT_PARTITI.indexOf(st) >= 0) spedita[r.richiestaRigaId] = r3((spedita[r.richiestaRigaId] || 0) + r.quantita);
+    });
+    return lista(stato, 'richiesteRighe').filter(function (r) { return r.richiestaId === richiestaId; })
+      .sort(function (a, b) { return (a.ordine || 0) - (b.ordine || 0); })
+      .map(function (r) {
+        var base = r.approvata === null || r.approvata === undefined ? Number(r.quantita) || 0 : Number(r.approvata) || 0;
+        var p = preparata[r.id] || 0;
+        var s = spedita[r.id] || 0;
+        return {
+          rigaId: r.id, articoloId: r.articoloId, quantita: r.quantita, approvata: r.approvata === undefined ? null : r.approvata,
+          base: base, inPreparazione: p, spedita: s, residuo: Math.max(0, r3(base - p - s)), ordine: r.ordine, nota: r.nota || ''
+        };
+      });
+  }
+
+  /* Totali di una richiesta: { righe, base, spedita, inPreparazione, residuo, percentuale } (percentuale spedita 0..100). */
+  function totaliRichiesta(stato, richiestaId) {
+    var righe = avanzamentoRichiesta(stato, richiestaId);
+    var t = { righe: righe.length, base: 0, spedita: 0, inPreparazione: 0, residuo: 0, percentuale: 0 };
+    righe.forEach(function (r) {
+      t.base = r3(t.base + r.base);
+      t.spedita = r3(t.spedita + Math.min(r.spedita, r.base));
+      t.inPreparazione = r3(t.inPreparazione + r.inPreparazione);
+      t.residuo = r3(t.residuo + r.residuo);
+    });
+    t.percentuale = t.base > 0 ? Math.min(100, Math.round(t.spedita / t.base * 100)) : 0;
+    return t;
+  }
+
+  /*
+   * Merce in viaggio: righe dei DDT partiti e non ancora ricevuti, sommate per articolo e magazzino di arrivo.
+   * Restituisce { 'articolo|destinazione': quantita }.
+   */
+  function merceInViaggio(stato) {
+    var dest = {};
+    lista(stato, 'ddt').forEach(function (d) { if (d.stato === 'in_transito') dest[d.id] = d.destinazioneId; });
+    var out = {};
+    lista(stato, 'ddtRighe').forEach(function (r) {
+      var d = dest[r.ddtId];
+      if (!d) return;
+      var k = r.articoloId + '|' + d;
+      out[k] = r3((out[k] || 0) + r.quantita);
+    });
+    return out;
+  }
+
+  /*
+   * Per un movimento nato da un DDT: il magazzino "vero" dall'altra parte, al posto di "In transito".
+   *   partenza (origine → In transito)            → destinazione del DDT
+   *   arrivo (In transito → destinazione)         → origine del DDT
+   *   rientro all'origine (In transito → origine) → destinazione del DDT (dove doveva arrivare)
+   *   perdita in viaggio (su In transito)         → null
+   * Restituisce { ddt, controparteId } oppure null se il movimento non viene da un DDT conosciuto.
+   */
+  function controparteDdt(stato, m) {
+    if (!m || !m.ddtId) return null;
+    var d = lista(stato, 'ddt').filter(function (x) { return x.id === m.ddtId; })[0];
+    if (!d) return null;
+    if (m.tipo !== 'trasferimento') return { ddt: d, controparteId: null };
+    var reale = m.repartoDestId === d.origineId || m.repartoDestId === d.destinazioneId ? m.repartoDestId : m.repartoId;
+    return { ddt: d, controparteId: reale === d.origineId ? d.destinazioneId : d.origineId };
+  }
+
   var api = {
     effetto: effetto,
     r3: r3,
@@ -296,7 +387,13 @@
     giornoPrima: giornoPrima,
     scadenzaBreve: scadenzaBreve,
     giorniAllaScadenza: giorniAllaScadenza,
-    ordinaMovimenti: ordinaMovimenti
+    ordinaMovimenti: ordinaMovimenti,
+    // versione 3.0: richieste e DDT interni
+    DDT_PARTITI: DDT_PARTITI,
+    avanzamentoRichiesta: avanzamentoRichiesta,
+    totaliRichiesta: totaliRichiesta,
+    merceInViaggio: merceInViaggio,
+    controparteDdt: controparteDdt
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

@@ -10,6 +10,9 @@ var DemoFarmacia = require('../js/demo.js');
 var A = require('./accessi.js');
 var errore = A.errore;
 var nuovoId = A.nuovoId;
+// magazzino di sistema per la merce in viaggio (DDT partiti e non ancora ricevuti): si muove solo con i DDT
+var ID_TRANSITO = require('./db.js').ID_TRANSITO;
+var NOME_TRANSITO = 'In transito';
 
 var TIPI = ['carico', 'consumo', 'trasferimento', 'perdita', 'rettifica'];
 var USCITE = ['consumo', 'perdita', 'trasferimento'];
@@ -89,6 +92,7 @@ Operazioni.prototype.normalizzaMovimento = function (ctx, m) {
   if (!articolo) throw errore(400, 'Articolo non trovato: aggiorna la pagina.');
   var reparto = this.database.reparto(String(m.repartoId || ''));
   if (!reparto) throw errore(400, 'Reparto non trovato: aggiorna la pagina.');
+  if (reparto.tipo === 'transito') throw errore(400, 'La merce «' + NOME_TRANSITO + '» si sposta solo con i DDT (pagina DDT e consegne).');
   if (!reparto.attivo) throw errore(400, 'Il reparto ' + reparto.nome + ' non è attivo.');
   if (!A.puoScrivereReparto(ctx.permessi, reparto.id)) throw errore(403, 'Non puoi registrare movimenti per il reparto ' + reparto.nome + '.');
   var out = {
@@ -107,6 +111,7 @@ Operazioni.prototype.normalizzaMovimento = function (ctx, m) {
   if (m.tipo === 'trasferimento') {
     var dest = this.database.reparto(String(m.repartoDestId || ''));
     if (!dest || !dest.attivo) throw errore(400, 'Reparto di arrivo non valido.');
+    if (dest.tipo === 'transito') throw errore(400, 'La merce «' + NOME_TRANSITO + '» si sposta solo con i DDT (pagina DDT e consegne).');
     if (dest.id === reparto.id) throw errore(400, 'Il reparto di partenza e quello di arrivo sono uguali.');
     out.repartoDestId = dest.id;
   }
@@ -128,15 +133,16 @@ Operazioni.prototype.inserisciMovimento = function (ctx, rev, m, cache) {
   var creato = m.creato || Math.max(Date.now(), this.ultimoCreato + 1);
   if (!m.creato) this.ultimoCreato = creato;
   this.db().prepare(
-    'INSERT INTO movimenti (id, tipo, data, articolo_id, reparto_id, reparto_dest_id, quantita, lotto, scadenza, fornitore, documento, causale, note, prezzo, operatore, utente_id, creato, rev) ' +
-    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO movimenti (id, tipo, data, articolo_id, reparto_id, reparto_dest_id, quantita, lotto, scadenza, fornitore, documento, causale, note, prezzo, operatore, utente_id, creato, rev, ddt_id) ' +
+    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(id, m.tipo, m.data, m.articoloId, m.repartoId, m.repartoDestId || null, m.quantita, m.lotto || '', m.scadenza || '',
     m.fornitore || '', m.documento || '', m.causale || '', m.note || '', m.prezzo === null || m.prezzo === undefined ? null : m.prezzo,
     m.operatore !== undefined ? m.operatore : (ctx.utente ? ctx.utente.nome : ''), m.utenteId !== undefined ? m.utenteId : (ctx.utente ? ctx.utente.id : null),
-    creato, rev);
+    creato, rev, m.ddtId || null);
   if (cache && cache[m.articoloId]) {
     cache[m.articoloId].push({ id: id, tipo: m.tipo, data: m.data, articoloId: m.articoloId, repartoId: m.repartoId,
-      repartoDestId: m.repartoDestId || undefined, quantita: m.quantita, lotto: m.lotto || '', scadenza: m.scadenza || '', creato: creato, annullato: null });
+      repartoDestId: m.repartoDestId || undefined, quantita: m.quantita, lotto: m.lotto || '', scadenza: m.scadenza || '', creato: creato, annullato: null,
+      ddtId: m.ddtId || null });
   }
   return id;
 };
@@ -209,6 +215,16 @@ Operazioni.prototype.annullaMovimento = function (ctx, id, motivo) {
   var m = this.database.movimento(String(id));
   if (!m) throw errore(404, 'Movimento non trovato.');
   if (m.annullato) throw errore(409, 'Il movimento è già stato annullato.');
+  if (m.ddtId) {
+    // i movimenti dei DDT (partenza, arrivo, differenze) si annullano tutti insieme annullando il DDT
+    var d = this.db().prepare('SELECT numero, stato FROM ddt WHERE id = ?').get(m.ddtId);
+    var numero = d ? d.numero : '';
+    if (d && d.stato === 'in_transito') {
+      throw errore(409, 'Questo movimento fa parte del DDT ' + numero + ': per annullarlo annulla il DDT dalla pagina DDT e consegne (la merce rientra nel magazzino di partenza).');
+    }
+    throw errore(409, 'Questo movimento fa parte del DDT ' + numero + ', già ' + (d && d.stato === 'annullato' ? 'annullato' : 'ricevuto') +
+      ': non si annulla da qui. Per restituire la merce prepara un DDT di reso dalla pagina Trasferimenti.');
+  }
   var proprio = (m.tipo === 'consumo' || m.tipo === 'perdita') && m.utenteId === ctx.utente.id &&
     ctx.permessi[m.tipo] && A.puoScrivereReparto(ctx.permessi, m.repartoId);
   if (!ctx.permessi.annullaTutti && !proprio) throw errore(403, 'Puoi annullare solo i consumi e le perdite che hai registrato tu nei tuoi reparti.');
@@ -512,12 +528,17 @@ Operazioni.prototype.salvaReparti = function (ctx, dati) {
   if (lista.length > 200) throw errore(400, 'Troppi reparti.');
   var esistenti = {};
   this.database.reparti().forEach(function (r) { esistenti[r.id] = r; });
+  // il magazzino "In transito" è del programma: se arriva nell'elenco resta com'è
+  lista = lista.filter(function (r) { return !(r && r.id && esistenti[String(r.id)] && esistenti[String(r.id)].tipo === 'transito'); });
+  if (!lista.length) throw errore(400, 'Elenco dei reparti vuoto.');
   var nomi = {};
+  nomi[NOME_TRANSITO.toLowerCase()] = 'riservato';
   var centraleVisto = false;
   var norm = lista.map(function (r, i) {
     var nome = testo(r && r.nome, 80, 'nome del reparto');
     if (!nome) throw errore(400, 'Ogni reparto deve avere un nome.');
     var k = nome.toLowerCase();
+    if (nomi[k] === 'riservato') throw errore(400, 'Il nome «' + NOME_TRANSITO + '» è riservato alla merce in viaggio con i DDT: scegli un altro nome.');
     if (nomi[k]) throw errore(400, 'Due reparti hanno lo stesso nome: ' + nome + '.');
     nomi[k] = true;
     var id = r.id ? String(r.id) : null;
@@ -530,10 +551,12 @@ Operazioni.prototype.salvaReparti = function (ctx, dati) {
   var self = this;
   var r = this.database.scrivi(function (rev) {
     norm.forEach(function (x) {
+      // tipo e centrale sempre coerenti: 'centrale' solo per il reparto centrale, gli altri 'periferico'
+      var tipo = x.centrale ? 'centrale' : 'periferico';
       if (x.nuovo) {
-        self.db().prepare('INSERT INTO reparti (id, nome, centrale, attivo, ordine, rev) VALUES (?, ?, ?, ?, ?, ?)').run(x.id, x.nome, x.centrale ? 1 : 0, x.attivo ? 1 : 0, x.ordine, rev);
+        self.db().prepare('INSERT INTO reparti (id, nome, centrale, attivo, ordine, rev, tipo) VALUES (?, ?, ?, ?, ?, ?, ?)').run(x.id, x.nome, x.centrale ? 1 : 0, x.attivo ? 1 : 0, x.ordine, rev, tipo);
       } else {
-        self.db().prepare('UPDATE reparti SET nome = ?, centrale = ?, attivo = ?, ordine = ?, rev = ? WHERE id = ?').run(x.nome, x.centrale ? 1 : 0, x.attivo ? 1 : 0, x.ordine, rev, x.id);
+        self.db().prepare('UPDATE reparti SET nome = ?, centrale = ?, attivo = ?, ordine = ?, tipo = ?, rev = ? WHERE id = ?').run(x.nome, x.centrale ? 1 : 0, x.attivo ? 1 : 0, x.ordine, tipo, rev, x.id);
       }
     });
   });
@@ -546,10 +569,19 @@ Operazioni.prototype.eliminaReparto = function (ctx, id) {
   this.richiedi(ctx, 'impostazioni');
   var rep = this.database.reparto(String(id));
   if (!rep) throw errore(404, 'Reparto non trovato.');
+  if (rep.tipo === 'transito') throw errore(400, 'Il magazzino «' + NOME_TRANSITO + '» è del programma (la merce in viaggio con i DDT): non si può eliminare.');
   if (this.db().prepare('SELECT 1 FROM movimenti WHERE reparto_id = ? OR reparto_dest_id = ? LIMIT 1').get(rep.id, rep.id)) {
     throw errore(409, 'Il reparto ha dei movimenti: non si può eliminare. Togli la spunta “Attivo” per nasconderlo.');
   }
-  if (this.database.reparti().length <= 1) throw errore(400, 'Deve restare almeno un reparto.');
+  if (this.db().prepare('SELECT 1 FROM richieste WHERE reparto_id = ? OR fornitore_id = ? LIMIT 1').get(rep.id, rep.id) ||
+    this.db().prepare('SELECT 1 FROM ddt WHERE origine_id = ? OR destinazione_id = ? LIMIT 1').get(rep.id, rep.id)) {
+    throw errore(409, 'Il reparto compare in richieste o DDT: non si può eliminare. Togli la spunta “Attivo” per nasconderlo.');
+  }
+  if (this.db().prepare('SELECT 1 FROM armadi WHERE reparto_id = ? LIMIT 1').get(rep.id) ||
+    this.db().prepare('SELECT 1 FROM assortimento WHERE reparto_id = ? LIMIT 1').get(rep.id)) {
+    throw errore(409, 'Il reparto ha armadi o un assortimento: toglili prima da Magazzini e assortimento, oppure togli la spunta “Attivo” per nasconderlo.');
+  }
+  if (this.database.reparti().filter(function (r) { return r.tipo !== 'transito'; }).length <= 1) throw errore(400, 'Deve restare almeno un reparto.');
   var self = this;
   var r = this.database.scrivi(function (rev) {
     self.db().prepare('DELETE FROM reparti WHERE id = ?').run(rep.id);
@@ -598,7 +630,7 @@ Operazioni.prototype.archivioVuoto = function () {
 Operazioni.prototype.caricaDemo = function (ctx) {
   this.richiedi(ctx, 'impostazioni');
   if (!this.archivioVuoto()) throw errore(409, 'I dati di prova si possono caricare solo in un archivio vuoto.');
-  var reparti = this.database.reparti().filter(function (r) { return r.attivo; });
+  var reparti = this.database.reparti().filter(function (r) { return r.attivo && r.tipo !== 'transito'; });
   var centrale = reparti.filter(function (r) { return r.centrale; })[0] || reparti[0];
   var altri = reparti.filter(function (r) { return r.id !== centrale.id; });
   if (!altri.length) throw errore(400, 'Servono almeno due reparti attivi per i dati di prova.');
@@ -634,7 +666,7 @@ Operazioni.prototype.importaArchivio = function (ctx, dati) {
   var reparti = dati.reparti.map(function (rp, i) {
     if (!rp || typeof rp !== 'object') throw errore(400, 'L’archivio contiene un reparto non valido.');
     var id = String(rp.id || '').trim();
-    if (!/^[A-Za-z0-9._-]{1,80}$/.test(id)) id = nuovoId('r');
+    if (!/^[A-Za-z0-9._-]{1,80}$/.test(id) || id === ID_TRANSITO) id = nuovoId('r');
     if (repartiIds[id]) throw errore(400, 'L’archivio contiene due reparti con lo stesso codice.');
     repartiIds[id] = true;
     return { id: id, nome: testo(rp.nome, 80, 'nome del reparto') || ('Reparto ' + (i + 1)), centrale: !!rp.centrale, attivo: rp.attivo !== false, ordine: i };
@@ -666,13 +698,14 @@ Operazioni.prototype.importaArchivio = function (ctx, dati) {
     // reparti: quelli dell'archivio prendono il posto dei predefiniti
     var vecchi = self.database.reparti();
     reparti.forEach(function (x) {
-      self.db().prepare('INSERT INTO reparti (id, nome, centrale, attivo, ordine, rev) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET nome = excluded.nome, centrale = excluded.centrale, attivo = excluded.attivo, ordine = excluded.ordine, rev = excluded.rev')
-        .run(x.id, x.nome, x.centrale ? 1 : 0, x.attivo ? 1 : 0, x.ordine, rev);
+      self.db().prepare('INSERT INTO reparti (id, nome, centrale, attivo, ordine, rev, tipo) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET nome = excluded.nome, centrale = excluded.centrale, attivo = excluded.attivo, ordine = excluded.ordine, rev = excluded.rev, tipo = excluded.tipo')
+        .run(x.id, x.nome, x.centrale ? 1 : 0, x.attivo ? 1 : 0, x.ordine, rev, x.centrale ? 'centrale' : 'periferico');
       // un reparto ricreato con un codice già cancellato non deve sparire dai browser
       self.db().prepare('DELETE FROM cancellati WHERE tabella = ? AND id = ?').run('reparti', x.id);
     });
     vecchi.forEach(function (v) {
-      if (repartiIds[v.id]) return;
+      // il magazzino "In transito" resta sempre
+      if (repartiIds[v.id] || v.tipo === 'transito') return;
       self.db().prepare('DELETE FROM reparti WHERE id = ?').run(v.id);
       self.db().prepare('INSERT OR REPLACE INTO cancellati (tabella, id, rev) VALUES (?, ?, ?)').run('reparti', v.id, rev);
       tolti.push(v.id);
@@ -716,4 +749,8 @@ Operazioni.prototype.importaArchivio = function (ctx, dati) {
   return { rev: r.rev, articoli: conta.articoli, movimenti: conta.movimenti, scartati: scartati };
 };
 
-module.exports = { Operazioni: Operazioni, dataValida: dataValida };
+module.exports = {
+  Operazioni: Operazioni, dataValida: dataValida,
+  // usate anche da server/logistica.js (richieste e DDT)
+  testo: testo, numero: numero, oggiLocale: oggiLocale, ID_TRANSITO: ID_TRANSITO, NOME_TRANSITO: NOME_TRANSITO
+};
