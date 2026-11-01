@@ -10,7 +10,11 @@
  *   Grafici.colori() -> tavolozza corrente (variabili CSS --grafico-1 … --grafico-8; il 2 è il rosso del marchio)
  *   Grafici.tema() -> 'chiaro' | 'scuro'
  *   Grafici.css(nome, predefinito) -> valore di una variabile CSS (per esempio '--tenue')
- *   Grafici.ritema() -> ridisegna i grafici aperti con il tema attuale (lo chiama js/app.js al cambio di tema)
+ *   Grafici.ritema() -> ridisegna i grafici aperti con il tema attuale (lo chiama js/app.js al cambio di tema).
+ *       Le opzioni-funzione si richiamano; nelle opzioni-oggetto i colori letti dalle variabili CSS del tema di prima
+ *       (Grafici.css, getComputedStyle: '#5B687C', anche come 'rgba(91,104,124,.2)' o nelle sfumature) diventano
+ *       quelli dello stesso nome nel tema nuovo. Così anche le pagine che scrivono i colori nelle opzioni
+ *       (Previsioni, Distribuzione, Sistema) cambiano colore senza ridisegnare la pagina.
  *   Grafici.libera(contenitore?) -> libera i grafici tolti dalla pagina (o quelli dentro il contenitore);
  *       lo fa da solo js/app.js a ogni cambio di pagina
  *   Grafici.scintilla(el, valori, opz) -> piccola linea di tendenza in SVG (leggera, senza ECharts)
@@ -36,6 +40,68 @@
   }
 
   function ridotto() { return !!(root.Motion && root.Motion.ridotto && root.Motion.ridotto()); }
+
+  /*
+   * Colori del tema che le pagine possono aver copiato nelle opzioni, in ordine di preferenza quando due variabili
+   * hanno lo stesso valore in un tema (per esempio --grafico-1 e --primario nel tema chiaro).
+   */
+  var VARIABILI_COLORE = ['--grafico-1', '--grafico-2', '--grafico-3', '--grafico-4', '--grafico-5', '--grafico-6', '--grafico-7',
+    '--grafico-8', '--testo', '--tenue', '--linea', '--linea-forte', '--superficie', '--superficie-2', '--superficie-3', '--sfondo',
+    '--primario', '--primario-pieno', '--accento', '--ok', '--attenzione', '--pericolo', '--info', '--blu-notte', '--trasferimento',
+    '--presidi', '--oro'];
+
+  function istantanea() {
+    var out = {};
+    try {
+      var st = getComputedStyle(document.documentElement);
+      VARIABILI_COLORE.forEach(function (n) { out[n] = st.getPropertyValue(n).trim(); });
+    } catch (e) { /* senza documento */ }
+    return out;
+  }
+
+  function rgb(colore) {
+    var c = String(colore || '').trim();
+    if (/^#[0-9a-f]{3}$/i.test(c)) c = '#' + c[1] + c[1] + c[2] + c[2] + c[3] + c[3];
+    if (!/^#[0-9a-f]{6}$/i.test(c)) return null;
+    return [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)];
+  }
+
+  // colore del tema di prima -> colore della stessa variabile nel tema attuale ('#rrggbb' esatti e terne r,g,b per rgba())
+  function mappaColori(prima, dopo) {
+    var m = { esatti: {}, perRgb: {}, vuota: true };
+    VARIABILI_COLORE.forEach(function (n) {
+      var a = String(prima[n] || '').toLowerCase(), b = String(dopo[n] || '');
+      if (!a || !b || a === b.toLowerCase()) return;
+      if (m.esatti[a] === undefined) { m.esatti[a] = b; m.vuota = false; }
+      var ra = rgb(a), rb = rgb(b);
+      if (ra && rb && m.perRgb[ra.join(',')] === undefined) m.perRgb[ra.join(',')] = rb.join(',');
+    });
+    return m;
+  }
+
+  var RE_RGBA = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(,\s*[\d.]+\s*)?\)$/;
+
+  // copia delle opzioni con i colori del tema nuovo (funzioni, numeri e testi qualsiasi restano come sono)
+  function ricolora(v, m, prof) {
+    if (prof > 16 || v === null || v === undefined) return v;
+    if (typeof v === 'string') {
+      var t = v.trim().toLowerCase();
+      if (m.esatti[t] !== undefined) return m.esatti[t];
+      var p = t.charAt(0) === 'r' ? RE_RGBA.exec(t) : null;
+      if (p && m.perRgb[p[1] + ',' + p[2] + ',' + p[3]] !== undefined) {
+        return (p[4] ? 'rgba(' : 'rgb(') + m.perRgb[p[1] + ',' + p[2] + ',' + p[3]] + (p[4] || '') + ')';
+      }
+      return v;
+    }
+    if (Array.isArray(v)) return v.map(function (x) { return ricolora(x, m, prof + 1); });
+    // oggetti semplici e sfumature di ECharts (echarts.graphic.LinearGradient: diventano un oggetto equivalente)
+    if (typeof v === 'object' && (Object.getPrototypeOf(v) === Object.prototype || Array.isArray(v.colorStops))) {
+      var o = {};
+      Object.keys(v).forEach(function (k) { o[k] = ricolora(v[k], m, prof + 1); });
+      return o;
+    }
+    return v;
+  }
 
   function nomeTema() { return 'nc-' + Grafici.tema(); }
 
@@ -161,7 +227,8 @@
     var g = root.echarts.init(el, nomeTema(), { renderer: 'canvas' });
     g.setOption(opzioniComplete(opzioni));
     collegaEventi(g, eventi);
-    istanze.push({ el: el, g: g, opzioni: opzioni, eventi: eventi || null, tema: Grafici.tema() });
+    // colori del tema in cui è stato disegnato: servono a ritema() per le opzioni-oggetto
+    istanze.push({ el: el, g: g, opzioni: opzioni, eventi: eventi || null, tema: Grafici.tema(), colori: typeof opzioni === 'function' ? null : istantanea() });
     osserva(el);
     return g;
   }
@@ -206,17 +273,22 @@
       pulisci();
       registraTema();
       var tema = Grafici.tema();
+      var adesso = null;
       istanze.slice().forEach(function (x) {
         if (x.tema === tema) return;
         x.tema = tema;
         try {
-          if (typeof x.opzioni === 'function' || !x.g.setTheme) {
-            istanze = istanze.filter(function (y) { return y !== x; });
-            chiudi(x);
-            crea(x.el, x.opzioni, x.eventi);
-          } else {
-            x.g.setTheme(nomeTema());
+          var opzioni = x.opzioni;
+          if (typeof opzioni !== 'function' && x.colori) {
+            // colori scritti nelle opzioni con i valori del tema di prima: diventano quelli del tema nuovo
+            if (!adesso) adesso = istantanea();
+            var m = mappaColori(x.colori, adesso);
+            if (!m.vuota) opzioni = ricolora(opzioni, m, 0);
           }
+          // si ridisegna da capo (setTheme da solo non cambia i colori scritti nelle opzioni)
+          istanze = istanze.filter(function (y) { return y !== x; });
+          chiudi(x);
+          crea(x.el, opzioni, x.eventi);
         } catch (e) { if (root.console) root.console.error(e); }
       });
     },

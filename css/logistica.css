@@ -12,7 +12,7 @@
   transition: background var(--durata, 240ms) var(--curva, ease), color var(--durata, 240ms) var(--curva, ease); }
 .log-schede [role=tab]:hover { color: var(--testo); }
 .log-schede [role=tab][aria-selected=true] { background: var(--superficie); color: var(--primario); box-shadow: var(--ombra); }
-.log-conta { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--primario); color: var(--primario-testo); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.log-conta { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--primario-pieno, var(--primario)); color: var(--primario-testo); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
 
 /* ---------- elenchi di richieste e DDT ---------- */
 .log-elenco { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
@@ -67,7 +67,7 @@
 .log-traccia-piena { display: block; width: 100%; height: 0; background: var(--primario); border-radius: inherit; transition: height 900ms var(--curva, cubic-bezier(.2, .8, .2, 1)); }
 .log-cronologia { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; position: relative; }
 .log-passo { display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: start; }
-.log-punto { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--primario); color: var(--primario-testo); box-shadow: 0 0 0 4px var(--superficie); }
+.log-punto { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--primario-pieno, var(--primario)); color: var(--primario-testo); box-shadow: 0 0 0 4px var(--superficie); }
 .log-passo.attesa .log-punto { background: var(--superficie); border: 2px dashed var(--linea-forte); }
 .log-passo.errore .log-punto { background: var(--pericolo); }
 .log-passo-testo { min-width: 0; overflow-wrap: anywhere; }

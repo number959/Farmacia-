@@ -14,7 +14,9 @@
 
 /* ======================= vista dell'armadio ======================= */
 .av {
-  --av-tinta: color-mix(in srgb, var(--primario) 62%, var(--superficie));
+  /* corpo del mobile sotto il nome scritto in bianco: dai colori "pieni" (nel tema scuro --primario è un azzurro da
+     testo), abbastanza scuro perché il bianco si legga (contrasto ≥ 4,5 in tutti e due i temi) */
+  --av-tinta: color-mix(in srgb, var(--primario-pieno, var(--primario)) 86%, var(--superficie));
   --av-corpo: var(--av-tinta);
   --av-interno: color-mix(in srgb, var(--av-tinta) 16%, var(--superficie-2));
   --av-testo: var(--primario-testo);
@@ -24,9 +26,9 @@
   position: relative;
 }
 .av-frigorifero { --av-tinta: color-mix(in srgb, var(--superficie) 86%, var(--primario)); --av-testo: var(--testo); --av-interno: color-mix(in srgb, var(--info-chiaro) 70%, var(--superficie)); }
-.av-cassaforte { --av-tinta: color-mix(in srgb, var(--testo) 74%, var(--superficie)); --av-interno: color-mix(in srgb, var(--testo) 10%, var(--superficie-2)); }
-.av-carrello { --av-tinta: color-mix(in srgb, var(--ok) 55%, var(--superficie)); }
-.av-cassettiera { --av-tinta: color-mix(in srgb, var(--oro, var(--attenzione)) 55%, var(--superficie)); }
+.av-cassaforte { --av-tinta: color-mix(in srgb, var(--blu-notte) 70%, var(--tenue)); --av-interno: color-mix(in srgb, var(--testo) 10%, var(--superficie-2)); }
+.av-carrello { --av-tinta: color-mix(in srgb, var(--ok-pieno, var(--ok)) 82%, var(--blu-notte)); }
+.av-cassettiera { --av-tinta: color-mix(in srgb, var(--oro, var(--attenzione)) 55%, var(--laterale-2)); }
 
 .av-scena { overflow-x: auto; overflow-y: hidden; padding: 10px var(--av-sporgenza) 8px; }
 .av-mobile {
@@ -39,10 +41,11 @@
 .av-cimasa {
   display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 12px 6px;
   color: var(--av-testo); font-size: 12.5px; font-weight: 700; border-radius: 9px 9px 0 0;
-  background-image: linear-gradient(rgb(255 255 255 / .22), rgb(255 255 255 / 0));
+  background-image: linear-gradient(rgb(255 255 255 / .12), rgb(255 255 255 / 0));
 }
 .av-titolo { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--carattere-titoli, inherit); }
-.av-targa { flex: none; font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px; background: rgb(255 255 255 / .2); white-space: nowrap; }
+/* targhetta più scura del mobile (non più chiara): il nome scritto sopra resta leggibile */
+.av-targa { flex: none; font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px; background: rgb(0 0 0 / .2); white-space: nowrap; }
 .av-freddo { background: var(--info-chiaro); color: var(--primario); }
 .av-chiuso { background: rgb(0 0 0 / .25); color: var(--primario-testo); }
 
@@ -256,7 +259,8 @@ body.av-trascina, body.av-trascina * { cursor: grabbing !important; user-select:
 }
 .st-stanza-testa { display: grid; gap: 1px; }
 .st-tipo { font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--tenue); }
-.st-centrale .st-tipo { color: var(--accento, var(--pericolo)); }
+/* rosso del marchio un po' più vicino al colore del testo: si legge anche sul fondo rosato della centrale */
+.st-centrale .st-tipo { color: color-mix(in srgb, var(--accento, var(--pericolo)) 82%, var(--testo)); }
 .st-nome { font: 700 15.5px/1.2 var(--carattere-titoli, inherit); }
 .st-desc { font-size: 12px; color: var(--tenue); }
 .st-indicatori { display: flex; flex-wrap: wrap; gap: 4px 5px; }
@@ -363,7 +367,7 @@ body.av-trascina, body.av-trascina * { cursor: grabbing !important; user-select:
 .ar-disponi.av-sopra { box-shadow: inset 0 0 0 3px var(--pericolo), var(--ombra); }
 .ar-disponi.av-sopra::after {
   content: 'Rilascia qui per togliere dall’armadio'; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  padding: 8px 14px; border-radius: 9px; background: var(--pericolo); color: var(--primario-testo); font-weight: 700; font-size: 13px; box-shadow: 0 10px 24px rgb(0 0 0 / .25);
+  padding: 8px 14px; border-radius: 9px; background: var(--pericolo-pieno, var(--pericolo)); color: var(--primario-testo); font-weight: 700; font-size: 13px; box-shadow: 0 10px 24px rgb(0 0 0 / .25);
 }
 .ar-disponi { position: relative; }
 .ar-filtro { flex: 1 1 200px; }
@@ -505,17 +509,14 @@ body.av-trascina, body.av-trascina * { cursor: grabbing !important; user-select:
 .cf-colore { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .cf-colore input[type="color"] { width: 46px; height: 34px; padding: 2px; border: 1px solid var(--linea-forte); border-radius: 7px; background: var(--superficie); }
 .cf-anteprima { display: grid; gap: 8px; }
+/* anteprima del marchio: lo stesso blocco .marchio del menu laterale (App.htmlMarchio), sul fondo del menu */
 .cf-barra {
-  --cf-accento: var(--accento, var(--pericolo));
-  display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 4px 10px; align-items: center; padding: 14px; border-radius: 12px;
-  background: var(--blu-notte, var(--laterale)); color: var(--primario-testo); box-shadow: inset 0 -3px 0 var(--cf-accento);
+  border-radius: 12px; overflow: hidden; color: var(--laterale-testo); border: 1px solid var(--linea-forte);
+  background: linear-gradient(180deg, var(--laterale) 0%, var(--laterale-2) 100%);
 }
-.cf-barra .cf-logo-anteprima { width: 46px; height: 46px; border-radius: 10px; display: grid; place-items: center; overflow: hidden; background: rgb(255 255 255 / .12); font-size: 22px; }
-.cf-barra .cf-logo-anteprima img { width: 100%; height: 100%; object-fit: contain; background: var(--superficie); }
-.cf-barra b { font: 800 15px/1.2 var(--carattere-titoli, inherit); }
-.cf-barra small { display: block; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; opacity: .75; }
-.cf-barra .cf-prodotto { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; font-size: 12px; opacity: .9; }
-.cf-barra .cf-prodotto::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--cf-accento); }
+.cf-barra .marchio { border-bottom: 0; }
+.cf-barra .cf-sigla { margin: 0; padding: 0 16px 12px; font-size: 11.5px; color: var(--laterale-tenue); }
+.cf-barra .cf-sigla b { color: var(--laterale-testo); font-family: var(--mono); font-weight: 600; }
 /* riepilogo dei magazzini: una fascia bassa in cima alla pagina, i magazzini come gettoni */
 .cf-mag-riga { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; }
 .cf-mag-testo { flex: 1 1 420px; min-width: 0; display: grid; gap: 10px; }

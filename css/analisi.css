@@ -31,7 +31,7 @@
 .an-attesa { display: grid; gap: 8px; padding: 16px 18px; background: var(--superficie); border: 1px solid var(--linea); border-radius: var(--raggio); box-shadow: var(--ombra); }
 .an-attesa-testo { font-weight: 600; color: var(--tenue); }
 .an-attesa-barra { display: block; height: 6px; border-radius: 999px; background: var(--linea); overflow: hidden; }
-.an-attesa-piena { display: block; height: 100%; width: 0; background: var(--primario); border-radius: inherit; transition: width 200ms linear; }
+.an-attesa-piena { display: block; height: 100%; width: 0; background: var(--primario-pieno, var(--primario)); border-radius: inherit; transition: width 200ms linear; }
 
 /* ---------- indicatori ---------- */
 .an-indicatori { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }

@@ -302,24 +302,42 @@
 
   /* ======================= ATTIVITÀ (registro attività) ======================= */
 
-  // gruppi di azioni del registro (il server filtra per inizio del codice)
+  /*
+   * Azioni del filtro del registro: il server filtra per inizio del codice (azione LIKE 'codice%'), un codice per voce.
+   * "gruppo" raccoglie le voci sotto un titolo nell'elenco (Logistica, Struttura, Sicurezza, Sistema…).
+   */
   var GRUPPI_AZIONI = [
-    { codice: 'accesso', testo: 'Accessi e uscite' },
-    { codice: 'movimenti', testo: 'Movimenti' },
-    { codice: 'registro', testo: 'Correzioni del registro mensile' },
-    { codice: 'articoli', testo: 'Articoli' },
-    { codice: 'utenti', testo: 'Utenti' },
-    { codice: 'impostazioni', testo: 'Impostazioni' },
-    { codice: 'reparti', testo: 'Reparti (versione 2)' },
-    { codice: 'magazzini', testo: 'Magazzini' },
-    { codice: 'armadi', testo: 'Armadi' },
-    { codice: 'assortimento', testo: 'Assortimento e scorte' },
-    { codice: 'ubicazioni', testo: 'Posto negli armadi' },
-    { codice: 'richieste', testo: 'Richieste' },
-    { codice: 'ddt', testo: 'DDT e consegne' },
-    { codice: 'backup', testo: 'Copie di sicurezza' },
-    { codice: 'archivio', testo: 'Archivio' }
+    { gruppo: 'Sicurezza e accessi', codice: 'accesso', testo: 'Accessi e uscite (tutti)' },
+    { gruppo: 'Sicurezza e accessi', codice: 'accesso.2fa', testo: 'Verifica in due passaggi' },
+    { gruppo: 'Sicurezza e accessi', codice: 'utenti', testo: 'Utenti' },
+    { gruppo: 'Lavoro di ogni giorno', codice: 'movimenti', testo: 'Movimenti' },
+    { gruppo: 'Lavoro di ogni giorno', codice: 'registro', testo: 'Correzioni del registro mensile' },
+    { gruppo: 'Logistica', codice: 'richieste', testo: 'Richieste' },
+    { gruppo: 'Logistica', codice: 'ddt', testo: 'DDT e consegne' },
+    { gruppo: 'Struttura', codice: 'magazzini', testo: 'Magazzini' },
+    { gruppo: 'Struttura', codice: 'armadi', testo: 'Armadi' },
+    { gruppo: 'Struttura', codice: 'assortimento', testo: 'Assortimento e scorte' },
+    { gruppo: 'Struttura', codice: 'ubicazioni', testo: 'Posto negli armadi' },
+    { gruppo: 'Struttura', codice: 'reparti', testo: 'Reparti (versione 2)' },
+    { gruppo: 'Anagrafica e impostazioni', codice: 'articoli', testo: 'Articoli' },
+    { gruppo: 'Anagrafica e impostazioni', codice: 'impostazioni', testo: 'Impostazioni' },
+    { gruppo: 'Anagrafica e impostazioni', codice: 'archivio', testo: 'Archivio' },
+    { gruppo: 'Sistema', codice: 'sistema', testo: 'Base dati e copie (Sistema)' },
+    { gruppo: 'Sistema', codice: 'backup', testo: 'Copie di sicurezza (Configura)' }
   ];
+
+  function opzioniAzioni(scelta) {
+    var html = '';
+    var aperto = '';
+    GRUPPI_AZIONI.forEach(function (g) {
+      if (g.gruppo !== aperto) {
+        html += (aperto ? '</optgroup>' : '') + '<optgroup label="' + h(g.gruppo) + '">';
+        aperto = g.gruppo;
+      }
+      html += '<option value="' + h(g.codice) + '"' + (scelta === g.codice ? ' selected' : '') + '>' + h(g.testo) + '</option>';
+    });
+    return html + (aperto ? '</optgroup>' : '');
+  }
 
   var NOMI_AZIONI = {
     'accesso.entrata': 'Accesso',
@@ -327,9 +345,39 @@
     'accesso.fallito': 'Accesso non riuscito',
     'accesso.bloccato-ip': 'Accesso bloccato (troppi tentativi)',
     'accesso.cambio-password': 'Cambio password',
+    'accesso.cambio-password-fallito': 'Cambio password: password attuale sbagliata',
+    // verifica in due passaggi (parte C)
+    'accesso.2fa.attivata': 'Verifica in due passaggi attivata',
+    'accesso.2fa.riconfigurata': 'Verifica in due passaggi: telefono cambiato',
+    'accesso.2fa.disattivata': 'Verifica in due passaggi disattivata',
+    'accesso.2fa.disattiva-fallito': 'Disattivazione della verifica non riuscita',
+    'accesso.2fa.nuovi-codici': 'Nuovi codici di recupero',
+    'accesso.2fa.nuovi-codici-fallito': 'Nuovi codici di recupero: password sbagliata',
+    'accesso.2fa.fallito': 'Codice della verifica sbagliato',
+    'accesso.2fa.codice-riusato': 'Codice della verifica già usato',
+    'accesso.2fa.bloccato': 'Verifica bloccata (troppi codici sbagliati)',
+    'accesso.2fa.recupero': 'Accesso con un codice di recupero',
+    'accesso.2fa.ricorda-computer': 'Computer ricordato per 30 giorni',
+    'accesso.2fa.dimentica-computer': 'Computer attendibili dimenticati',
+    'accesso.2fa.criterio': 'Criterio della verifica in due passaggi',
+    'accesso.2fa.azzerata': 'Verifica in due passaggi azzerata dall’amministratore',
     'movimenti.registra': 'Registrazione movimenti',
     'movimenti.annulla': 'Annullo movimento',
     'registro.consumo-giorno': 'Correzione nel registro mensile',
+    // richieste e DDT (parte A)
+    'richieste.crea': 'Nuova richiesta',
+    'richieste.modifica': 'Modifica richiesta',
+    'richieste.invia': 'Richiesta inviata alla farmacia',
+    'richieste.annulla': 'Richiesta annullata',
+    'richieste.prendi': 'Richiesta presa in carico',
+    'richieste.approva': 'Quantità approvate',
+    'richieste.rifiuta': 'Richiesta rifiutata',
+    'richieste.chiudi': 'Richiesta chiusa con residuo',
+    'ddt.crea': 'Nuovo DDT',
+    'ddt.modifica': 'Modifica DDT',
+    'ddt.spedisci': 'DDT partito (merce in viaggio)',
+    'ddt.ricevi': 'DDT ricevuto',
+    'ddt.annulla': 'DDT annullato',
     'articoli.crea': 'Nuovo articolo',
     'articoli.modifica': 'Modifica articolo',
     'articoli.elimina': 'Eliminazione articolo',
@@ -338,6 +386,7 @@
     'impostazioni.modifica': 'Modifica impostazioni',
     'reparti.modifica': 'Modifica reparti',
     'reparti.elimina': 'Eliminazione reparto',
+    // struttura (parte B)
     'magazzini.crea': 'Nuovo magazzino',
     'magazzini.modifica': 'Modifica magazzino',
     'magazzini.elimina': 'Eliminazione magazzino',
@@ -350,12 +399,34 @@
     'utenti.primo-amministratore': 'Primo amministratore',
     'utenti.modifica': 'Modifica utente',
     'utenti.nuova-password': 'Nuova password provvisoria',
+    'utenti.password-emergenza': 'Accesso d’emergenza dal server',
     'backup.crea': 'Copia di sicurezza creata',
     'backup.scarica': 'Copia di sicurezza scaricata',
     'backup.ripristina': 'Copia di sicurezza ripristinata',
+    // base dati che si cura da sola (parte E)
+    'sistema.cura': 'Cura automatica della base dati',
+    'sistema.controllo': 'Controllo notturno della base dati',
+    'sistema.controlla': 'Controllo della base dati',
+    'sistema.copia': 'Copie di sicurezza (pagina Sistema)',
+    'sistema.prova-ripristino': 'Prova di ripristino',
+    'sistema.seconda-cartella': 'Seconda cartella delle copie',
+    'sistema.linea-nuova': 'Magazzino ripartito da una revisione nuova',
     'archivio.dati-di-prova': 'Dati di prova',
     'archivio.importa-versione-singola': 'Importazione archivio (versione per un solo PC)'
   };
+
+  // stati di richieste e DDT, esiti di controlli e cure (valori dei dettagli)
+  var NOMI_STATI = {
+    bozza: 'bozza', inviata: 'inviata', in_lavorazione: 'in lavorazione', evasa: 'evasa', chiusa: 'chiusa con residuo',
+    rifiutata: 'rifiutata', annullata: 'annullata', in_preparazione: 'in preparazione', in_transito: 'in viaggio',
+    ricevuto: 'ricevuto', ricevuto_con_differenze: 'ricevuto con differenze', annullato: 'annullato'
+  };
+  var NOMI_ESITI = {
+    ok: 'tutto a posto', differenze: 'con differenze', curato: 'curata', 'curato-con-perdite': 'curata con perdite',
+    ricreato: 'ricreata da capo', danneggiato: 'danneggiata', mancante: 'file mancante', nuovo: 'nuova',
+    rientro: 'rientro all’origine', perdita: 'perdita in viaggio'
+  };
+  var NOMI_METODI = { copia: 'dalla copia + giornale', giornale: 'dal giornale', recupero: 'dal file danneggiato + giornale', vuoto: 'archivio vuoto + giornale', nuovo: 'archivio nuovo' };
 
   function nomeAzione(a) {
     if (NOMI_AZIONI[a]) return NOMI_AZIONI[a];
@@ -373,8 +444,24 @@
     magazzino: 'magazzino', armadio: 'armadio', piano: 'piano', livello: 'livello', colore: 'colore', descrizione: 'descrizione', ordine: 'ordine',
     exCentrale: 'ex farmacia centrale', liberati: 'caselle liberate', utentiAggiornati: 'utenti aggiornati', assortimento: 'righe di assortimento',
     nuove: 'nuovi', modificate: 'modificati', tolte: 'tolti', aggiunte: 'aggiunti all’assortimento', min: 'min', riordino: 'riordino', max: 'max',
-    ripiano: 'ripiano', posto: 'posto', posti: 'posti', ripiani: 'ripiani', colonne: 'posti per ripiano', note: 'note'
+    ripiano: 'ripiano', posto: 'posto', posti: 'posti', ripiani: 'ripiani', colonne: 'posti per ripiano', note: 'note',
+    // richieste e DDT
+    numero: 'numero', fornitore: 'a', urgente: 'urgente', inviata: 'inviata subito', stato: 'stato', richiesta: 'richiesta',
+    righeConResiduo: 'righe con residuo', approvata: 'approvata', da: 'da', a: 'a', causale: 'causale', colli: 'colli',
+    mancanti: 'non disponibili', trasportatore: 'trasportato da', differenze: 'differenze', partita: 'partita', ricevuta: 'ricevuta',
+    esito: 'esito', rientro: 'merce rientrata', chiave: 'codice', barcode: 'codici a barre', saltati: 'saltati',
+    // verifica in due passaggi
+    dueFattori: 'verifica', tentativo: 'tentativo', tentativi: 'tentativi', codiciRimasti: 'codici rimasti',
+    codiciRecupero: 'codici di recupero', giorni: 'giorni', computer: 'computer', daAttivare: 'da attivare',
+    eraAttiva: 'era attiva', dueFattoriAzzerata: 'verifica azzerata',
+    // base dati (pagina Sistema)
+    durataMs: 'durata (ms)', copie: 'copie', verificate: 'verificate', riapplicate: 'modifiche riapplicate', percorso: 'cartella',
+    file: 'file', metodo: 'come', revCopia: 'revisione della copia', revFinale: 'revisione finale', perse: 'modifiche perse',
+    spostatoIn: 'file danneggiato spostato in', revFile: 'revisione del file', revGiornale: 'revisione del giornale',
+    messaggio: ''
   };
+  // dettagli che non si mostrano (l'ora c'è già nella colonna "Quando"; i messaggi tecnici della cura sono nella pagina Sistema)
+  var NASCOSTI = { quando: true, messaggi: true };
 
   // valore leggibile: id di reparti e articoli diventano nomi, tipi e ruoli in italiano
   function descriviValore(chiave, v, profondita) {
@@ -397,6 +484,10 @@
       }).join(', ');
     }
     if (chiave === 'tipo' && App.TIPI[v]) return App.TIPI[v];
+    if ((chiave === 'stato' || chiave === 'richiesta') && typeof v === 'string' && NOMI_STATI[v]) return NOMI_STATI[v];
+    if (chiave === 'esito' && typeof v === 'string' && NOMI_ESITI[v]) return NOMI_ESITI[v];
+    if (chiave === 'metodo' && typeof v === 'string' && NOMI_METODI[v]) return NOMI_METODI[v];
+    if (chiave === 'fornitore' && typeof v === 'string') { var f = App.S && App.reparto(v); return f ? f.nome : v; }
     if (chiave === 'ruolo' && App.RUOLI[v]) return App.RUOLI[v];
     if (chiave === 'data' && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) return App.fmtData(v);
     if (chiave === 'scadenza' && typeof v === 'string' && /^\d{4}-\d{2}$/.test(v)) return App.fmtScadenza(v);
@@ -430,7 +521,7 @@
         (d.registratoDa ? ' · registrato da ' + d.registratoDa : '');
     }
     return Object.keys(d).filter(function (k) {
-      if (d[k] === undefined) return false;
+      if (d[k] === undefined || NASCOSTI[k]) return false;
       // i reparti contano solo per il ruolo "reparto"
       if (k === 'reparti' && d.ruolo && d.ruolo !== 'reparto') return false;
       return true;
@@ -460,9 +551,7 @@
       '<label class="campo"><span>Al</span><input type="date" id="t-al" value="' + h(m0.al || oggi) + '"></label>' +
       '<label class="campo"><span>Utente</span><input id="t-utente" list="dl-utenti-attivita" placeholder="Tutti" autocomplete="off" autocapitalize="off" spellcheck="false" value="' + h(m0.utente || '') + '"></label>' +
       '<datalist id="dl-utenti-attivita"></datalist>' +
-      '<label class="campo"><span>Azione</span><select id="t-azione"><option value="">Tutte</option>' +
-      GRUPPI_AZIONI.map(function (g) { return '<option value="' + g.codice + '"' + (m0.azione === g.codice ? ' selected' : '') + '>' + h(g.testo) + '</option>'; }).join('') +
-      '</select></label>' +
+      '<label class="campo"><span>Azione</span><select id="t-azione"><option value="">Tutte</option>' + opzioniAzioni(m0.azione) + '</select></label>' +
       '<span class="spazio"></span><button class="btn" type="button" id="t-aggiorna">Aggiorna</button><button class="btn" type="button" id="t-excel">Excel</button>' +
       '</div><div id="t-tab">' + scheda('Registro attività', '<p class="vuoto">Carico…</p>', '', true) + '</div>';
 

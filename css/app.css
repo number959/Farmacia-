@@ -33,6 +33,7 @@
   --primario-chiaro: #E7EEF8;
   --primario-testo: #ffffff;
   --accento: #E10717;
+  --accento-pieno: #E10717;   /* sfondo sotto un testo bianco (contatori del menu) */
   --accento-chiaro: #FDE7E9;
   --fuoco: #1C4184;
   --oro: #9C7124;
@@ -49,7 +50,7 @@
   --ok: #1F7A46;
   --ok-pieno: #1F7A46;
   --ok-chiaro: #E3F3E9;
-  --attenzione: #A86400;
+  --attenzione: #985A00;   /* ≥ 4,5:1 anche sul suo fondo chiaro (etichette) */
   --attenzione-chiaro: #FDF1DC;
   --pericolo: #B42318;
   --pericolo-pieno: #B42318;
@@ -104,6 +105,7 @@ html[data-tema="scuro"] {
   --primario-chiaro: #1A2C51;
   --primario-testo: #ffffff;
   --accento: #F0505A;
+  --accento-pieno: #C8232E;
   --accento-chiaro: #3A1A22;
   --fuoco: #8FB0F2;
   --oro: #D9B66C;
@@ -196,7 +198,7 @@ a { color: var(--primario); text-underline-offset: 2px; }
 .menu .voce { flex: 1; min-width: 0; }
 .menu kbd { font: 600 10.5px var(--mono); color: var(--laterale-tenue); background: transparent; border: 1px solid rgba(255,255,255,.16); border-radius: 4px; padding: 0 5px; min-width: 20px; text-align: center; }
 .menu a.attivo kbd { color: #fff; border-color: rgba(255,255,255,.3); }
-.menu .conta { background: var(--accento); color: #fff; font: 700 10.5px/17px var(--mono); border-radius: 999px; padding: 0 6px; min-width: 19px; text-align: center; font-variant-numeric: tabular-nums; }
+.menu .conta { background: var(--accento-pieno, var(--accento)); color: #fff; font: 700 10.5px/17px var(--mono); border-radius: 999px; padding: 0 6px; min-width: 19px; text-align: center; font-variant-numeric: tabular-nums; }
 .laterale-piede { margin-top: auto; padding: 12px 16px 16px; font-size: 12px; color: var(--laterale-tenue); border-top: 1px solid var(--laterale-linea); display: grid; gap: 4px; }
 .laterale-piede b { color: var(--laterale-testo); font-weight: 600; font-variant-numeric: tabular-nums; }
 .laterale-piede .versione { font: 500 10.5px var(--mono); letter-spacing: .04em; opacity: .8; }
@@ -294,6 +296,9 @@ table.tabella { width: 100%; border-collapse: collapse; font-size: 13px; font-va
 .tabella td.azioni { text-align: right; white-space: nowrap; }
 .tabella tfoot td { font-weight: 700; background: var(--superficie-2); border-top: 1px solid var(--linea-forte); }
 .tabella td.neg { color: var(--pericolo); font-weight: 700; }
+/* Giacenze: magazzino sotto la scorta minima (assortimento o, nella centrale, anagrafica) */
+/* position: relative tiene il testo nascosto per il lettore dello schermo dentro la cella (e dentro la tabella che scorre) */
+.tabella td.sotto-scorta { position: relative; color: var(--pericolo); font-weight: 700; box-shadow: inset 2px 0 0 var(--pericolo); }
 .vuoto { padding: 28px 18px; text-align: center; color: var(--tenue); }
 .vuoto b { display: block; color: var(--testo); margin-bottom: 4px; font-size: 15px; font-family: var(--carattere-titoli); }
 
@@ -456,12 +461,7 @@ html[data-tema="scuro"] .accesso { background-color: #08111F; }
 .menu .conta.cambiato { animation: conta-impulso 700ms var(--curva); }
 @keyframes conta-impulso { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accento) 70%, transparent); } 100% { box-shadow: 0 0 0 8px transparent; } }
 
-/* ---------- tema scuro: colori scritti a mano negli altri fogli di stile (tour, guide, lettore) ---------- */
-html[data-tema="scuro"] .tour-testo { color: var(--testo); }
-html[data-tema="scuro"] .guide-copertina { background: linear-gradient(135deg, var(--primario-chiaro) 0%, var(--superficie-3) 100%); }
-html[data-tema="scuro"] .guide-passi-video li.attivo button { border-color: var(--linea-forte); }
-html[data-tema="scuro"] tr.scanner-evidenziata > td { animation-name: scanner-lampo-scuro; }
-@keyframes scanner-lampo-scuro { 0%, 35% { background: var(--ok-chiaro); } 100% { background: transparent; } }
+/* tema scuro: tour, guide e lettore (css/tour.css, guide.css, scanner.css) usano ormai solo le variabili */
 html[data-tema="scuro"] .marchio .logo:not(.simbolo) { box-shadow: 0 0 0 3px rgba(255,255,255,.06); }
 
 /* ---------- schermi stretti ---------- */
@@ -505,6 +505,47 @@ html[data-tema="scuro"] .marchio .logo:not(.simbolo) { box-shadow: 0 0 0 3px rgb
   .avvisi { left: 12px; right: 12px; bottom: 12px; }
   .avviso { max-width: none; }
   .modale { top: 3vh; max-height: 94vh; }
+
+  /* moduli a righe (Carico, Perdite): ogni riga è una scheda, il titolo della colonna sopra la casella */
+  table.righe, table.righe tbody { display: block; }
+  table.righe thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  table.righe tr { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; padding: 10px 0 12px; border-bottom: 1px solid var(--linea); }
+  table.righe td { display: block; padding: 0; min-width: 0; }
+  table.righe td:first-child { grid-column: 1 / -1; padding-right: 40px; }
+  table.righe td:last-child { position: absolute; top: 26px; right: 0; }
+  table.righe td[data-etichetta]::before { content: attr(data-etichetta); display: block; margin-bottom: 3px; font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--tenue); }
+  table.righe .r-prezzo { width: 100% !important; }
+
+  /* Consumi del giorno e Inventario: una scheda per articolo (nome e categoria sopra, numeri e casella sotto) */
+  .tabella.a-schede, .tabella.a-schede tbody { display: block; }
+  .tabella.a-schede thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .tabella.a-schede tr { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 10px; padding: 10px 14px 12px; border-bottom: 1px solid var(--linea); }
+  .tabella.a-schede td { display: block; padding: 0; border: 0; min-width: 0; text-align: left; white-space: normal; }
+  .tabella.a-schede td:first-child { grid-column: 1 / -1; padding-right: 84px; font-weight: 600; }
+  .tabella.a-schede td:nth-child(2) { position: absolute; top: 10px; right: 14px; }
+  .tabella.a-schede td[data-etichetta]::before { content: attr(data-etichetta); display: block; margin-bottom: 2px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--tenue); }
+  .tabella.a-schede input.q { width: 100%; text-align: right; }
+
+  /* elenchi dei movimenti (Movimenti, ultimi carichi e perdite, scheda dell'articolo): una scheda per movimento */
+  .tabella.movimenti-schede, .tabella.movimenti-schede tbody { display: block; }
+  .tabella.movimenti-schede thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .tabella.movimenti-schede tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 10px; padding: 10px 14px; border-bottom: 1px solid var(--linea); }
+  .tabella.movimenti-schede td { display: block; padding: 0; border: 0; min-width: 0; text-align: left; white-space: normal; }
+  .tabella.movimenti-schede td:empty { display: none; }
+  .tabella.movimenti-schede td:nth-child(3) { order: -1; grid-column: 1 / -1; font-weight: 600; }
+  .tabella.movimenti-schede td:nth-child(8), .tabella.movimenti-schede td:nth-child(9) { grid-column: 1 / -1; }
+  .tabella.movimenti-schede td.azioni { grid-column: 1 / -1; }
+  .tabella.movimenti-schede td[data-etichetta]::before { content: attr(data-etichetta); display: block; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--tenue); }
+
+  /* registro attività: una scheda per evento invece di una tabella larga con righe altissime */
+  .tabella.attivita, .tabella.attivita tbody { display: block; }
+  .tabella.attivita thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .tabella.attivita tr { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; padding: 10px 14px; border-bottom: 1px solid var(--linea); }
+  .tabella.attivita td { display: block; padding: 0; border: 0; min-width: 0; white-space: normal; }
+  .tabella.attivita td:nth-child(2) { text-align: right; }
+  .tabella.attivita td:nth-child(3) { grid-column: 1 / -1; font-weight: 600; }
+  .tabella.attivita td:nth-child(4) { grid-column: 1 / -1; overflow-wrap: anywhere; }
+  .tabella.attivita td:nth-child(5) { grid-column: 1 / -1; font-size: 11px; }
 }
 
 /* meno movimento: niente animazioni (solo i cambi di stato). Le animazioni CSS di tutte le pagine finiscono subito;

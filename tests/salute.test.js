@@ -617,6 +617,60 @@ test('riapplicazione: le conversioni inverse ricostruiscono righe identiche in o
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+/* ---------- chiave della verifica in due passaggi nelle copie di accessi.db (integrazione 3.0) ---------- */
+
+test('le copie di accessi.db nella cartella dati portano la chiave della 2FA; la seconda cartella no', async () => {
+  const dati = cartellaNuova('chiave2fa');
+  const seconda = cartellaNuova('chiave2fa-seconda');
+  const cartellaCopie = path.join(dati, 'backup');
+  const db = new D.Database(dati);
+  try {
+    const b = new B.Backup(db, () => {}, {});
+    // nessuno ha mai attivato la 2FA: il file della chiave non c'è e non si copia niente
+    const prime = b.creaTutte('manuale');
+    const acc0 = prime.find((n) => n.startsWith('accessi_'));
+    assert.equal(fs.existsSync(B.fileChiave(path.join(cartellaCopie, acc0))), false);
+    // con la chiave (stesso nome che usa server/accessi.js)
+    assert.equal(B.FILE_CHIAVE_2FA, 'chiave-2fa.key');
+    const chiave = require('node:crypto').randomBytes(32).toString('base64') + '\n';
+    fs.writeFileSync(path.join(dati, B.FILE_CHIAVE_2FA), chiave, { mode: 0o600 });
+    const nomi = b.creaTutte('manuale');
+    const acc = nomi.find((n) => n.startsWith('accessi_'));
+    const far = nomi.find((n) => n.startsWith('farmacia_'));
+    const fk = B.fileChiave(path.join(cartellaCopie, acc));
+    assert.equal(path.basename(fk), acc.replace(/\.db$/, '.chiave-2fa.key'));
+    assert.equal(fs.readFileSync(fk, 'utf8'), chiave, 'la copia della chiave è identica all\'originale');
+    if (process.platform !== 'win32') assert.equal(fs.statSync(fk).mode & 0o777, 0o600, 'leggibile solo dal servizio');
+    assert.equal(fs.existsSync(B.fileChiave(path.join(cartellaCopie, far))), false, 'le copie del magazzino non hanno la chiave');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(cartellaCopie, acc.replace(/\.db$/, '.json')), 'utf8')).chiave2fa, true);
+    // l'elenco delle copie (pagina Sistema, cura) resta fatto dei soli .db
+    assert.ok(B.copieIn(cartellaCopie).every((c) => /\.db$/.test(c.nome)));
+    // seconda cartella: le copie e le schede sì, la chiave no
+    b.impostaSeconda(seconda, 'pagina');
+    const st = await b.sincronizzaSeconda();
+    assert.equal(st.raggiungibile, true, JSON.stringify(st));
+    const laggiu = fs.readdirSync(seconda);
+    assert.ok(laggiu.includes(acc) && laggiu.includes(far), laggiu.join(', '));
+    assert.ok(!laggiu.some((n) => /\.key$/.test(n)), 'nessuna chiave nella seconda cartella: ' + laggiu.join(', '));
+    // conservazione: una copia tolta perché vecchia porta via anche la sua chiave
+    for (let g = 1; g <= 30; g++) {
+      const n = 'accessi_2020-01-' + String(g).padStart(2, '0') + '_120000_manuale.db';
+      fs.copyFileSync(path.join(cartellaCopie, acc), path.join(cartellaCopie, n));
+      fs.writeFileSync(B.fileChiave(path.join(cartellaCopie, n)), chiave);
+    }
+    b.pulisci();
+    const resto = fs.readdirSync(cartellaCopie);
+    // 32 copie manuali di accessi.db: restano le 30 più recenti, le due del 1° e 2 gennaio 2020 se ne vanno con la chiave
+    ['accessi_2020-01-01_120000_manuale', 'accessi_2020-01-02_120000_manuale'].forEach((base) => {
+      assert.ok(!resto.includes(base + '.db') && !resto.includes(base + '.chiave-2fa.key'), base);
+    });
+    assert.ok(resto.includes('accessi_2020-01-03_120000_manuale.chiave-2fa.key'));
+    assert.ok(resto.includes(path.basename(fk)));
+  } finally {
+    db.chiudi();
+  }
+});
+
 test.after(async () => {
   if (S) await S.ferma();
   CARTELLE.forEach((c) => { try { fs.rmSync(c, { recursive: true, force: true }); } catch (e) { /* già tolta */ } });

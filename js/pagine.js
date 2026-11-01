@@ -151,7 +151,8 @@
   function tabellaMovimenti(lista, conAnnulla) {
     if (!lista.length) return vuoto('Nessun movimento', '');
     if (conAnnulla && !lista.some(puoAnnullare)) conAnnulla = false;
-    return '<div class="tabella-contenitore"><table class="tabella"><thead><tr>' +
+    // movimenti-schede: sul telefono ogni movimento è una scheda (css/app.css)
+    return '<div class="tabella-contenitore"><table class="tabella movimenti-schede"><thead><tr>' +
       '<th>Data</th><th>Tipo</th><th>Articolo</th><th class="n">Quantità</th><th>Lotto</th><th>Scad.</th><th>Reparto</th><th>Riferimento</th><th>Operatore</th>' +
       (conAnnulla ? '<th></th>' : '') + '</tr></thead><tbody>' +
       lista.map(function (m) {
@@ -161,10 +162,10 @@
           '<td>' + App.fmtData(m.data) + '</td>' +
           '<td class="tipo-' + m.tipo + '">' + h(App.TIPI[m.tipo] || m.tipo) + '</td>' +
           '<td><a href="#" data-scheda="' + h(m.articoloId) + '">' + h(App.nomeArticolo(m.articoloId)) + '</a></td>' +
-          '<td class="n">' + App.fmtNum(m.quantita) + (a && a.unita ? ' <span class="tenue">' + h(a.unita) + '</span>' : '') + '</td>' +
-          '<td class="mono">' + h(m.lotto || '') + '</td>' +
-          '<td>' + (m.scadenza ? App.fmtScadenza(m.scadenza) : '') + '</td>' +
-          '<td>' + h(nomeMagazzinoId(v ? v.repartoId : m.repartoId)) + '</td>' +
+          '<td class="n" data-etichetta="Quantità">' + App.fmtNum(m.quantita) + (a && a.unita ? ' <span class="tenue">' + h(a.unita) + '</span>' : '') + '</td>' +
+          '<td class="mono" data-etichetta="Lotto">' + h(m.lotto || '') + '</td>' +
+          '<td data-etichetta="Scadenza">' + (m.scadenza ? App.fmtScadenza(m.scadenza) : '') + '</td>' +
+          '<td data-etichetta="Magazzino">' + h(nomeMagazzinoId(v ? v.repartoId : m.repartoId)) + '</td>' +
           '<td class="piccolo">' + (v ? '<a href="#" class="mono" data-ddt="' + h(v.ddt.id) + '" title="Apri il DDT">' + h(v.ddt.numero) + '</a> · ' : '') + h(riferimento(m)) + '</td>' +
           '<td class="piccolo tenue">' + h(m.operatore || '') + '</td>' +
           (conAnnulla ? '<td class="azioni">' + (puoAnnullare(m) ? '<button class="btn piccolo pericolo" type="button" data-annulla="' + h(m.id) + '">Annulla</button>' : '') + '</td>' : '') +
@@ -450,91 +451,7 @@
     });
   };
 
-  /* ======================= OGGI ======================= */
-
-  P.oggi = function (cont) {
-    var S = App.S;
-    var oggi = App.oggi();
-    var attivi = App.articoliAttivi();
-    var sotto = attivi.filter(App.sottoScorta);
-    var lotti = App.lottiInGiacenza();
-    var soglia = S.impostazioni.giorniAvvisoScadenza || 90;
-    var scaduti = lotti.filter(function (l) { return l.giorni !== null && l.giorni < 0; });
-    var inScadenza = lotti.filter(function (l) { return l.giorni !== null && l.giorni >= 0 && l.giorni <= soglia; });
-    var diOggi = movimentiRecenti(function (m) { return m.data === oggi && !m.annullato; }, 200);
-
-    var html = '';
-    if (!S.articoli.length) {
-      var admin = App.eAmministratore() && App.archivioVuoto();
-      html += App.puo('articoli')
-        ? '<div class="banda info"><p><b>Benvenuto nel Gestionale Farmacia.</b> Per cominciare importa gli articoli da Excel (anche dai vecchi moduli “Nota consumi” compilati) ' +
-          'o inseriscili uno per uno, controlla i reparti e registra le giacenze iniziali con un carico.' +
-          (admin ? ' Per provare il programma puoi caricare i dati di prova; se usavate la versione per un solo PC, da Configura puoi importarne l’archivio.' : '') + '</p>' +
-          '<a class="btn primario" href="#articoli">Vai agli articoli</a>' +
-          (admin ? '<button class="btn" type="button" id="oggi-demo">Carica dati di prova</button>' : '') + '</div>'
-        : '<div class="banda info"><p><b>Benvenuto nel Gestionale Farmacia.</b> L’archivio è ancora vuoto: gli articoli e le giacenze iniziali li inserisce la farmacia. Appena ci sono, li trovi qui.</p></div>';
-    }
-
-    // azioni rapide: solo quelle permesse all'utente
-    var rapide = [
-      { id: 'consumi', testo: '💊 Registra i consumi', tasto: 'S' },
-      { id: 'carico', testo: '📥 Nuovo carico', tasto: 'C' },
-      { id: 'trasferimenti', testo: '🔁 Trasferisci a un reparto', tasto: 'T' },
-      { id: 'registro', testo: '📅 Nota consumi del mese', tasto: 'R' }
-    ].filter(function (v) { return App.paginaPermessa(v.id); });
-    html += '<div class="azioni-rapide">' + rapide.map(function (v, i) {
-      return '<a class="btn' + (i === 0 ? ' primario' : '') + '" href="#' + v.id + '">' + v.testo + '<kbd>' + v.tasto + '</kbd></a>';
-    }).join('') + '</div>';
-
-    html += '<div class="indicatori">' +
-      '<a class="indicatore" href="#articoli"><span class="titolo">Articoli attivi</span><span class="valore">' + attivi.length + '</span><span class="piccolo tenue">' +
-      attivi.filter(function (a) { return a.categoria === 'FARMACI'; }).length + ' farmaci · ' + attivi.filter(function (a) { return a.categoria === 'PRESIDI'; }).length + ' presidi</span></a>' +
-      '<a class="indicatore ' + (sotto.length ? 'pericolo' : 'ok') + '" href="#giacenze" data-sotto><span class="titolo">Sotto scorta minima</span><span class="valore">' + sotto.length + '</span><span class="piccolo tenue">nel reparto ' + h(App.repartoCentrale() ? App.repartoCentrale().nome : '') + '</span></a>' +
-      '<a class="indicatore ' + (scaduti.length ? 'pericolo' : 'ok') + '" href="#scadenze"><span class="titolo">Lotti scaduti ancora in giacenza</span><span class="valore">' + scaduti.length + '</span><span class="piccolo tenue">da togliere e registrare come perdita</span></a>' +
-      '<a class="indicatore ' + (inScadenza.length ? 'attenzione' : 'ok') + '" href="#scadenze"><span class="titolo">Lotti in scadenza</span><span class="valore">' + inScadenza.length + '</span><span class="piccolo tenue">entro ' + soglia + ' giorni</span></a>' +
-      '</div>';
-
-    var urgenti = scaduti.concat(inScadenza).sort(function (a, b) { return a.giorni - b.giorni; }).slice(0, 8);
-    var colSx = scheda('Da controllare',
-      (sotto.length || urgenti.length) ? '<ul class="elenco-semplice">' +
-        sotto.slice(0, 8).map(function (a) {
-          return '<li><span class="etichetta pericolo">sotto scorta</span><span class="chi"><a href="#" data-scheda="' + h(a.id) + '">' + h(a.nome) + '</a></span>' +
-            '<span class="tenue">' + App.fmtNum(App.giacenza(a.id, App.repartoCentrale().id)) + ' su ' + App.fmtNum(a.scortaMinima) + '</span></li>';
-        }).join('') +
-        urgenti.map(function (l) {
-          var st = App.statoScadenza(l.giorni);
-          return '<li><span class="etichetta ' + st.classe + '">' + (l.giorni < 0 ? 'scaduto' : 'scade ' + App.fmtScadenza(l.scadenza)) + '</span>' +
-            '<span class="chi"><a href="#" data-scheda="' + h(l.articolo.id) + '">' + h(l.articolo.nome) + '</a> <span class="tenue">· ' + h(l.reparto.nome) + (l.lotto ? ' · lotto ' + h(l.lotto) : '') + '</span></span>' +
-            '<span class="tenue">' + App.fmtNum(l.quantita) + '</span></li>';
-        }).join('') + '</ul>'
-        : vuoto('Tutto in ordine', 'Nessun articolo sotto scorta e nessun lotto in scadenza.'), '', true);
-
-    var perTipo = {};
-    diOggi.forEach(function (m) { perTipo[m.tipo] = (perTipo[m.tipo] || 0) + 1; });
-    var riepilogo = Object.keys(perTipo).map(function (t) { return App.TIPI[t] + ': ' + perTipo[t]; }).join(' · ');
-    var elencoOggi = '<ul class="elenco-semplice">' + diOggi.slice(0, 12).map(function (m) {
-      var a = App.articolo(m.articoloId) || {};
-      return '<li><span class="tipo-' + m.tipo + '" style="min-width:96px">' + h(App.TIPI[m.tipo]) + '</span>' +
-        '<span class="chi"><a href="#" data-scheda="' + h(m.articoloId) + '">' + h(a.nome || '') + '</a> <span class="tenue">· ' + h(App.nomeReparto(m.repartoId)) +
-        (m.tipo === 'trasferimento' ? ' → ' + h(App.nomeReparto(m.repartoDestId)) : '') + '</span></span>' +
-        '<span><b>' + App.fmtNum(m.quantita) + '</b> <span class="tenue">' + h(a.unita || '') + '</span></span></li>';
-    }).join('') + '</ul>' + (diOggi.length > 12 ? '<p class="piccolo tenue" style="padding:8px 18px">e altri ' + (diOggi.length - 12) + ': <a href="#movimenti">vedi tutti i movimenti</a></p>' : '');
-    var colDx = scheda('Movimenti di oggi', diOggi.length ? elencoOggi : vuoto('Nessun movimento oggi', 'I consumi si registrano da “Consumi del giorno”.'),
-      riepilogo ? '<span class="nota">' + h(riepilogo) + '</span>' : '', true);
-
-    html += '<div class="griglia-2">' + colSx + colDx + '</div>';
-    cont.innerHTML = html;
-
-    cont.addEventListener('click', function (e) {
-      var s = e.target.closest('[data-scheda]');
-      if (s) { e.preventDefault(); App.schedaArticolo(s.getAttribute('data-scheda')); }
-      if (e.target.closest('[data-sotto]')) { e.preventDefault(); App.vai('giacenze', { soloSotto: true }); }
-    });
-    var demo = cont.querySelector('#oggi-demo');
-    if (demo) demo.addEventListener('click', function () { App.caricaDemo(); });
-  };
-
-  /* ======================= moduli a righe: carico, trasferimenti, perdite ======================= */
+  /* ======================= moduli a righe: carico e perdite ======================= */
 
   /*
    * cfg: { tipo, titolo, testata(html), colonne: ['lotto'|'scadenza'|'prezzo'|'lotto-scelta'|'causale'|'note'],
@@ -597,14 +514,15 @@
     function nuovaRiga(articoloId) {
       var a = articoloId ? App.articolo(articoloId) : null;
       var tr = document.createElement('tr');
-      tr.innerHTML = '<td><input class="r-art" list="dl-articoli" placeholder="Scrivi le prime lettere…" value="' + h(a ? a.nome : '') + '"><div class="info-riga"></div></td>' +
-        '<td><input class="q r-q" inputmode="decimal" placeholder="0"></td>' +
-        (col.indexOf('lotto') >= 0 ? '<td><input class="r-lotto" placeholder="Lotto"></td>' : '') +
-        (col.indexOf('scadenza') >= 0 ? '<td><input class="r-scad" type="month"></td>' : '') +
-        (col.indexOf('prezzo') >= 0 ? '<td><input class="r-prezzo" inputmode="decimal" style="width:100px"></td>' : '') +
-        (col.indexOf('lotto-scelta') >= 0 ? '<td><select class="r-lotto-scelta">' + opzioniLotti(articoloId) + '</select></td>' : '') +
-        (col.indexOf('causale') >= 0 ? '<td><select class="r-causale">' + App.CAUSALI_PERDITA.map(function (c) { return '<option>' + h(c) + '</option>'; }).join('') + '</select></td>' : '') +
-        (col.indexOf('note') >= 0 ? '<td><input class="r-note"></td>' : '') +
+      // data-etichetta: sul telefono la riga diventa una scheda e il titolo della colonna va sopra la casella (css/app.css)
+      tr.innerHTML = '<td data-etichetta="Articolo"><input class="r-art" list="dl-articoli" placeholder="Scrivi le prime lettere…" aria-label="Articolo" value="' + h(a ? a.nome : '') + '"><div class="info-riga"></div></td>' +
+        '<td data-etichetta="Quantità"><input class="q r-q" inputmode="decimal" placeholder="0" aria-label="Quantità"></td>' +
+        (col.indexOf('lotto') >= 0 ? '<td data-etichetta="Lotto"><input class="r-lotto" placeholder="Lotto" aria-label="Lotto"></td>' : '') +
+        (col.indexOf('scadenza') >= 0 ? '<td data-etichetta="Scadenza"><input class="r-scad" type="month" aria-label="Scadenza"></td>' : '') +
+        (col.indexOf('prezzo') >= 0 ? '<td data-etichetta="Prezzo unit. €"><input class="r-prezzo" inputmode="decimal" style="width:100px" aria-label="Prezzo unitario in euro"></td>' : '') +
+        (col.indexOf('lotto-scelta') >= 0 ? '<td data-etichetta="Lotto"><select class="r-lotto-scelta" aria-label="Lotto">' + opzioniLotti(articoloId) + '</select></td>' : '') +
+        (col.indexOf('causale') >= 0 ? '<td data-etichetta="Causale"><select class="r-causale" aria-label="Causale">' + App.CAUSALI_PERDITA.map(function (c) { return '<option>' + h(c) + '</option>'; }).join('') + '</select></td>' : '') +
+        (col.indexOf('note') >= 0 ? '<td data-etichetta="Note"><input class="r-note" aria-label="Note"></td>' : '') +
         '<td><button class="btn fantasma piccolo" type="button" data-togli title="Togli la riga">✕</button></td>';
       tbody.appendChild(tr);
       if (a) aggiornaInfo(tr);
@@ -799,42 +717,6 @@
     }, par);
   };
 
-  /* ======================= TRASFERIMENTI ======================= */
-
-  P.trasferimenti = function (cont, par) {
-    var centrale = App.repartoCentrale();
-    var altri = App.repartiAttivi().filter(function (r) { return r.id !== (centrale && centrale.id); });
-    moduloRighe(cont, {
-      titolo: 'Trasferimento tra reparti',
-      nota: 'Per esempio dalla Farmacia ai reparti: per la Farmacia è uno scarico, per il reparto un carico.',
-      pulsante: 'Registra trasferimento',
-      testata:
-        '<label class="campo"><span>Data</span><input type="date" id="t-data" value="' + App.oggi() + '"></label>' +
-        '<label class="campo"><span>Da</span><select id="t-da" class="cambia-origine">' + opzioniReparti(centrale && centrale.id) + '</select></label>' +
-        '<label class="campo"><span>A</span><select id="t-a">' + opzioniReparti(altri[0] && altri[0].id) + '</select></label>' +
-        '<label class="campo"><span>Note (richiesta n., chi ritira…)</span><input id="t-note"></label>',
-      colonne: ['lotto-scelta'],
-      lettore: 'unita',
-      controllaGiacenza: true,
-      repartoOrigine: function (c) { return valore(c, '#t-da'); },
-      leggiTestata: function (c) {
-        var t = { data: valore(c, '#t-data'), repartoId: valore(c, '#t-da'), repartoDestId: valore(c, '#t-a'), note: valore(c, '#t-note').trim() };
-        if (!t.data) t.errore = 'Indica la data.';
-        else if (t.repartoId === t.repartoDestId) t.errore = 'Il reparto di partenza e quello di arrivo sono uguali.';
-        return t;
-      },
-      // una riga per riga del modulo: la ripartizione sui lotti (prima quello scelto, poi chi scade prima) la fa il server
-      prepara: function (t, righe) {
-        return righe.map(function (r) {
-          return { tipo: 'trasferimento', data: t.data, articoloId: r.articolo.id, repartoId: t.repartoId, repartoDestId: t.repartoDestId, quantita: r.quantita, lotto: r.lottoScelto || undefined, note: t.note };
-        });
-      },
-      fatto: function (n) { return 'Trasferimento registrato (' + n + (n === 1 ? ' articolo)' : ' articoli)'); },
-      titoloRecenti: 'Ultimi trasferimenti',
-      recenti: function (m) { return m.tipo === 'trasferimento'; }
-    }, par);
-  };
-
   /* ======================= PERDITE ======================= */
 
   P.perdite = function (cont, par) {
@@ -903,7 +785,8 @@
     // solo i reparti in cui l'utente può registrare
     var reparti = App.repartiScrivibili();
     if (!reparti.length) { cont.innerHTML = senzaReparti(); return; }
-    var rep = repartoTra(reparti, memoriaConsumi.rep, false);
+    // magazzino chiesto da un'altra pagina (per esempio "Consumi" dal pannello degli Armadi), altrimenti quello ricordato
+    var rep = repartoTra(reparti, (par && par.repartoId) || memoriaConsumi.rep, false);
     // la data scelta vale per la giornata in cui è stata scelta: il giorno dopo si riparte da oggi
     var data = memoriaConsumi.data && memoriaConsumi.sceltaIl === App.oggi() ? memoriaConsumi.data : App.oggi();
     var cat = memoriaConsumi.cat || '';
@@ -947,13 +830,14 @@
         corpo = vuoto(App.S.articoli.length ? 'Nessun articolo con giacenza in questo reparto' : 'Nessun articolo in anagrafica',
           App.S.articoli.length ? 'Spunta “Mostra anche gli articoli senza giacenza” oppure registra un carico o un trasferimento verso il reparto.' : 'Aggiungi gli articoli dalla pagina Articoli.');
       } else {
-        corpo = '<div class="tabella-contenitore"><table class="tabella"><thead><tr><th>Articolo</th><th>Categoria</th><th class="n">Giacenza</th><th class="n">Già registrati</th><th class="n">Consumo da registrare</th></tr></thead><tbody>' +
+        // a-schede: sul telefono ogni articolo è una scheda (nome sopra, numeri e casella sotto: css/app.css)
+        corpo = '<div class="tabella-contenitore"><table class="tabella a-schede"><thead><tr><th>Articolo</th><th>Categoria</th><th class="n">Giacenza</th><th class="n">Già registrati</th><th class="n">Consumo da registrare</th></tr></thead><tbody>' +
           lista.map(function (a) {
             return '<tr><td><a href="#" data-scheda="' + h(a.id) + '">' + h(a.nome) + '</a>' + (a.confezione ? ' <span class="tenue piccolo">' + h(a.confezione) + '</span>' : '') + '</td>' +
               '<td>' + etichettaCategoria(a.categoria) + '</td>' +
-              '<td class="n">' + App.fmtNum(App.giacenza(a.id, st.rep)) + (a.unita ? ' <span class="tenue">' + h(a.unita) + '</span>' : '') + '</td>' +
-              '<td class="n">' + (gia[a.id] ? App.fmtNum(gia[a.id]) : '<span class="tenue">—</span>') + '</td>' +
-              '<td class="n"><input class="q" inputmode="decimal" data-art="' + h(a.id) + '" placeholder="0" value="' + h(scrittiConsumi[chiave(st, a.id)] || '') + '" aria-label="Consumo di ' + h(a.nome) + '"></td></tr>';
+              '<td class="n" data-etichetta="Giacenza">' + App.fmtNum(App.giacenza(a.id, st.rep)) + (a.unita ? ' <span class="tenue">' + h(a.unita) + '</span>' : '') + '</td>' +
+              '<td class="n" data-etichetta="Già registrati">' + (gia[a.id] ? App.fmtNum(gia[a.id]) : '<span class="tenue">—</span>') + '</td>' +
+              '<td class="n" data-etichetta="Consumo"><input class="q" inputmode="decimal" data-art="' + h(a.id) + '" placeholder="0" value="' + h(scrittiConsumi[chiave(st, a.id)] || '') + '" aria-label="Consumo di ' + h(a.nome) + '"></td></tr>';
           }).join('') + '</tbody></table></div>';
       }
       cont.querySelector('#c-foglio').innerHTML = scheda('Consumi di ' + h(App.nomeReparto(st.rep)) + ' · ' + App.dataLunga(st.data), corpo,
@@ -1056,9 +940,14 @@
   /* ======================= GIACENZE ======================= */
 
   P.giacenze = function (cont, par) {
+    par = par || {};
+    // magazzino chiesto da un'altra pagina; dal cruscotto ("Sotto scorta") chi ha un solo magazzino vede il suo
+    var mieiRep = App.permessi && App.permessi.reparti;
+    var repIniziale = par.repartoId && App.reparto(par.repartoId) ? par.repartoId
+      : (par.soloSotto && mieiRep && mieiRep.length === 1 && App.reparto(mieiRep[0]) ? mieiRep[0] : '');
     cont.innerHTML =
       '<div class="strumenti">' +
-      '<label class="campo"><span>Reparto</span><select id="g-rep">' + opzioniReparti('', true) + '</select></label>' +
+      '<label class="campo"><span>Reparto</span><select id="g-rep">' + opzioniReparti(repIniziale, true) + '</select></label>' +
       '<label class="campo"><span>Categoria</span><select id="g-cat">' + opzioniCategoria('', true) + '</select></label>' +
       '<label class="campo"><span>Cerca</span><input id="g-cerca" type="search" placeholder="Nome, principio attivo…"></label>' +
       '<label class="spunta"><input type="checkbox" id="g-sotto"' + (par.soloSotto ? ' checked' : '') + '> Solo sotto scorta</label>' +
@@ -1087,10 +976,19 @@
         viaggio[p[0]] = C.r3((viaggio[p[0]] || 0) + perArrivo[k]);
       });
       var conViaggio = Object.keys(perArrivo).length > 0;
+      // sotto scorta con le soglie del cruscotto: assortimento di ogni magazzino, anagrafica nella farmacia centrale
+      var sottoIn = {};
+      App.S.articoli.forEach(function (a) {
+        var l = App.magazziniSottoScorta(a, rep || null);
+        if (l.length) sottoIn[a.id] = l;
+      });
+      var centrale = App.repartoCentrale();
+      var repSoglia = rep || (centrale && centrale.id);
+      var lottiDi = App.lottiPerCoppia();
       var lista = App.S.articoli.filter(function (a) {
         if (cat && a.categoria !== cat) return false;
         if (testo && (a.nome + ' ' + (a.principio || '') + ' ' + (a.codice || '')).toLowerCase().indexOf(testo) < 0) return false;
-        if (sotto && !App.sottoScorta(a)) return false;
+        if (sotto && !sottoIn[a.id]) return false;
         var tot = reparti.reduce(function (s, r) { return s + App.giacenza(a.id, r.id); }, 0);
         if (!zero && !tot && !sotto && !viaggio[a.id]) return false;
         return true;
@@ -1100,7 +998,7 @@
         .concat(reparti.map(function (r) { return { titolo: r.nome, larghezza: 13 }; }))
         .concat(conViaggio ? [{ titolo: rep ? 'In viaggio verso ' + App.nomeReparto(rep) : 'In viaggio (DDT)', larghezza: 14 }] : [])
         .concat(rep ? [{ titolo: 'Prossima scadenza', larghezza: 16 }] : [{ titolo: 'Totale', larghezza: 11 }])
-        .concat([{ titolo: 'Scorta minima', larghezza: 13 }, { titolo: 'Valore €', larghezza: 12 }]);
+        .concat([{ titolo: rep ? 'Scorta minima' : 'Scorta minima (farmacia centrale)', larghezza: 13 }, { titolo: 'Valore €', larghezza: 12 }]);
       dati.righe = [];
       var valoreTot = 0;
 
@@ -1111,25 +1009,36 @@
         valoreTot += val;
         var prossima = '';
         if (rep) {
-          var l = C.lotti(App.S, a.id, rep).filter(function (x) { return x.quantita > 0 && x.scadenza; });
+          // lotti di tutte le coppie in una passata sola (App.lottiPerCoppia), invece di rileggere i movimenti per ogni riga
+          var l = (lottiDi[a.id + '|' + rep] || []).filter(function (x) { return x.quantita > 0 && x.scadenza; });
           prossima = l.length ? l[0].scadenza : '';
         }
         var inViaggio = viaggio[a.id] || 0;
-        dati.righe.push([a.nome, a.categoria].concat(valori).concat(conViaggio ? [inViaggio] : []).concat(rep ? [prossima ? App.fmtScadenza(prossima) : ''] : [tot]).concat([a.scortaMinima || '', val]));
+        var minima = repSoglia ? App.scortaMinima(a, repSoglia) : 0;
+        var dove = sottoIn[a.id] || [];
+        dati.righe.push([a.nome, a.categoria].concat(valori).concat(conViaggio ? [inViaggio] : []).concat(rep ? [prossima ? App.fmtScadenza(prossima) : ''] : [tot]).concat([minima || '', val]));
         var stScad = prossima ? App.statoScadenza(C.giorniAllaScadenza(prossima, oggi)) : null;
         return '<tr class="cliccabile" data-scheda="' + h(a.id) + '"><td>' + h(a.nome) + (a.attivo === false ? ' <span class="etichetta">non attivo</span>' : '') + '</td>' +
           '<td>' + etichettaCategoria(a.categoria) + '</td>' +
-          valori.map(function (v) { return '<td class="n' + (v < 0 ? ' neg' : '') + '">' + (v ? App.fmtNum(v) : '<span class="tenue">0</span>') + '</td>'; }).join('') +
+          valori.map(function (v, i) {
+            var r = reparti[i];
+            var basso = dove.indexOf(r) >= 0;
+            return '<td class="n' + (v < 0 ? ' neg' : '') + (basso ? ' sotto-scorta' : '') + '"' +
+              (basso ? ' title="Sotto la scorta minima di ' + h(r.nome) + ' (' + h(App.fmtNum(App.scortaMinima(a, r.id))) + ')"' : '') + '>' +
+              (v ? App.fmtNum(v) : '<span class="tenue">0</span>') + (basso ? '<span class="nascosto"> sotto scorta</span>' : '') + '</td>';
+          }).join('') +
           (conViaggio ? '<td class="n">' + (inViaggio ? '<span class="etichetta info" title="Partito con un DDT e non ancora ricevuto">🚚 ' + App.fmtNum(inViaggio) + '</span>' : '<span class="tenue">—</span>') + '</td>' : '') +
           (rep ? '<td>' + (prossima ? App.fmtScadenza(prossima) + ' <span class="etichetta ' + stScad.classe + '">' + stScad.testo + '</span>' : '<span class="tenue">—</span>') + '</td>'
             : '<td class="n"><b>' + App.fmtNum(tot) + '</b></td>') +
-          '<td class="n">' + (a.scortaMinima ? App.fmtNum(a.scortaMinima) + (App.sottoScorta(a) ? ' <span class="etichetta pericolo">sotto</span>' : '') : '<span class="tenue">—</span>') + '</td>' +
+          '<td class="n">' + (minima ? App.fmtNum(minima) : '<span class="tenue">—</span>') +
+            (dove.length ? ' <span class="etichetta pericolo" title="Sotto la scorta minima in: ' + h(dove.map(function (r) { return r.nome; }).join(', ')) + '">sotto</span>' : '') + '</td>' +
           '<td class="n">' + App.fmtEuro(val) + '</td></tr>';
       }).join('');
 
       var testa = '<tr><th>Articolo</th><th>Categoria</th>' + reparti.map(function (r) { return '<th class="n">' + h(r.nome) + '</th>'; }).join('') +
         (conViaggio ? '<th class="n" title="Merce partita con un DDT e non ancora ricevuta">In viaggio</th>' : '') +
-        (rep ? '<th>Prossima scadenza</th>' : '<th class="n">Totale</th>') + '<th class="n">Scorta min.</th><th class="n">Valore</th></tr>';
+        (rep ? '<th>Prossima scadenza</th>' : '<th class="n">Totale</th>') +
+        '<th class="n" title="' + (rep ? 'Scorta minima dell’assortimento di questo magazzino' : 'Scorta minima della farmacia centrale; «sotto» conta tutti i magazzini (assortimento)') + '">Scorta min.</th><th class="n">Valore</th></tr>';
       cont.querySelector('#g-tab').innerHTML = scheda('Giacenze al ' + App.fmtData(oggi) + (rep ? ' · ' + h(App.nomeReparto(rep)) : ''),
         lista.length ? '<div class="tabella-contenitore"><table class="tabella"><thead>' + testa + '</thead><tbody>' + corpo + '</tbody>' +
           '<tfoot><tr><td colspan="' + (reparti.length + 4 + (conViaggio ? 1 : 0)) + '">Valore complessivo (prezzo unitario × giacenza, esclusa la merce in viaggio)</td><td class="n">' + App.fmtEuro(valoreTot) + '</td></tr></tfoot></table></div>'
@@ -1296,12 +1205,12 @@
       var lista = App.articoliAttivi(cat).filter(function (a) { return !testo || a.nome.toLowerCase().indexOf(testo) >= 0; });
       var chiave = function (a) { return rep + '|' + data + '|' + a; };
       cont.querySelector('#i-tab').innerHTML = scheda('Conta di ' + h(App.nomeReparto(rep)) + ' al ' + App.fmtData(data),
-        lista.length ? '<div class="tabella-contenitore"><table class="tabella"><thead><tr><th>Articolo</th><th>Categoria</th><th class="n">Giacenza nel programma</th><th class="n">Quantità contata</th><th class="n">Differenza</th></tr></thead><tbody>' +
+        lista.length ? '<div class="tabella-contenitore"><table class="tabella a-schede"><thead><tr><th>Articolo</th><th>Categoria</th><th class="n">Giacenza nel programma</th><th class="n">Quantità contata</th><th class="n">Differenza</th></tr></thead><tbody>' +
           lista.map(function (a) {
             var g = C.giacenza(App.S, a.id, rep, data);
             var contato = contatiInventario[chiave(a.id)] || '';
-            return '<tr><td>' + h(a.nome) + '</td><td>' + etichettaCategoria(a.categoria) + '</td><td class="n">' + App.fmtNum(g) + (a.unita ? ' <span class="tenue">' + h(a.unita) + '</span>' : '') + '</td>' +
-              '<td class="n"><input class="q" inputmode="decimal" data-art="' + h(a.id) + '" data-teorica="' + g + '" placeholder="—" value="' + h(contato) + '"></td><td class="n diff">' + differenza(contato, g) + '</td></tr>';
+            return '<tr><td>' + h(a.nome) + '</td><td>' + etichettaCategoria(a.categoria) + '</td><td class="n" data-etichetta="Nel programma">' + App.fmtNum(g) + (a.unita ? ' <span class="tenue">' + h(a.unita) + '</span>' : '') + '</td>' +
+              '<td class="n" data-etichetta="Contata"><input class="q" inputmode="decimal" data-art="' + h(a.id) + '" data-teorica="' + g + '" placeholder="—" value="' + h(contato) + '" aria-label="Quantità contata di ' + h(a.nome) + '"></td><td class="n diff" data-etichetta="Differenza">' + differenza(contato, g) + '</td></tr>';
           }).join('') + '</tbody></table></div>'
           : vuoto('Nessun articolo', ''),
         '<span class="nota">Scrivi solo le quantità contate: le righe vuote non cambiano. Se altri registrano movimenti mentre conti, la giacenza si aggiorna e le quantità scritte restano.</span>', true);
@@ -1755,7 +1664,7 @@
     });
   }
 
-  /* ======================= CONFIGURA ======================= */
+  /* ======================= DATI DI PROVA (la pagina Configura è in js/pagine-configura.js) ======================= */
 
   // Scrittura che cambia tutto l'archivio (dati di prova, importazione, ripristino): poi ricarico tutto dal server.
   function scriviERicarica(metodo, percorso, corpo) {
@@ -1776,264 +1685,52 @@
     });
   };
 
-  /* Importa l'archivio .json salvato dalla versione per un solo PC (solo con l'archivio vuoto). */
-  function importaArchivio() {
-    App.scegliFileDaLeggere('.json,application/json').then(function (f) {
-      if (!f) return;
-      return f.text().then(function (testo) {
-        var dati;
-        try { dati = JSON.parse(testo); } catch (e) { throw new Error('il file non è un archivio .json valido.'); }
-        if (!dati || !Array.isArray(dati.articoli) || !Array.isArray(dati.movimenti) || !Array.isArray(dati.reparti)) {
-          throw new Error('il file non è un archivio del Gestionale Farmacia (versione per un solo PC).');
-        }
-        return App.conferma('Importa archivio', 'Importo l’archivio “' + h(f.name) + '” (' + dati.articoli.length + ' articoli, ' + dati.movimenti.length + ' movimenti, ' +
-          dati.reparti.length + ' reparti)? Dopo l’importazione <b>tutti gli utenti</b> vedranno questi dati.', 'Importa').then(function (ok) {
-          if (!ok) return;
-          return scriviERicarica('POST', '/api/importa-archivio', dati).then(function () {
-            App.avviso('Archivio importato: ' + App.S.articoli.length + ' articoli e ' + App.S.movimenti.length + ' movimenti', 'ok');
-            App.ridisegna();
-          });
-        });
-      });
-    }).catch(function (e) { App.avviso('Archivio non importato: ' + messaggioErrore(e), 'errore'); });
-  }
-
-  var TIPI_COPIA = { auto: 'automatica', manuale: 'fatta a mano', 'prima-del-ripristino': 'prima di un ripristino' };
-
-  P.configura = function (cont) {
-    var imp = App.S.impostazioni;
-    var html = '';
-    if (App.puo('impostazioni')) {
-      html += '<div class="griglia-2">' +
-        scheda('Struttura',
-          '<div class="modulo">' +
-          '<label class="campo"><span>Nome della struttura</span><input id="k-struttura" value="' + h(imp.struttura) + '"></label>' +
-          '<label class="campo"><span>Sottotitolo</span><input id="k-sotto" value="' + h(imp.sottotitolo) + '"></label>' +
-          '<label class="campo"><span>Società (sul modulo)</span><input id="k-societa" value="' + h(imp.societa) + '"></label>' +
-          '<label class="campo"><span>Città (sul modulo)</span><input id="k-citta" value="' + h(imp.citta) + '"></label>' +
-          '<label class="campo"><span>Codice del modulo</span><input id="k-codice" value="' + h(imp.codiceModulo) + '"></label>' +
-          '<label class="campo"><span>Avviso scadenze (giorni prima)</span><input id="k-giorni" inputmode="numeric" value="' + h(imp.giorniAvvisoScadenza) + '"></label>' +
-          '<div class="campo largo"><span>Logo</span><div class="strumenti">' + (imp.logo ? '<img src="' + h(imp.logo) + '" alt="" style="height:42px;border:1px solid var(--linea);border-radius:6px">' : '<span class="tenue piccolo">Nessun logo: uso il simbolo predefinito.</span>') +
-          '<button class="btn piccolo" type="button" id="k-logo">Scegli immagine…</button>' + (imp.logo ? '<button class="btn piccolo" type="button" id="k-logo-via">Togli</button>' : '') + '</div></div>' +
-          '</div><p class="piccolo tenue" style="margin-top:10px">Nome e logo compaiono anche nella schermata di accesso. Chi registra i movimenti è l’utente collegato.</p>' +
-          '<div class="strumenti" style="margin-top:14px"><span class="spazio"></span><button class="btn primario" type="button" id="k-salva">Salva</button></div>') +
-        scheda('Reparti',
-          '<p class="piccolo tenue" style="margin-bottom:10px">Il reparto <b>centrale</b> è la Farmacia: riceve i carichi dai fornitori e su di lui si controlla la scorta minima.</p>' +
-          '<div class="tabella-contenitore"><table class="tabella"><thead><tr><th>Reparto</th><th>Centrale</th><th>Attivo</th><th></th></tr></thead><tbody id="k-reparti">' +
-          App.S.reparti.map(function (r) {
-            return '<tr data-rep="' + h(r.id) + '"><td><input class="cella-input k-rep-nome" value="' + h(r.nome) + '" aria-label="Nome del reparto"></td>' +
-              '<td><input type="radio" name="centrale" class="k-rep-centrale"' + (r.centrale ? ' checked' : '') + ' aria-label="Centrale"></td>' +
-              '<td><input type="checkbox" class="k-rep-attivo"' + (r.attivo !== false ? ' checked' : '') + ' aria-label="Attivo"></td>' +
-              '<td class="azioni"><button class="btn piccolo pericolo" type="button" data-rep-elimina="' + h(r.id) + '">Elimina</button></td></tr>';
-          }).join('') + '</tbody></table></div>' +
-          '<div class="strumenti" style="margin-top:12px"><input class="cella-input" id="k-nuovo-rep" placeholder="Nuovo reparto"><button class="btn" type="button" id="k-agg-rep">Aggiungi</button><span class="spazio"></span><button class="btn primario" type="button" id="k-salva-rep">Salva reparti</button></div>') +
-        '</div>';
-    }
-    if (App.puo('backup')) {
-      html += scheda('Copie di sicurezza del server',
-        '<div class="guida">' +
-        '<p>I dati stanno <b>sul server</b>. Il server fa da solo <b>una copia al giorno</b> e tiene le ultime 30; prima di ogni ripristino salva anche lo stato del momento, così si può sempre tornare indietro.</p>' +
-        '<p class="piccolo tenue">Per sicurezza in più, ogni tanto scarica una copia e conservala fuori dal server (per esempio su un disco di rete). Il ripristino cambia i dati per <b>tutti</b> gli utenti.</p>' +
-        '<div class="strumenti"><button class="btn primario" type="button" id="k-backup-crea">Crea una copia adesso</button><span class="spazio"></span>' +
-        '<button class="btn" type="button" id="k-backup-aggiorna">Aggiorna l’elenco</button></div>' +
-        '<div id="k-backup" class="piccolo tenue">Carico l’elenco…</div>' +
-        '</div>');
-    }
-    if (App.eAmministratore() && App.archivioVuoto()) {
-      html += scheda('Archivio vuoto: come cominciare',
-        '<div class="guida">' +
-        '<p>L’archivio non ha ancora articoli né movimenti. Se usavate la <b>versione per un solo PC</b>, importa l’archivio <span class="mono">.json</span> che salvavate da Configura (“Salva una copia”): articoli, reparti, impostazioni e movimenti passano sul server.</p>' +
-        '<div class="strumenti"><button class="btn primario" type="button" id="k-importa-archivio">Importa l’archivio della versione per un solo PC (.json)</button>' +
-        '<button class="btn" type="button" id="k-demo">Carica dati di prova</button></div>' +
-        '<p class="piccolo tenue">Oppure importa gli articoli da Excel dalla pagina <a href="#articoli">Articoli</a>. I dati di prova sono inventati e servono per imparare: si possono caricare solo con l’archivio vuoto.</p>' +
-        '</div>');
-    }
-    cont.innerHTML = html;
-
-    // ---- struttura ----
-    function impostazioni(modifiche) {
-      var i = App.S.impostazioni;
-      return Object.assign({
-        struttura: i.struttura, sottotitolo: i.sottotitolo, societa: i.societa, citta: i.citta,
-        logo: i.logo || '', giorniAvvisoScadenza: i.giorniAvvisoScadenza, codiceModulo: i.codiceModulo
-      }, modifiche);
-    }
-    function salvaImpostazioni(modifiche, messaggio, ridisegna) {
-      return root.Api.scrivi('PUT', '/api/impostazioni', impostazioni(modifiche)).then(function () {
-        App.disegnaMarchio();
-        App.avviso(messaggio, 'ok');
-        if (ridisegna) App.ridisegna();
-      }, function (e) { App.avviso('Impostazioni non salvate: ' + messaggioErrore(e), 'errore'); });
-    }
-    if (App.puo('impostazioni')) {
-      cont.querySelector('#k-salva').addEventListener('click', function () {
-        salvaImpostazioni({
-          struttura: valore(cont, '#k-struttura').trim() || 'Clinica Posillipo',
-          sottotitolo: valore(cont, '#k-sotto').trim(),
-          societa: valore(cont, '#k-societa').trim(),
-          citta: valore(cont, '#k-citta').trim(),
-          codiceModulo: valore(cont, '#k-codice').trim(),
-          giorniAvvisoScadenza: Math.max(1, Math.round(App.numero(valore(cont, '#k-giorni'))) || 90)
-        }, 'Impostazioni salvate', false);
-      });
-      cont.querySelector('#k-logo').addEventListener('click', function () {
-        App.scegliFileDaLeggere('image/*').then(function (f) {
-          if (!f) return;
-          if (f.size > 400000) { App.avviso('Immagine troppo grande: usa un file sotto i 400 KB.', 'errore'); return; }
-          var r = new FileReader();
-          r.addEventListener('load', function () { salvaImpostazioni({ logo: r.result }, 'Logo salvato', true); });
-          r.readAsDataURL(f);
-        });
-      });
-      var via = cont.querySelector('#k-logo-via');
-      if (via) via.addEventListener('click', function () { salvaImpostazioni({ logo: '' }, 'Logo tolto', true); });
-
-      // ---- reparti ----
-      function leggiReparti() {
-        return Array.prototype.map.call(cont.querySelectorAll('#k-reparti tr[data-rep]'), function (tr) {
-          var id = tr.getAttribute('data-rep');
-          var r = App.reparto(id) || {};
-          return {
-            id: id,
-            nome: tr.querySelector('.k-rep-nome').value.trim() || r.nome,
-            centrale: tr.querySelector('.k-rep-centrale').checked,
-            attivo: tr.querySelector('.k-rep-attivo').checked
-          };
-        });
-      }
-      function salvaReparti(lista, messaggio) {
-        return root.Api.scrivi('PUT', '/api/reparti', { reparti: lista }).then(function () {
-          App.avviso(messaggio, 'ok');
-          App.ridisegna();
-        }, function (e) { App.avviso('Reparti non salvati: ' + messaggioErrore(e), 'errore'); });
-      }
-      cont.querySelector('#k-agg-rep').addEventListener('click', function () {
-        var nome = valore(cont, '#k-nuovo-rep').trim();
-        if (!nome) { App.avviso('Scrivi il nome del nuovo reparto.', 'errore'); return; }
-        if (App.S.reparti.some(function (r) { return r.nome.toLowerCase() === nome.toLowerCase(); })) { App.avviso('Esiste già un reparto con questo nome.', 'errore'); return; }
-        // mando anche le righe già presenti (con le modifiche scritte nel modulo) e il reparto nuovo senza id
-        salvaReparti(leggiReparti().concat([{ nome: nome, centrale: false, attivo: true }]), 'Reparto aggiunto');
-      });
-      cont.querySelector('#k-nuovo-rep').addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') { e.preventDefault(); cont.querySelector('#k-agg-rep').click(); }
-      });
-      cont.querySelector('#k-salva-rep').addEventListener('click', function () {
-        var lista = leggiReparti();
-        if (!lista.some(function (r) { return r.centrale; })) { App.avviso('Scegli il reparto centrale (la Farmacia).', 'errore'); return; }
-        salvaReparti(lista, 'Reparti salvati');
-      });
-      cont.querySelectorAll('[data-rep-elimina]').forEach(function (b) {
-        b.addEventListener('click', function () {
-          var id = b.getAttribute('data-rep-elimina');
-          if (App.S.movimenti.some(function (m) { return m.repartoId === id || m.repartoDestId === id; })) {
-            App.avviso('Il reparto ha dei movimenti: non si può eliminare. Togli la spunta “Attivo” per nasconderlo.', 'errore');
-            return;
-          }
-          App.conferma('Elimina reparto', 'Elimino il reparto “' + h(App.nomeReparto(id)) + '”?', 'Elimina', true).then(function (ok) {
-            if (!ok) return;
-            root.Api.scrivi('DELETE', '/api/reparti/' + encodeURIComponent(id)).then(function () {
-              App.avviso('Reparto eliminato');
-              App.ridisegna();
-            }, function (e) { App.avviso('Reparto non eliminato: ' + messaggioErrore(e), 'errore'); });
-          });
-        });
-      });
-    }
-
-    // ---- copie di sicurezza del server ----
-    function elencoCopie() {
-      var el = cont.querySelector('#k-backup');
-      if (!el) return;
-      root.Api.richiesta('GET', '/api/backup').then(function (r) {
-        var copie = (r && r.backup) || [];
-        if (!document.body.contains(el)) return;
-        if (!copie.length) { el.textContent = 'Ancora nessuna copia: la prima automatica si crea entro oggi, oppure creala adesso.'; return; }
-        el.className = '';
-        el.innerHTML = '<div class="tabella-contenitore" style="max-height:420px"><table class="tabella"><thead><tr><th>Data</th><th>Tipo</th><th>File</th><th class="n">Dimensione</th><th></th></tr></thead><tbody>' +
-          copie.map(function (c, i) {
-            return '<tr><td>' + h(App.fmtDataOra(c.data)) + '</td><td>' + h(TIPI_COPIA[c.tipo] || c.tipo || '') + '</td>' +
-              '<td class="mono">' + h(c.nome) + '</td><td class="n">' + h(App.fmtDimensione(c.dimensione)) + '</td>' +
-              '<td class="azioni"><a class="btn piccolo" href="' + h(root.Api.url('/api/backup/' + encodeURIComponent(c.nome))) + '" download="' + h(c.nome) + '">Scarica</a> ' +
-              '<button class="btn piccolo pericolo" type="button" data-ripristina="' + i + '">Ripristina</button></td></tr>';
-          }).join('') + '</tbody></table></div>';
-        el.querySelectorAll('[data-ripristina]').forEach(function (b) {
-          b.addEventListener('click', function () { ripristinaCopia(copie[Number(b.getAttribute('data-ripristina'))]); });
-        });
-      }, function (e) {
-        el.className = 'piccolo';
-        el.innerHTML = '<span style="color:var(--pericolo)">Non riesco a leggere l’elenco delle copie: ' + h(messaggioErrore(e)) + '</span>';
-      });
-    }
-    function ripristinaCopia(c) {
-      App.confermaForte('Ripristina una copia di sicurezza',
-        'Sostituisco <b>tutti i dati del magazzino</b> con la copia del <b>' + h(App.fmtDataOra(c.data)) + '</b> (' + h(c.nome) + ').<br>' +
-        '<b>Tutti gli utenti collegati</b> vedranno subito i dati della copia: quello che è stato registrato dopo quel momento sparisce. ' +
-        'Utenti e password non cambiano. Prima del ripristino il server salva una copia dello stato attuale, che resta in questo elenco.',
-        'RIPRISTINA', 'Ripristina la copia').then(function (ok) {
-        if (!ok) return;
-        scriviERicarica('POST', '/api/backup/' + encodeURIComponent(c.nome) + '/ripristina', {}).then(function () {
-          App.disegnaMarchio();
-          App.avviso('Copia ripristinata: ' + App.S.articoli.length + ' articoli e ' + App.S.movimenti.length + ' movimenti', 'ok');
-          App.ridisegna();
-        }, function (e) { App.avviso('Ripristino non riuscito: ' + messaggioErrore(e), 'errore'); });
-      });
-    }
-    if (App.puo('backup')) {
-      cont.querySelector('#k-backup-crea').addEventListener('click', function () {
-        var b = this;
-        b.disabled = true;
-        root.Api.richiesta('POST', '/api/backup', {}).then(function (r) {
-          App.avviso('Copia creata' + (r && r.nome ? ': ' + r.nome : ''), 'ok');
-          elencoCopie();
-        }, function (e) { App.avviso('Copia non creata: ' + messaggioErrore(e), 'errore'); }).then(function () { b.disabled = false; });
-      });
-      cont.querySelector('#k-backup-aggiorna').addEventListener('click', elencoCopie);
-      elencoCopie();
-    }
-
-    // ---- archivio vuoto ----
-    var ia = cont.querySelector('#k-importa-archivio');
-    if (ia) ia.addEventListener('click', importaArchivio);
-    var demo = cont.querySelector('#k-demo');
-    if (demo) demo.addEventListener('click', function () { App.caricaDemo(); });
-  };
-
   /* ======================= GUIDA ======================= */
 
+  /*
+   * Istruzioni scritte. La pagina Guida vera è in js/guide.js, che mostra queste sezioni (una per <h3>) sotto le
+   * videoguide, come "Istruzioni scritte".
+   */
   P.guida = function (cont) {
     var indirizzo = location.origin + '/';
     var locale = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
     var ruoli = App.utente ? App.nomeRuolo(App.utente.ruolo) : '';
-    cont.innerHTML = scheda('Come si usa il Gestionale Farmacia', '<div class="guida">' +
-      '<p>Il programma sostituisce i fogli Excel <i>Carico_Scarico_FARMACIA</i> e <i>Carico_Scarico_PRESIDI</i>: ogni movimento si registra una volta sola e a fine mese la <b>Nota consumi</b> di ogni reparto è già pronta, nello stesso modulo di sempre.</p>' +
+    var prodotto = (App.S && App.S.impostazioni && App.S.impostazioni.nomeProdotto) || 'il programma';
+    cont.innerHTML = scheda('Come si usa ' + h(prodotto), '<div class="guida">' +
+      '<p>Il programma sostituisce i fogli Excel <i>Carico_Scarico_FARMACIA</i> e <i>Carico_Scarico_PRESIDI</i>: ogni movimento si registra una volta sola e a fine mese la <b>Nota consumi</b> di ogni magazzino è già pronta, nello stesso modulo di sempre. ' +
+      'La <b>farmacia centrale</b> riceve la merce dai fornitori e rifornisce i <b>magazzini di piano</b> con richieste e DDT.</p>' +
       '<h3>Il giro di ogni giorno</h3><ol>' +
-      '<li><b>Carico</b> (tasto C): quando arriva la merce dal fornitore. Indica lotto e scadenza: servono al controllo scadenze.</li>' +
-      '<li><b>Trasferimenti</b> (T): quando la Farmacia consegna ai reparti. Per la Farmacia è uno scarico, per il reparto un carico.</li>' +
-      '<li><b>Consumi del giorno</b> (S): scegli reparto e data, scrivi le quantità usate e premi <i>Registra consumi</i>. Invio passa alla riga sotto.</li>' +
+      '<li><b>Carico</b> (tasto C): quando arriva la merce dal fornitore nella farmacia centrale. Indica lotto e scadenza: servono al controllo scadenze.</li>' +
+      '<li><b>Richieste</b> (Q): il magazzino di piano chiede alla farmacia centrale quello che gli serve; la farmacia la prende in carico e approva le quantità.</li>' +
+      '<li><b>DDT e consegne</b> (D): la farmacia prepara il DDT (documento di trasporto) con i lotti, lo spedisce indicando chi lo porta e il magazzino lo <b>riceve</b> controllando le quantità. Finché non è ricevuta la merce è “in viaggio”.</li>' +
+      '<li><b>Trasferimenti</b> (T): un DDT fra due magazzini senza richiesta, per esempio un reso alla farmacia.</li>' +
+      '<li><b>Consumi del giorno</b> (S): scegli magazzino e data, scrivi le quantità usate e premi <i>Registra consumi</i>. Invio passa alla riga sotto.</li>' +
       '<li><b>Perdite e scaduti</b> (P): confezioni scadute, rotte, smarrite o rese.</li></ol>' +
       '<h3>A fine mese</h3><ol>' +
-      '<li>Apri <b>Nota consumi mensile</b> (R), scegli reparto, mese e modulo (Farmaci o Presidi).</li>' +
+      '<li>Apri <b>Nota consumi mensile</b> (R), scegli magazzino, mese e modulo (Farmaci o Presidi).</li>' +
       '<li>Controlla i numeri: le caselle dei giorni si possono correggere direttamente, come sul foglio (se il tuo utente può farlo).</li>' +
       '<li><b>Esporta nel modulo Excel</b>: crea il file con il modulo originale compilato (oltre 48 articoli aggiunge altri fogli identici). Oppure <b>Stampa</b>.</li></ol>' +
       '<h3>Come si calcolano le colonne</h3><ul>' +
-      '<li><b>Residui mesi prec.</b> (2): giacenza del reparto all’ultimo giorno del mese prima.</li>' +
-      '<li><b>Carichi</b> (3): carichi dai fornitori, trasferimenti ricevuti e rettifiche d’inventario in aumento.</li>' +
-      '<li><b>Consumi giornalieri</b>: consumi del giorno; per la Farmacia comprendono anche i trasferimenti ai reparti.</li>' +
+      '<li><b>Residui mesi prec.</b> (2): giacenza del magazzino all’ultimo giorno del mese prima.</li>' +
+      '<li><b>Carichi</b> (3): carichi dai fornitori, merce ricevuta con i DDT (alla data di ricezione) e rettifiche d’inventario in aumento.</li>' +
+      '<li><b>Consumi giornalieri</b>: consumi del giorno; per la farmacia centrale comprendono anche la merce mandata agli altri magazzini (alla data di partenza del DDT).</li>' +
       '<li><b>Perdite</b> (7): perdite, scaduti e rettifiche d’inventario in diminuzione.</li>' +
       '<li><b>Controllo scadenze</b> (9): la scadenza più vicina tra i lotti rimasti a fine mese.</li>' +
       '<li><b>Residui</b> (10) = totale carico − totale scarico: è la giacenza a fine mese e diventa il residuo del mese dopo.</li></ul>' +
       '<h3>Lotti e scadenze</h3>' +
-      '<p>Consumi, perdite e trasferimenti scalano per primo il lotto che scade prima. Se serve un lotto preciso, sceglilo nella riga. La pagina <b>Scadenze</b> (Z) mostra i lotti in scadenza e quelli scaduti, con il pulsante per toglierli dal magazzino.</p>' +
+      '<p>Consumi, perdite e DDT scalano per primo il lotto che scade prima. Se serve un lotto preciso, sceglilo nella riga. La pagina <b>Scadenze</b> (Z) mostra i lotti in scadenza e quelli scaduti, con il pulsante per toglierli dal magazzino.</p>' +
       '<h3>Inventario</h3><p>Da <b>Inventario</b> (I) stampi il foglio di conta, scrivi le quantità contate e il programma registra le differenze come rettifiche.</p>' +
-      '<h3>Correggere un errore</h3><p>Un movimento non si cancella: si <b>annulla</b> (da Movimenti, o dagli elenchi sotto ogni modulo) scrivendo il motivo. Resta visibile, barrato, e non conta più nei calcoli. Chi lavora in un reparto può annullare solo i consumi e le perdite registrati da lui.</p>' +
+      '<h3>Correggere un errore</h3><p>Un movimento non si cancella: si <b>annulla</b> (da Movimenti, o dagli elenchi sotto ogni modulo) scrivendo il motivo. Resta visibile, barrato, e non conta più nei calcoli. ' +
+      'Chi lavora in un magazzino di piano può annullare solo i consumi e le perdite registrati da lui. I movimenti nati da un DDT non si annullano da soli: si annulla il DDT da <b>DDT e consegne</b>.</p>' +
       '<h3>Utenti e ruoli</h3>' +
       '<p>Ognuno entra con il <b>suo nome utente e la sua password</b>: ogni movimento porta il nome di chi l’ha registrato e il <b>registro attività</b> conserva accessi e modifiche. ' +
       (ruoli ? 'Il tuo ruolo è <b>' + h(ruoli) + '</b>: nel menu vedi solo le pagine che puoi usare.' : '') + '</p><ul>' +
-      '<li><b>Amministratore</b>: tutto, compresi utenti, struttura, reparti e copie di sicurezza.</li>' +
-      '<li><b>Farmacista</b>: carichi, trasferimenti, consumi, perdite, inventario, articoli, correzioni del registro mensile; può annullare qualsiasi movimento e vedere il registro attività.</li>' +
-      '<li><b>Reparto</b>: consumi e perdite dei propri reparti, correzioni dei loro consumi nel registro mensile, annullo dei propri consumi e perdite; il resto lo consulta.</li>' +
-      '<li><b>Consultazione</b>: vede tutto, stampa ed esporta in Excel, non modifica niente (per esempio la direzione sanitaria).</li></ul>' +
-      '<p>La password si cambia dal proprio nome in alto a destra → <i>Cambia password</i>. Chi la dimentica, o sbaglia 5 volte e resta bloccato per 15 minuti, chiede all’amministratore una nuova password provvisoria, da cambiare al primo accesso. Esci sempre con <i>Esci</i> se il PC è condiviso; dopo 8 ore senza usarlo il programma chiede di nuovo la password.</p>' +
+      '<li><b>' + h(App.RUOLI.amministratore) + '</b>: tutto, compresi utenti, struttura e magazzini, sicurezza e copie di sicurezza.</li>' +
+      '<li><b>' + h(App.RUOLI.farmacista) + '</b>: carichi, richieste da evadere, DDT, consumi, perdite, inventario, articoli, assortimenti, previsioni e proposta d’ordine; può annullare qualsiasi movimento e vedere il registro attività.</li>' +
+      '<li><b>' + h(App.RUOLI.reparto) + '</b>: nei magazzini che gli sono assegnati registra consumi e perdite, chiede la merce alla farmacia, riceve i DDT e mette gli articoli negli armadi; il resto lo consulta.</li>' +
+      '<li><b>' + h(App.RUOLI.consultazione) + '</b>: vede tutto, stampa ed esporta in Excel, non modifica niente.</li></ul>' +
+      '<p>Password e <b>verifica in due passaggi</b> (il codice dell’app sul telefono) si gestiscono dal proprio nome in alto a destra → <i>Cambia password</i> e <i>Sicurezza dell’account</i>. ' +
+      'Chi dimentica la password, o sbaglia 5 volte e resta bloccato per 15 minuti, chiede all’amministratore una nuova password provvisoria, da cambiare al primo accesso. Esci sempre con <i>Esci</i> se il PC è condiviso; dopo 8 ore senza usarlo il programma chiede di nuovo la password.</p>' +
       '<h3>Come collegarsi</h3>' +
       '<p>Il programma gira sul <b>server della clinica</b>: dagli altri PC si apre con Edge o Chrome all’indirizzo del server, non serve installare niente.</p>' +
       '<p>Indirizzo di questa pagina: <b class="mono">' + h(indirizzo) + '</b>' +
@@ -2043,7 +1740,9 @@
       App.vociPermesse().filter(function (v) { return v.tasto; }).map(function (v) { return '<li><kbd>' + v.tasto + '</kbd> ' + h(v.voce) + '</li>'; }).join('') +
       '<li><kbd>Ctrl K</kbd> o <kbd>/</kbd> ricerca rapida di un articolo · <kbd>Esc</kbd> chiude le finestre</li></ul>' +
       '<h3>Dove stanno i dati</h3><p>Tutti i dati stanno <b>sul server</b>, in un unico archivio condiviso: nei PC non resta niente, e non importa quale browser o PC si usa. ' +
-      'Il server fa da solo <b>una copia di sicurezza al giorno</b> e tiene le ultime 30; l’amministratore, da <b>Configura</b>, può crearne una in qualsiasi momento, scaricarla o ripristinarla.</p>' +
+      'Il server copia magazzino e utenti <b>ogni ora</b> (se c’è stato lavoro) e verifica ogni copia; tiene le copie delle ultime 24 ore, poi una al giorno per 14 giorni, una alla settimana per 8 settimane e una al mese per un anno. ' +
+      'Ogni modifica finisce anche nel <b>giornale delle modifiche</b>: se il file dell’archivio si rovina, il programma lo ricostruisce da solo dall’ultima copia buona più il giornale. ' +
+      'L’amministratore vede lo stato nella pagina <b>Sistema</b> e da <b>Configura</b> può scaricare o ripristinare una copia.</p>' +
       '</div>');
   };
 })(this);

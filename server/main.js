@@ -195,8 +195,12 @@ function avvia() {
   function emergenza(acc) {
     try {
       var provvisoria = acc.passwordEmergenza(String(arg['reimposta-password']));
+      // passwordEmergenza (server/accessi.js) azzera sempre anche la verifica in due passaggi: chi usa l'accesso
+      // d'emergenza spesso ha perso il telefono; codici di recupero e computer ricordati non valgono più
       stampa('\nNuova password provvisoria per "' + arg['reimposta-password'] + '":  ' + provvisoria +
-        '\nAl prossimo accesso il programma chiederà di cambiarla. L\'utente è stato anche riattivato.\n');
+        '\nAl prossimo accesso il programma chiederà di cambiarla. L\'utente è stato anche riattivato.' +
+        '\nLa verifica in due passaggi (il codice dell\'app sul telefono) è stata azzerata, con i codici di recupero e i computer ricordati:' +
+        '\nse il criterio della struttura la richiede, al prossimo accesso il programma guida a riattivarla.\n');
       database.chiudi();
       return aspettaInvio().then(function () { process.exit(0); });
     } catch (e) {

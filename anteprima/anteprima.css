@@ -1,28 +1,45 @@
-/* ANTEPRIMA: riquadro fisso con utenti e prove */
-.anteprima-banda { position: fixed; left: 12px; bottom: 12px; z-index: 79; max-width: min(380px, calc(100vw - 24px)); background: #fffbea; color: #3d3200; border: 1px solid #e6cf6b; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.18); font-size: 13px; }
-.anteprima-banda.aperta { max-height: calc(100vh - 24px); overflow-y: auto; }
-.anteprima-testa { width: 100%; text-align: left; background: transparent; border: 0; padding: 9px 14px; font: inherit; color: inherit; cursor: pointer; }
-.anteprima-corpo { padding: 0 14px 12px; display: grid; gap: 6px; }
+/* ANTEPRIMA: riquadro con gli utenti di prova e le prove (anteprima/banda.js). Colori propri (un "post-it"), uguali nei due temi. */
+.anteprima-banda { --ab-fondo: #fff8dc; --ab-testo: #3d3200; --ab-bordo: #e2c75a; --ab-tenue: #6b5d1f; --ab-bottone: #fffdf3;
+  background: var(--ab-fondo); color: var(--ab-testo); border: 1px solid var(--ab-bordo); border-radius: 10px; font-size: 13px; line-height: 1.4; }
+.anteprima-testa { width: 100%; display: flex; align-items: center; gap: 6px; text-align: left; background: transparent; border: 0; padding: 8px 12px;
+  font: inherit; color: inherit; cursor: pointer; border-radius: 10px; }
+.anteprima-testa:focus-visible { outline: 2px solid #8a6d00; outline-offset: -2px; }
+.anteprima-sotto { color: var(--ab-tenue); }
+.anteprima-freccia { margin-left: auto; transition: transform .2s; }
+.anteprima-banda.aperta .anteprima-freccia { transform: rotate(180deg); }
+.anteprima-corpo { padding: 0 12px 12px; display: grid; gap: 7px; }
 .anteprima-corpo p { margin: 0; }
-.anteprima-corpo ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
-.anteprima-corpo button { font: inherit; cursor: pointer; border: 1px solid #e6cf6b; background: #fff; border-radius: 7px; padding: 3px 8px; color: #3d3200; text-align: left; }
+.anteprima-corpo ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 5px; }
+.anteprima-utenti li { display: grid; gap: 1px; }
+.anteprima-corpo button { font: inherit; cursor: pointer; border: 1px solid var(--ab-bordo); background: var(--ab-bottone); border-radius: 7px; padding: 3px 8px;
+  color: var(--ab-testo); text-align: left; min-height: 28px; }
 .anteprima-corpo button:hover { border-color: #b08d00; }
-.anteprima-corpo code { font-weight: 700; }
-.anteprima-nota { color: #6b5d1f; font-size: 12px; }
-/* sopra la schermata di accesso (75), sotto gli avvisi (80) e il giro di Guidami (90) */
-/* durante un giro di Guidami si fa da parte: starebbe sopra gli elementi che il giro evidenzia (il giro blocca comunque i clic) */
-body:has(.tour) .anteprima-banda { visibility: hidden; }
-/* su telefono e tablet (fino a 900 px, dove l'invito al giro va in basso a sinistra come il riquadro) si fa da parte
-   mentre ci sono l'invito al giro, una finestra o la ricerca */
-@media (max-width: 900px) {
-  body:has(.tour-invito) .anteprima-banda,
-  body:has(#modale:not([hidden])) .anteprima-banda,
-  body:has(#ricerca:not([hidden])) .anteprima-banda { visibility: hidden; }
-}
-/* spazio in fondo per il riquadro chiuso (alto circa 40 px, in basso a sinistra): l'ultima riga della pagina e il piede
-   del menu laterale (articoli e movimenti dell'archivio) si possono sempre portare sopra il riquadro scorrendo */
-@media screen {
-  .principale { padding-bottom: 56px; }
-  .laterale { padding-bottom: 56px; }
-}
-@media print { .anteprima-banda { display: none; } }
+.anteprima-corpo button:focus-visible { outline: 2px solid #8a6d00; outline-offset: 1px; }
+.anteprima-utenti button { justify-self: start; }
+.anteprima-ruolo, .anteprima-nota { color: var(--ab-tenue); font-size: 12px; }
+.anteprima-ruolo { padding-left: 2px; }
+.anteprima-corpo code { font-family: var(--mono, ui-monospace, monospace); font-weight: 700; }
+.anteprima-otp, .anteprima-mio { font-size: 12px; padding-left: 2px; }
+.anteprima-cifre { font-family: var(--mono, ui-monospace, monospace); font-variant-numeric: tabular-nums; letter-spacing: .06em; }
+.anteprima-restano { color: var(--ab-tenue); font-size: 11.5px; }
+.anteprima-lettore summary { cursor: pointer; font-weight: 600; }
+.anteprima-lettore[open] { display: grid; gap: 6px; }
+
+/* sulla schermata di accesso: in basso a sinistra, sopra la schermata (75), sotto gli avvisi (80) e il giro di Guidami (90) */
+.anteprima-banda.fluttuante { position: fixed; left: 12px; bottom: 12px; z-index: 79; max-width: min(380px, calc(100vw - 24px)); box-shadow: 0 10px 30px rgba(0,0,0,.2); }
+.anteprima-banda.fluttuante.aperta { max-height: calc(100vh - 24px); overflow-y: auto; }
+/* la schermata di accesso ha spazio in fondo: gli ultimi pulsanti si portano sempre sopra il riquadro chiuso (alto circa 40 px) */
+.accesso { padding-bottom: 72px; }
+
+/* dopo l'accesso: nel menu laterale, sotto il marchio, come una voce in più (niente copre i pulsanti della pagina) */
+.anteprima-banda.nel-menu { margin: 10px 12px 2px; font-size: 12.5px; }
+.anteprima-banda.nel-menu .anteprima-testa { padding: 6px 10px; }
+.anteprima-banda.nel-menu .anteprima-corpo { padding: 0 10px 10px; }
+
+/* il codice della verifica in due passaggi sotto il campo in cui va scritto */
+.anteprima-aiuto-codice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 6px 0 2px; padding: 6px 10px; border-radius: 8px;
+  background: #fff8dc; color: #3d3200; border: 1px dashed #d4b63f; font-size: 12.5px; }
+.anteprima-aiuto-codice .btn { background: #fffdf3; color: #3d3200; border-color: #d4b63f; }
+
+@media (prefers-reduced-motion: reduce) { .anteprima-freccia { transition: none; } }
+@media print { .anteprima-banda, .anteprima-aiuto-codice { display: none !important; } }

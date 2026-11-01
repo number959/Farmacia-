@@ -557,6 +557,8 @@ test('accesso d\'emergenza da riga di comando, anche con il server in funzione',
   assert.equal(r.codice, 0, r.testo);
   const m = /provvisoria per "admin":\s+(\S+)/.exec(r.testo);
   assert.ok(m, r.testo);
+  // passwordEmergenza azzera sempre anche la verifica in due passaggi: il messaggio lo dice
+  assert.match(r.testo, /verifica in due passaggi[^\n]*è stata azzerata/, r.testo);
   const c = new Client(S.base);
   const acc = await c.accedi('admin', m[1]);
   assert.equal(acc.utente.cambioPassword, true);

@@ -10,7 +10,12 @@
  * - seconda cartella facoltativa (disco esterno o cartella di rete): ci finiscono le copie verificate e il giornale
  *   delle modifiche. Se non è raggiungibile è un avviso, non un errore: le copie restano comunque nella cartella dati;
  * - ripristino di una copia del magazzino (prima salva una copia dello stato attuale); dopo il ripristino il giornale
- *   riparte da una linea nuova (meta rev_base) e si fa subito una copia verificata dello stato ripristinato.
+ *   riparte da una linea nuova (meta rev_base) e si fa subito una copia verificata dello stato ripristinato;
+ * - le copie di accessi.db nella cartella dati portano con sé la chiave della verifica in due passaggi
+ *   (chiave-2fa.key, server/accessi.js): accanto a accessi_….db c'è accessi_….chiave-2fa.key (permessi 0600), così
+ *   chi rimette la cartella dati da una copia non perde la 2FA degli utenti. La chiave NON va nella seconda cartella
+ *   (disco esterno o di rete, spesso meno protetto): lì ci sono solo le copie e il giornale; senza la chiave i segreti
+ *   cifrati in accessi.db non servono a niente, e restano validi i codici di recupero (salvati come hash).
  */
 'use strict';
 
@@ -28,6 +33,7 @@ var NOME_VALIDO = /^(farmacia|accessi)_\d{4}-\d{2}-\d{2}_\d{6}_(auto|manuale|pri
 var TABELLE_MAGAZZINO = ['meta', 'impostazioni', 'reparti', 'articoli', 'movimenti'];
 var TABELLE_ACCESSI = ['utenti', 'sessioni', 'eventi'];
 var ATTESA_SECONDA_MS = 60 * 1000; // una cartella di rete che non risponde entro un minuto è "non raggiungibile"
+var FILE_CHIAVE_2FA = 'chiave-2fa.key'; // stesso nome di FILE_CHIAVE in server/accessi.js (cartella dati)
 
 function due(n) { return String(n).padStart(2, '0'); }
 
@@ -43,6 +49,16 @@ function infoNome(nome) {
 }
 
 function fileScheda(file) { return file.replace(/\.db$/, '.json'); }
+
+/* Chiave della 2FA salvata accanto a una copia di accessi.db (solo nella cartella dati, mai nella seconda cartella). */
+function fileChiave(file) { return file.replace(/\.db$/, '.' + FILE_CHIAVE_2FA); }
+
+/* Toglie una copia con la sua scheda .json e, per accessi.db, la sua chiave della 2FA. */
+function togliCopia(file) {
+  fs.unlinkSync(file);
+  try { fs.unlinkSync(fileScheda(file)); } catch (e) { /* senza scheda (copia della 2.x) */ }
+  try { fs.unlinkSync(fileChiave(file)); } catch (e) { /* senza chiave (copia del magazzino, o 2FA mai usata) */ }
+}
 
 function leggiScheda(file) {
   try { return JSON.parse(fs.readFileSync(fileScheda(file), 'utf8')); } catch (e) { return null; }
@@ -267,9 +283,28 @@ Backup.prototype.copia = function (db, prefisso, tipo) {
   esito.creata = new Date().toISOString();
   esito.dimensione = dimensioneFile(file);
   if (prefisso === 'farmacia') esito.storia = this.database.storia;
+  if (prefisso === 'accessi') esito.chiave2fa = this.copiaChiave2fa(file);
   try { scriviScheda(file, esito); } catch (e) { this.log('Esito della verifica non salvato per ' + nome + ': ' + e.message); }
   if (!esito.verificata) this.log('ATTENZIONE: la copia ' + nome + ' NON ha superato la verifica (' + esito.errore + ').');
   return nome;
+};
+
+/*
+ * Copia la chiave della verifica in due passaggi (<dati>/chiave-2fa.key) accanto alla copia di accessi.db, leggibile
+ * solo dal servizio come l'originale. Senza file della chiave (nessuno ha mai attivato la 2FA) non c'è niente da copiare.
+ * Restituisce true se la copia della chiave c'è. Un errore qui non ferma la copia: si scrive nel registro del server.
+ */
+Backup.prototype.copiaChiave2fa = function (fileCopia) {
+  var origine = path.join(this.database.cartella, FILE_CHIAVE_2FA);
+  var dest = fileChiave(fileCopia);
+  try {
+    var chiave = fs.readFileSync(origine);
+    fs.writeFileSync(dest, chiave, { mode: 384 /* 0600 */ });
+    return true;
+  } catch (e) {
+    if (e.code !== 'ENOENT') this.log('ATTENZIONE: chiave della verifica in due passaggi non copiata con ' + path.basename(fileCopia) + ': ' + e.message);
+    return false;
+  }
 };
 
 /* Copia del magazzino (come nella 2.x: POST /api/backup). */
@@ -326,8 +361,7 @@ Backup.prototype.pulisci = function () {
   via.forEach(function (n) {
     var file = path.join(self.cartella, n);
     try {
-      fs.unlinkSync(file);
-      try { fs.unlinkSync(fileScheda(file)); } catch (e) { /* senza scheda (copia della 2.x) */ }
+      togliCopia(file);
     } catch (e) { self.log('Copia vecchia non eliminata: ' + n + ' ' + e.message); }
   });
   if (this.giornale) {
@@ -523,6 +557,7 @@ Backup.prototype.sincronizzaSeconda = function () {
       return p.then(function () {
         if (presenti.indexOf(c.nome) >= 0) return null;
         var file = path.join(self.cartella, c.nome);
+        // solo la copia e la sua scheda: la chiave della 2FA (accessi_….chiave-2fa.key) resta nella cartella dati
         return copiaAsync(file, path.join(dest, c.nome)).then(function () {
           copiate++;
           return copiaAsync(fileScheda(file), path.join(dest, c.nome.replace(/\.db$/, '.json'))).catch(function () { /* senza scheda */ });
@@ -592,6 +627,8 @@ module.exports = {
   daEliminare: daEliminare,
   settimana: settimana,
   infoNome: infoNome,
+  fileChiave: fileChiave,
+  FILE_CHIAVE_2FA: FILE_CHIAVE_2FA,
   spazioLibero: spazioLibero,
   NOME_VALIDO: NOME_VALIDO,
   SCAGLIONI: SCAGLIONI

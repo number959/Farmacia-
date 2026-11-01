@@ -64,8 +64,10 @@
     { id: 'guida', voce: 'Guida', ico: '❓', tasto: 'H' }
   ];
 
-  // pagine solo di consultazione: si ridisegnano da sole quando altri utenti cambiano i dati
-  App.PAGINE_CONSULTAZIONE = ['oggi', 'giacenze', 'scadenze', 'movimenti', 'articoli', 'attivita'];
+  // pagine solo di consultazione: si ridisegnano da sole quando altri utenti cambiano i dati.
+  // Previsioni e Distribuzione NO: si ridisegnerebbero mentre si scrivono le confezioni della proposta d'ordine
+  // (hanno App.rinfresca e mostrano la banda "Aggiorna").
+  App.PAGINE_CONSULTAZIONE = ['oggi', 'giacenze', 'scadenze', 'movimenti', 'articoli', 'attivita', 'sistema'];
 
   // id invariati dalla 2.x, etichette della 3.0 (uguali a server/accessi.js)
   App.RUOLI = {
@@ -256,11 +258,45 @@
     return App.S.reparti.reduce(function (s, r) { return s + (g[articoloId + '|' + r.id] || 0); }, 0);
   };
 
-  App.sottoScorta = function (a) {
-    if (!a.scortaMinima) return false;
-    var c = App.repartoCentrale();
-    return !!c && App.giacenza(a.id, c.id) < a.scortaMinima;
+  /*
+   * Scorta minima di un articolo in un magazzino, con le stesse regole del cruscotto "Oggi" (js/pagine-cruscotto.js):
+   * quella dell'assortimento del magazzino; nella farmacia centrale, se l'assortimento non ha soglie (minima o punto di
+   * riordino) per quell'articolo, la scorta minima dell'anagrafica. 0 = nessuna soglia.
+   * Si ricalcola quando cambiano i dati (App._giacenze azzerato dalla sincronizzazione).
+   */
+  var cacheSoglie = null;
+  App.scortaMinima = function (articolo, repartoId) {
+    if (!articolo || !App.S) return 0;
+    var g = App.giacenze();
+    if (!cacheSoglie || cacheSoglie.g !== g || cacheSoglie.S !== App.S) {
+      var minime = {}, coperti = {};
+      (App.S.assortimento || []).forEach(function (r) {
+        if (r.attivo === false) return;
+        var k = r.articoloId + '|' + r.repartoId;
+        var min = Number(r.scortaMin) || 0;
+        if (min > 0 || Number(r.puntoRiordino) > 0) coperti[k] = true;
+        if (min > 0) minime[k] = min;
+      });
+      var c = App.repartoCentrale();
+      cacheSoglie = { g: g, S: App.S, minime: minime, coperti: coperti, centrale: c ? c.id : null };
+    }
+    var k = articolo.id + '|' + repartoId;
+    if (cacheSoglie.minime[k]) return cacheSoglie.minime[k];
+    if (cacheSoglie.coperti[k] || repartoId !== cacheSoglie.centrale) return 0;
+    return Number(articolo.scortaMinima) || 0;
   };
+
+  /* Magazzini attivi (o solo repartoId) in cui l'articolo è sotto la scorta minima. Gli articoli non attivi non contano. */
+  App.magazziniSottoScorta = function (a, repartoId) {
+    if (!a || a.attivo === false) return [];
+    var reparti = repartoId ? [App.reparto(repartoId)].filter(Boolean) : App.repartiAttivi();
+    return reparti.filter(function (r) {
+      var min = App.scortaMinima(a, r.id);
+      return min > 0 && App.giacenza(a.id, r.id) < min;
+    });
+  };
+
+  App.sottoScorta = function (a, repartoId) { return App.magazziniSottoScorta(a, repartoId).length > 0; };
 
   /*
    * Lotti di tutte le coppie (articolo, magazzino) con giacenza: { 'articolo|magazzino': [{ lotto, scadenza, quantita }] }.
@@ -665,9 +701,13 @@
     return (root.Accesso && root.Accesso.stato) || {};
   }
 
-  App.disegnaMarchio = function () {
-    if (!App.S) return;
-    var imp = App.S.impostazioni || {};
+  /*
+   * HTML del marchio del menu laterale: logo (impostazione logo: '' = marchio incorporato App.MARCHIO, 'nessuno' =
+   * simbolo neutro, data URL = immagine caricata), nome del prodotto come titolo (ultima parola più leggera), struttura
+   * sotto e sottotitolo. Lo usa anche l'anteprima della pagina Configura, così è identica al menu vero.
+   */
+  App.htmlMarchio = function (imp) {
+    imp = imp || {};
     var logo = imp.logo || '';
     var box;
     if (logo === 'nessuno') box = '<div class="logo simbolo">' + SIMBOLO + '</div>';
@@ -677,23 +717,33 @@
     var parole = nome.split(/\s+/);
     // ultima parola più leggera ("NefroCenter Pharmacy"), come nel marchio
     var nomeHtml = parole.length > 1 ? h(parole.slice(0, -1).join(' ')) + ' <span>' + h(parole[parole.length - 1]) + '</span>' : h(nome);
-    var el = document.getElementById('marchio');
-    el.innerHTML = box +
+    return box +
       '<div><div class="nome">' + nomeHtml + '</div>' + (imp.struttura ? '<div class="sotto">' + h(imp.struttura) + '</div>' : '') + '</div>' +
       (imp.sottotitolo ? '<div class="prodotto">' + h(imp.sottotitolo) + '</div>' : '');
+  };
+
+  /* Un logo che non si carica (marchio assente, immagine rovinata) lascia il posto al simbolo neutro, senza icona rotta. */
+  App.collegaLogo = function (el) {
+    var img = el && el.querySelector('.logo img');
+    if (!img) return;
+    var togli = function () {
+      var b = img.parentNode;
+      if (!b || !b.isConnected) return;
+      b.className = 'logo simbolo';
+      b.innerHTML = SIMBOLO;
+    };
+    img.addEventListener('error', togli);
+    if (img.complete && !img.naturalWidth && img.getAttribute('src')) togli();
+  };
+
+  App.disegnaMarchio = function () {
+    if (!App.S) return;
+    var imp = App.S.impostazioni || {};
+    var nome = String(imp.nomeProdotto || 'NefroCenter Pharmacy').trim();
+    var el = document.getElementById('marchio');
+    el.innerHTML = App.htmlMarchio(imp);
     el.title = nome + (imp.struttura ? ' · ' + imp.struttura : '');
-    // un logo che non si carica (marchio assente, immagine rovinata) lascia il posto al simbolo neutro, senza icona rotta
-    var img = el.querySelector('img');
-    if (img) {
-      var togli = function () {
-        var b = img.parentNode;
-        if (!b || !b.isConnected) return;
-        b.className = 'logo simbolo';
-        b.innerHTML = SIMBOLO;
-      };
-      img.addEventListener('error', togli);
-      if (img.complete && !img.naturalWidth && img.getAttribute('src')) togli();
-    }
+    App.collegaLogo(el);
     App.applicaAspetto();
   };
 
@@ -762,9 +812,12 @@
     var st = document.documentElement.style;
     if (/^#[0-9a-fA-F]{6}$/.test(c)) {
       st.setProperty('--accento', c);
+      // sotto un testo bianco (contatori del menu): un po' più scuro, così si legge anche con un colore chiaro
+      st.setProperty('--accento-pieno', 'color-mix(in srgb, ' + c + ' 82%, #000)');
       st.setProperty('--accento-chiaro', 'color-mix(in srgb, ' + c + ' 14%, var(--superficie))');
     } else {
       st.removeProperty('--accento');
+      st.removeProperty('--accento-pieno');
       st.removeProperty('--accento-chiaro');
     }
   };
@@ -1042,12 +1095,13 @@
   App.esci = function () {
     var fine = function () {
       root.Api.fermaAggiornamenti();
-      // nome e logo della struttura per la schermata di accesso: quelli attuali, anche se cambiati dopo l'avvio
+      // nome del prodotto, struttura, logo e aspetto per la schermata di accesso: quelli attuali, anche se cambiati
+      // dopo l'avvio (gli stessi campi pubblici di GET /api/stato)
       var imp = App.S && App.S.impostazioni;
       if (imp && root.Accesso.stato) {
-        root.Accesso.stato.struttura = imp.struttura;
-        root.Accesso.stato.sottotitolo = imp.sottotitolo;
-        root.Accesso.stato.logo = imp.logo;
+        ['nomeProdotto', 'sigla', 'struttura', 'sottotitolo', 'logo', 'coloreAccento', 'tema'].forEach(function (k) {
+          if (imp[k] !== undefined) root.Accesso.stato[k] = imp[k];
+        });
       }
       App.chiudiModale();
       chiudiRicerca();
@@ -1065,6 +1119,7 @@
       document.getElementById('menu').innerHTML = '';
       document.getElementById('stato-archivio').innerHTML = '';
       document.getElementById('app').hidden = true;
+      App.applicaAspetto(); // titolo della finestra senza la pagina; tema e accento dalle impostazioni copiate qui sopra
       root.Accesso.mostraAccesso();
     };
     root.Api.richiesta('POST', '/api/logout', {}, { senza401: true }).then(fine, fine);

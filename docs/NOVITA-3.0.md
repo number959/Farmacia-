@@ -209,6 +209,83 @@ Le pagine esistenti restano dove sono. Un file che "sostituisce" una pagina asse
 Non deve usare il marchio né il nome di una struttura reale: l'anteprima usa nomi dimostrativi ("Clinica Demo",
 prodotto "Pharmacy · anteprima") e nessun logo; la cartella `brand/` non entra nell'anteprima.
 
+## Decisioni prese durante lo sviluppo (registrate nell'integrazione)
+
+Scelte delle parti che precisano o cambiano un poco il contratto qui sopra. Valgono queste.
+
+### Previsioni (parte D)
+- **Scelta del modello**: vince il modello con l'errore più basso nella retro-verifica sulle ultime 4 settimane, dove
+  l'errore è il **MAE giornaliero più il MAE delle somme di 7 giorni** (non il solo MAE giornaliero: con quello, sui
+  farmaci usati a giorni alterni vincevano previsioni troppo basse). A parità entro il 2% vince il modello più semplice;
+  poi il modello si riadatta a tutta la storia. `Previsioni.stima(…, { criterio: 'giornaliero' })` torna al solo MAE
+  giornaliero.
+- **XYZ** (variabilità) si calcola sui consumi **settimanali**, non giornalieri (sui giorni quasi tutti gli articoli
+  sarebbero Z). ABC: 80/15/5 sul valore.
+- Fascia di incertezza al **90%**, dagli errori del modello, più larga all'aumentare dell'orizzonte. Holt-Winters usa una
+  tendenza smorzata (su 90 giorni non esplode).
+- La farmacia centrale scelta da sola mostra solo i suoi consumi diretti; la proposta d'ordine è sempre su tutta la
+  struttura (avviso nella pagina). Per i magazzini periferici le etichette dicono "Da chiedere alla farmacia".
+- Previsioni e Distribuzione **non** sono in `App.PAGINE_CONSULTAZIONE` (si ridisegnerebbero mentre si scrivono le
+  confezioni della proposta): quando altri scrivono compare la banda "Aggiorna". Calcolo solo nel browser, nessuna rotta.
+- Per le altre parti: `Previsioni.consumoGiornaliero(stato, articoloId, repartoId)` e
+  `Previsioni.consumoMedio(stato, articoloId, repartoId, giorni)` (per la centrale conta anche quello che dà agli altri).
+
+### Aspetto (parte F)
+- **Titolo della finestra**: `pagina · nomeProdotto · struttura` (per esempio "Giacenze · NefroCenter Pharmacy · Clinica
+  Posillipo"): il nome della pagina davanti, come nella 2.x, distingue le schede aperte; sulla schermata di accesso
+  `nomeProdotto · struttura`.
+- Marchio del menu: logo `''` = `brand/marchio.png` (`App.MARCHIO`), nome del prodotto come titolo, struttura e
+  sottotitolo sotto (`App.htmlMarchio`, usato anche dall'anteprima di Configura). La schermata di accesso usa il logo
+  largo `brand/logo.png`. Un logo che non si carica lascia il posto a un simbolo neutro.
+- Variabili in più: `--primario-pieno`, `--pericolo-pieno`, `--ok-pieno`, `--accento-pieno` (sfondi sotto un testo
+  bianco: nel tema scuro `--primario`, `--pericolo` e `--accento` sono colori da testo, chiari).
+- Al cambio di tema `Grafici.ritema()` ridisegna tutti i grafici aperti: le opzioni-funzione si richiamano, nelle
+  opzioni-oggetto i colori letti dalle variabili CSS del tema di prima diventano quelli del tema nuovo.
+
+### Struttura (parte B)
+- `DELETE /api/magazzini/:id`: solo per un magazzino **mai usato** (nessun movimento, richiesta o DDT), altrimenti 409
+  con l'invito a togliere «Attivo». I suoi armadi e il suo assortimento si cancellano con lui (l'interfaccia chiede una
+  conferma esplicita); gli utenti a cui era assegnato lo perdono. "In transito" risponde 400 (non si modifica né si
+  elimina, non ha armadi né assortimento).
+- Un magazzino non si disattiva con DDT da spedire o in viaggio o con richieste aperte (409). La farmacia centrale non
+  si toglie né si disattiva (400); sceglierne un'altra rende periferica la vecchia.
+- "Sotto scorta" in tutto il programma (cruscotto, Giacenze, scheda dell'articolo): scorta minima dell'assortimento del
+  magazzino; nella farmacia centrale, se l'assortimento non ha soglie per l'articolo, la scorta minima dell'anagrafica
+  (`App.scortaMinima`, `App.sottoScorta`). Gli articoli non attivi non contano.
+
+### Verifica in due passaggi (parti C ed E)
+- La chiave che cifra i segreti TOTP è `<dati>/chiave-2fa.key` (0600). Le copie di `accessi.db` **nella cartella dati**
+  portano con sé la chiave (`backup/accessi_….chiave-2fa.key`, 0600, tolta insieme alla copia): chi rimette la cartella
+  dati da una copia non perde la 2FA. La chiave **non** va nella seconda cartella (disco esterno o di rete): lì ci sono
+  solo copie, schede e giornale. Senza la chiave valgono comunque i codici di recupero (salvati come hash) e l'azzeramento.
+- `--reimposta-password <utente>` azzera sempre anche la 2FA dell'utente (con codici di recupero e computer ricordati) e
+  lo dice nel messaggio; se il criterio la richiede, al prossimo accesso il programma guida a riattivarla.
+- Chi deve avere la 2FA e non l'ha attivata riceve **401** `{ attiva2fa: true }` su tutto tranne `GET /api/2fa`,
+  `/api/2fa/inizia`, `/api/2fa/conferma`, `/api/password`, `/api/stato` e il logout (così il browser torna all'accesso,
+  che guida all'attivazione).
+
+### Rotte in più rispetto al contratto
+- Parte A: `GET /api/trasportatori` (permesso `ddt`) → `{ utenti: [{ id, nome, ruolo }] }`, utenti attivi da scegliere
+  come trasportatore; `POST /api/ddt/:id/spedisci` accetta `trasportatoreId` oppure `trasportatoreNome`.
+- Parte B: `POST|PUT|DELETE /api/magazzini(/:id)`, `POST|PUT|DELETE /api/armadi(/:id)`, `PUT /api/assortimento`,
+  `PUT /api/ubicazioni`.
+- Parte C: `POST /api/login/2fa`, `GET /api/2fa`, `POST /api/2fa/inizia|conferma|disattiva|codici`,
+  `DELETE /api/2fa/dispositivi`, `GET|PUT /api/sicurezza`, `POST /api/utenti/:id/2fa/azzera`. L'oggetto utente ha in più
+  `dueFattori`, `dueFattoriObbligatoria`, `dueFattoriDaAttivare`.
+- Parte E: `GET /api/sistema`, `POST /api/sistema/controlla|copia|prova-ripristino`, `PUT /api/sistema/seconda-cartella`;
+  `GET /api/backup` dà anche `verificata`, `rev`, `base` (solo le copie del magazzino, come nella 2.x).
+
+### Registro attività
+Azioni nuove: `richieste.*`, `ddt.*`, `magazzini.*`, `armadi.*`, `assortimento.modifica`, `ubicazioni.modifica`,
+`accesso.2fa.*`, `utenti.password-emergenza`, `sistema.*` (`sistema.cura`, `sistema.controllo`, `sistema.linea-nuova`
+li scrive l'utente "sistema"). Il filtro della pagina Attività le raggruppa (Sicurezza e accessi, Logistica, Struttura,
+Sistema…): ogni voce è un inizio di codice, come prima.
+
+### Pulizia
+`P.oggi`, `P.trasferimenti` e `P.configura` di js/pagine.js sono stati tolti (sostituiti da pagine-cruscotto.js,
+pagine-logistica.js e pagine-configura.js). `P.guida` resta: js/guide.js ne mostra le sezioni come "Istruzioni scritte".
+`App.PAGINE_CONSULTAZIONE` comprende anche `sistema`.
+
 ## File: chi li modifica
 
 | parte | file propri |

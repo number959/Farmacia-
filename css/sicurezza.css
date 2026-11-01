@@ -37,7 +37,7 @@
 .sic-passi li.fatto { color: var(--ok); }
 .sic-passi-n { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700;
   background: var(--superficie); border: 1px solid var(--linea-forte); color: var(--tenue); }
-.sic-passi li.attuale .sic-passi-n { background: var(--primario); border-color: var(--primario); color: var(--primario-testo); }
+.sic-passi li.attuale .sic-passi-n { background: var(--primario-pieno, var(--primario)); border-color: var(--primario-pieno, var(--primario)); color: var(--primario-testo); }
 .sic-passi li.fatto .sic-passi-n { background: var(--ok-chiaro); border-color: transparent; color: var(--ok); }
 .sic-passi-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sic-passo { display: grid; gap: 12px; min-width: 0; }

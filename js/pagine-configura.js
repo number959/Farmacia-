@@ -2,7 +2,8 @@
  * Versione 3.0 – parte B (docs/NOVITA-3.0.md): pagina Configura. Sostituisce P.configura di js/pagine.js con lo stesso
  * comportamento (struttura, copie di sicurezza, archivio vuoto) più:
  *  - "Marchio e nome del programma": nomeProdotto, sigla, struttura, sottotitolo, logo ('' = marchio incorporato
- *    brand/logo.png, 'nessuno', oppure un'immagine caricata), coloreAccento ('' = rosso del marchio), tema predefinito;
+ *    brand/marchio.png nel menu e brand/logo.png nell'accesso, 'nessuno', oppure un'immagine caricata),
+ *    coloreAccento ('' = rosso del marchio), tema predefinito; l'anteprima è il marchio del menu vero (App.htmlMarchio);
  *  - "Previsioni e ordini": leadTimeGiorni, periodoRevisioneGiorni, livelloServizio, storicoGiorni;
  *  - i reparti non si gestiscono più qui: c'è il collegamento alla pagina Magazzini e assortimento.
  * Ogni salvataggio manda a PUT /api/impostazioni tutti i campi (quelli non toccati con il valore attuale).
@@ -13,7 +14,8 @@
   var App = root.App;
   var h = App.h;
 
-  var MARCHIO = 'brand/logo.png';
+  // simbolo incorporato come nel menu laterale (impostazione logo = ''); la schermata di accesso usa il logo largo
+  function marchio() { return App.MARCHIO || 'brand/marchio.png'; }
   var ACCENTO_PREDEFINITO = '#e10717';
   var TIPI_COPIA = { auto: 'automatica', manuale: 'fatta a mano', 'prima-del-ripristino': 'prima di un ripristino' };
   var LIVELLI_SERVIZIO = [
@@ -137,7 +139,7 @@
         '<label class="campo"><span>Sottotitolo</span><input id="k-sotto" maxlength="100" value="' + h(imp.sottotitolo) + '"></label>' +
         '<div class="campo largo"><span>Logo</span><div class="cf-loghi" role="radiogroup" aria-label="Logo">' +
         '<label class="cf-logo"><input type="radio" name="k-logo-tipo" value="marchio"' + (logoScelto === '' ? ' checked' : '') + '>' +
-        '<span><img src="' + MARCHIO + '" alt="" class="cf-img-marchio">Marchio della struttura</span></label>' +
+        '<span><img src="' + h(marchio()) + '" alt="" class="cf-img-marchio">Marchio della struttura</span></label>' +
         '<label class="cf-logo"><input type="radio" name="k-logo-tipo" value="immagine"' + (immagine && logoScelto === immagine ? ' checked' : '') + (immagine ? '' : ' disabled') + '>' +
         '<span id="k-logo-caricato">' + (immagine ? '<img src="' + h(immagine) + '" alt="">' : '<i class="cf-niente" aria-hidden="true">🖼️</i>') + 'Immagine caricata</span></label>' +
         '<label class="cf-logo"><input type="radio" name="k-logo-tipo" value="nessuno"' + (logoScelto === 'nessuno' ? ' checked' : '') + '>' +
@@ -153,7 +155,7 @@
           return '<option value="' + t[0] + '"' + ((imp.tema || 'automatico') === t[0] ? ' selected' : '') + '>' + t[1] + '</option>';
         }).join('') + '</select></label>' +
         '</div>' +
-        '<div class="cf-anteprima"><span class="piccolo tenue">Anteprima del menu e della schermata di accesso</span><div class="cf-barra" id="k-anteprima"></div>' +
+        '<div class="cf-anteprima"><span class="piccolo tenue">Anteprima del menu</span><div class="cf-barra" id="k-anteprima"></div>' +
         '<p class="piccolo tenue">Il tema scelto qui vale per chi non ha ancora scelto il suo («Automatico» segue il computer). Nome e logo compaiono anche nella schermata di accesso.</p></div>' +
         '</div>' +
         '<div class="strumenti" style="margin-top:14px"><span class="spazio"></span><button class="btn primario" type="button" id="k-salva">Salva</button></div>');
@@ -181,8 +183,11 @@
     if (App.puo('backup')) {
       html += scheda('Copie di sicurezza del server',
         '<div class="guida">' +
-        '<p>I dati stanno <b>sul server</b>. Il server fa da solo <b>una copia al giorno</b> e tiene le ultime 30; prima di ogni ripristino salva anche lo stato del momento, così si può sempre tornare indietro.</p>' +
-        '<p class="piccolo tenue">Per sicurezza in più, ogni tanto scarica una copia e conservala fuori dal server (per esempio su un disco di rete). Il ripristino cambia i dati per <b>tutti</b> gli utenti.</p>' +
+        '<p>I dati stanno <b>sul server</b>. Il server copia magazzino e utenti <b>ogni ora</b> (se c’è stato lavoro) e <b>verifica ogni copia</b>; ' +
+        'tiene tutte le copie delle ultime 24 ore, poi una al giorno per 14 giorni, una alla settimana per 8 settimane, una al mese per un anno. ' +
+        'Prima di ogni ripristino salva anche lo stato del momento, così si può sempre tornare indietro.</p>' +
+        '<p class="piccolo tenue">' + (App.paginaPermessa('sistema') ? 'Stato della base dati, controlli e seconda cartella delle copie (un disco esterno o di rete) sono nella pagina <a href="#sistema">Sistema</a>. ' : '') +
+        'Qui sotto ci sono le copie del magazzino, da scaricare o ripristinare. Il ripristino cambia i dati per <b>tutti</b> gli utenti.</p>' +
         '<div class="strumenti"><button class="btn primario" type="button" id="k-backup-crea">Crea una copia adesso</button><span class="spazio"></span>' +
         '<button class="btn" type="button" id="k-backup-aggiorna">Aggiorna l’elenco</button></div>' +
         '<div id="k-backup" class="piccolo tenue">Carico l’elenco…</div>' +
@@ -210,16 +215,26 @@
       var accentoScelto = function () {
         return cont.querySelector('#k-accento-predefinito').checked ? '' : valore(cont, '#k-accento').toLowerCase();
       };
+      // lo stesso marchio del menu laterale (App.htmlMarchio): logo, nome del prodotto come titolo, struttura e sottotitolo
       var disegnaAnteprima = function () {
-        var l = logoDaSalvare();
-        var logo = l === 'nessuno' ? '<span aria-hidden="true">✚</span>' : '<img src="' + h(l || MARCHIO) + '" alt="">';
-        anteprima.style.setProperty('--cf-accento', accentoScelto() || 'var(--accento, ' + ACCENTO_PREDEFINITO + ')');
-        anteprima.innerHTML = '<span class="cf-logo-anteprima">' + logo + '</span>' +
-          '<span><b>' + h(valore(cont, '#k-struttura') || 'Clinica Posillipo') + '</b><small>' + h(valore(cont, '#k-sotto')) + '</small></span>' +
-          '<span class="cf-prodotto">' + h(valore(cont, '#k-prodotto') || 'NefroCenter Pharmacy') + (valore(cont, '#k-sigla') ? ' · ' + h(valore(cont, '#k-sigla')) : '') + '</span>';
-        // il marchio incorporato può mancare (per esempio nell'anteprima pubblicata): al suo posto la croce
-        var img = anteprima.querySelector('img');
-        if (img) img.addEventListener('error', function () { img.replaceWith(document.createTextNode('✚')); });
+        var acc = accentoScelto();
+        // "Rosso del marchio" mentre è salvato un altro colore: l'anteprima mostra comunque il rosso
+        var personale = document.documentElement.style.getPropertyValue('--accento');
+        if (acc) anteprima.style.setProperty('--accento', acc);
+        else if (personale) anteprima.style.setProperty('--accento', 'var(--rosso-marchio, ' + ACCENTO_PREDEFINITO + ')');
+        else anteprima.style.removeProperty('--accento');
+        var dati = {
+          logo: logoDaSalvare(),
+          nomeProdotto: valore(cont, '#k-prodotto').trim() || 'NefroCenter Pharmacy',
+          struttura: valore(cont, '#k-struttura').trim() || 'Clinica Posillipo',
+          sottotitolo: valore(cont, '#k-sotto').trim()
+        };
+        if (App.htmlMarchio) {
+          anteprima.innerHTML = '<div class="marchio" aria-hidden="true">' + App.htmlMarchio(dati) + '</div>' +
+            (valore(cont, '#k-sigla').trim() ? '<p class="cf-sigla">Sigla: <b>' + h(valore(cont, '#k-sigla').trim()) + '</b></p>' : '');
+          // il marchio incorporato può mancare (per esempio nell'anteprima pubblicata): al suo posto il simbolo neutro
+          App.collegaLogo(anteprima);
+        }
       };
       var marchioImg = cont.querySelector('.cf-img-marchio');
       if (marchioImg) marchioImg.addEventListener('error', function () { marchioImg.replaceWith(Object.assign(document.createElement('i'), { className: 'cf-niente', textContent: '✚' })); });
@@ -298,11 +313,15 @@
       Api().richiesta('GET', '/api/backup').then(function (r) {
         var copie = (r && r.backup) || [];
         if (!document.body.contains(el)) return;
-        if (!copie.length) { el.textContent = 'Ancora nessuna copia: la prima automatica si crea entro oggi, oppure creala adesso.'; return; }
+        if (!copie.length) { el.textContent = 'Ancora nessuna copia: la prima automatica si crea entro un’ora, oppure creala adesso.'; return; }
         el.className = '';
-        el.innerHTML = '<div class="tabella-contenitore" style="max-height:420px"><table class="tabella"><thead><tr><th>Data</th><th>Tipo</th><th>File</th><th class="n">Dimensione</th><th></th></tr></thead><tbody>' +
+        el.innerHTML = '<div class="tabella-contenitore" style="max-height:420px"><table class="tabella"><thead><tr><th>Data</th><th>Tipo</th><th>Verifica</th><th>File</th><th class="n">Dimensione</th><th></th></tr></thead><tbody>' +
           copie.map(function (c, i) {
-            return '<tr><td>' + h(App.fmtDataOra(c.data)) + '</td><td>' + h(TIPI_COPIA[c.tipo] || c.tipo || '') + '</td>' +
+            // verificata: true (riaperta e controllata), false (non riuscita), null (copia della 2.x non ancora controllata)
+            var ver = c.verificata === true ? '<span class="etichetta ok">✓ verificata</span>'
+              : c.verificata === false ? '<span class="etichetta pericolo" title="' + h(c.errore || '') + '">✕ non riuscita</span>'
+                : '<span class="tenue">da controllare</span>';
+            return '<tr><td>' + h(App.fmtDataOra(c.data)) + '</td><td>' + h(TIPI_COPIA[c.tipo] || c.tipo || '') + '</td><td>' + ver + '</td>' +
               '<td class="mono">' + h(c.nome) + '</td><td class="n">' + h(App.fmtDimensione(c.dimensione)) + '</td>' +
               '<td class="azioni"><a class="btn piccolo" href="' + h(Api().url('/api/backup/' + encodeURIComponent(c.nome))) + '" download="' + h(c.nome) + '">Scarica</a> ' +
               '<button class="btn piccolo pericolo" type="button" data-ripristina="' + i + '">Ripristina</button></td></tr>';
