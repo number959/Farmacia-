@@ -35,6 +35,24 @@ var TABELLE_ACCESSI = ['utenti', 'sessioni', 'eventi'];
 var ATTESA_SECONDA_MS = 60 * 1000; // una cartella di rete che non risponde entro un minuto è "non raggiungibile"
 var FILE_CHIAVE_2FA = 'chiave-2fa.key'; // stesso nome di FILE_CHIAVE in server/accessi.js (cartella dati)
 
+
+/* Rinomina con pazienza (come in salute.js): su Windows antivirus e programmi di copia bloccano i file per qualche istante. */
+var CODICI_BLOCCO = ['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'];
+function aspettaMs(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch (e) { var fine = Date.now() + ms; while (Date.now() < fine) { /* attesa */ } }
+}
+function rinomina(da, a) {
+  var limite = Date.now() + 10000;
+  var pausa = 50;
+  for (;;) {
+    try { fs.renameSync(da, a); return; } catch (e) {
+      if (CODICI_BLOCCO.indexOf(e.code) < 0 || Date.now() >= limite) throw e;
+      aspettaMs(pausa);
+      pausa = Math.min(pausa * 2, 1000);
+    }
+  }
+}
+
 function due(n) { return String(n).padStart(2, '0'); }
 
 function marcaTempo(d) {
@@ -68,7 +86,7 @@ function scriviScheda(file, dati) {
   var dest = fileScheda(file);
   var tmp = dest + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(dati, null, 1));
-  fs.renameSync(tmp, dest);
+  rinomina(tmp, dest);
 }
 
 function primoValore(riga) { return riga ? Object.values(riga)[0] : null; }
@@ -508,7 +526,7 @@ Backup.prototype.ripristina = function (nome) {
   this.database.chiudiDati();
   try {
     ['-wal', '-shm'].forEach(function (s) { try { fs.unlinkSync(destinazione + s); } catch (e) { /* non c'era */ } });
-    fs.renameSync(temporaneo, destinazione);
+    rinomina(temporaneo, destinazione);
   } finally {
     this.database.apri();
   }

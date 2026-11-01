@@ -61,6 +61,27 @@ function primoValore(riga) { return riga ? Object.values(riga)[0] : null; }
 function dimensione(f) { try { return fs.statSync(f).size; } catch (e) { return 0; } }
 function esiste(f) { try { fs.statSync(f); return true; } catch (e) { return false; } }
 function togli(f) { try { fs.unlinkSync(f); } catch (e) { /* non c'era */ } }
+
+/*
+ * Rinomina con pazienza. Su Windows un file appena scritto o controllato può restare bloccato per qualche istante
+ * (antivirus, indicizzazione, programmi di copia): rename risponde EBUSY / EPERM / EACCES. Si riprova per qualche
+ * secondo prima di arrendersi (su Linux il primo tentativo riesce sempre).
+ */
+var CODICI_BLOCCO = ['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'];
+function aspettaMs(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch (e) { var fine = Date.now() + ms; while (Date.now() < fine) { /* attesa */ } }
+}
+function rinomina(da, a, attesaMaxMs) {
+  var limite = Date.now() + (attesaMaxMs === undefined ? 10000 : attesaMaxMs);
+  var pausa = 50;
+  for (;;) {
+    try { fs.renameSync(da, a); return; } catch (e) {
+      if (CODICI_BLOCCO.indexOf(e.code) < 0 || Date.now() >= limite) throw e;
+      aspettaMs(pausa);
+      pausa = Math.min(pausa * 2, 1000);
+    }
+  }
+}
 function chiudi(db) { if (db) { try { db.close(); } catch (e) { /* già chiuso */ } } }
 function plurale(n, uno, molti) { return n + ' ' + (n === 1 ? uno : molti); }
 
@@ -341,7 +362,7 @@ Salute.prototype.salva = function () {
     fs.mkdirSync(this.cartella, { recursive: true });
     var tmp = this.fileStato + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(s, null, 1));
-    fs.renameSync(tmp, this.fileStato);
+    rinomina(tmp, this.fileStato);
   } catch (e) {
     this.log('Stato della base dati non salvato (' + this.fileStato + '): ' + e.message);
   }
@@ -485,7 +506,7 @@ Salute.prototype.spostaDanneggiato = function (file, nome) {
   ['', '-wal', '-shm', '-journal'].forEach(function (s) {
     if (!esiste(file + s)) return;
     try {
-      fs.renameSync(file + s, dest + s);
+      rinomina(file + s, dest + s);
       if (!s) spostato = dest;
     } catch (e) {
       throw new Error(nome + '.db è danneggiato ma non riesco a spostarlo (' + e.message + '). Forse un altro programma lo tiene aperto ' +
@@ -572,7 +593,7 @@ Salute.prototype.curaMagazzino = function (file, motivo) {
   }
   if (scelto) {
     togliDb(file);
-    fs.renameSync(scelto.file, file);
+    rinomina(scelto.file, file);
     // con modifiche perse, all'apertura il magazzino riparte da una linea nuova sopra il giornale (allineaLinea)
     cura.perse = Math.max(lineaDiversa ? 1 : 0, ultimaNota - scelto.finoA);
     // il programma acceso aveva visto il magazzino più avanti di dove arriva la ricostruzione (salute.json): le
@@ -643,7 +664,7 @@ Salute.prototype.curaAccessi = function (file, motivo) {
     var esito = recupera(spostato, tmp);
     if (esito === true) {
       togliDb(file);
-      fs.renameSync(tmp, file);
+      rinomina(tmp, file);
       cura.metodo = 'recupero';
       cura.esito = 'curato';
       fatto = true;
@@ -658,7 +679,7 @@ Salute.prototype.curaAccessi = function (file, motivo) {
       togliDb(tmp2);
       fs.copyFileSync(c.percorso, tmp2);
       togliDb(file);
-      fs.renameSync(tmp2, file);
+      rinomina(tmp2, file);
       cura.metodo = 'copia';
       cura.copia = c.nome;
       cura.copiaData = c.data;
@@ -1082,10 +1103,10 @@ Salute.prototype.curaACaldo = function (motivo) {
     try {
       spostato = this.spostaDanneggiato(db.fileDati, 'farmacia');
       try {
-        fs.renameSync(scelto.file, db.fileDati);
+        rinomina(scelto.file, db.fileDati);
       } catch (e) {
         // non si deve MAI riaprire una cartella senza magazzino (si creerebbe un archivio vuoto): rimetto il file di prima
-        ['', '-wal', '-shm', '-journal'].forEach(function (s) { if (spostato && esiste(spostato + s)) fs.renameSync(spostato + s, db.fileDati + s); });
+        ['', '-wal', '-shm', '-journal'].forEach(function (s) { if (spostato && esiste(spostato + s)) rinomina(spostato + s, db.fileDati + s); });
         spostato = null;
         throw e;
       }
@@ -1501,6 +1522,7 @@ module.exports.rotte = function (server) {
 
 module.exports.Salute = Salute;
 module.exports.controllaFile = controllaFile;
+module.exports.rinomina = rinomina;
 module.exports.rigaDaOggetto = rigaDaOggetto;
 module.exports.riapplica = riapplica;
 module.exports.ricostruisci = ricostruisci;
