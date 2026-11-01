@@ -24,17 +24,38 @@ var DatabaseSync = require('node:sqlite').DatabaseSync;
 var path = require('path');
 var fs = require('fs');
 
-var VERSIONE_SCHEMA_DATI = 2; // 2: codici a barre e pezzi per confezione degli articoli
-var VERSIONE_SCHEMA_ACCESSI = 1;
+var VERSIONE_SCHEMA_DATI = 3; // 2: codici a barre e pezzi per confezione; 3: magazzini, armadi, assortimento, richieste, DDT (versione 3.0)
+var VERSIONE_SCHEMA_ACCESSI = 2; // 2: autenticazione a due fattori (versione 3.0)
 
 var IMPOSTAZIONI_PREDEFINITE = {
+  nomeProdotto: 'NefroCenter Pharmacy',
+  sigla: 'NC Pharmacy',
   struttura: 'Clinica Posillipo',
-  sottotitolo: 'Longevity Institute',
+  sottotitolo: 'Longevity Institute · Gruppo NefroCenter',
   societa: 'ME.MI. SRL',
   citta: 'NAPOLI',
   logo: '',
   giorniAvvisoScadenza: 90,
-  codiceModulo: 'PRQ 1501.4EV.1'
+  codiceModulo: 'PRQ 1501.4EV.1',
+  // versione 3.0 (docs/NOVITA-3.0.md)
+  coloreAccento: '',
+  tema: 'automatico',
+  leadTimeGiorni: 7,
+  periodoRevisioneGiorni: 7,
+  livelloServizio: 0.95,
+  storicoGiorni: 180,
+  richiedi2fa: 'nessuno'
+};
+
+// magazzino di sistema per la merce in viaggio fra due magazzini (DDT partiti e non ancora ricevuti)
+var ID_TRANSITO = 'r-transito';
+
+// piano e livello dei reparti predefiniti, per le installazioni che arrivano dalla 2.x
+var PIANI_PREDEFINITI = {
+  'r-farmacia': { piano: 'Piano terra', livello: 0 },
+  'r-degenza': { piano: '1° piano', livello: 1 },
+  'r-sala': { piano: '1° piano', livello: 1 },
+  'r-ambulatori': { piano: 'Piano terra', livello: 0 }
 };
 
 var REPARTI_PREDEFINITI = [
@@ -118,10 +139,100 @@ function aggiornaSchemaDati(db) {
       throw e;
     }
   }
+  if (versioneSchema(db) < 3) {
+    // versione 3: magazzini (centrale, periferici, in transito), armadi, assortimento, richieste e DDT interni
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      var colRep = db.prepare('PRAGMA table_info(reparti)').all().map(function (c) { return c.name; });
+      if (colRep.indexOf('tipo') < 0) db.exec("ALTER TABLE reparti ADD COLUMN tipo TEXT NOT NULL DEFAULT 'periferico'");
+      if (colRep.indexOf('piano') < 0) db.exec("ALTER TABLE reparti ADD COLUMN piano TEXT NOT NULL DEFAULT ''");
+      if (colRep.indexOf('livello') < 0) db.exec('ALTER TABLE reparti ADD COLUMN livello INTEGER NOT NULL DEFAULT 0');
+      if (colRep.indexOf('colore') < 0) db.exec("ALTER TABLE reparti ADD COLUMN colore TEXT NOT NULL DEFAULT ''");
+      if (colRep.indexOf('descrizione') < 0) db.exec("ALTER TABLE reparti ADD COLUMN descrizione TEXT NOT NULL DEFAULT ''");
+      db.exec("UPDATE reparti SET tipo = CASE WHEN centrale = 1 THEN 'centrale' ELSE 'periferico' END WHERE tipo <> 'transito'");
+      var piano = db.prepare("UPDATE reparti SET piano = ?, livello = ? WHERE id = ? AND piano = ''");
+      Object.keys(PIANI_PREDEFINITI).forEach(function (id) { piano.run(PIANI_PREDEFINITI[id].piano, PIANI_PREDEFINITI[id].livello, id); });
+      var revAttuale = Number((db.prepare("SELECT valore FROM meta WHERE chiave = 'rev'").get() || { valore: '1' }).valore) || 1;
+      db.prepare("INSERT OR IGNORE INTO reparti (id, nome, centrale, attivo, ordine, rev, tipo, piano, livello, descrizione) " +
+        "VALUES (?, 'In transito', 0, 1, 9999, ?, 'transito', '', 0, 'Merce partita con un DDT e non ancora ricevuta')").run(ID_TRANSITO, revAttuale);
+
+      var colArt = db.prepare('PRAGMA table_info(articoli)').all().map(function (c) { return c.name; });
+      if (colArt.indexOf('attributi') < 0) db.exec("ALTER TABLE articoli ADD COLUMN attributi TEXT NOT NULL DEFAULT '[]'");
+      if (colArt.indexOf('lead_time') < 0) db.exec('ALTER TABLE articoli ADD COLUMN lead_time REAL');
+      if (colArt.indexOf('fornitore') < 0) db.exec("ALTER TABLE articoli ADD COLUMN fornitore TEXT NOT NULL DEFAULT ''");
+
+      var colMov = db.prepare('PRAGMA table_info(movimenti)').all().map(function (c) { return c.name; });
+      if (colMov.indexOf('ddt_id') < 0) db.exec('ALTER TABLE movimenti ADD COLUMN ddt_id TEXT');
+
+      db.exec([
+        'CREATE INDEX IF NOT EXISTS movimenti_ddt ON movimenti(ddt_id);',
+        'CREATE INDEX IF NOT EXISTS movimenti_reparto ON movimenti(reparto_id, data);',
+        'CREATE INDEX IF NOT EXISTS reparti_rev ON reparti(rev);',
+        'CREATE TABLE IF NOT EXISTS armadi (',
+        '  id TEXT PRIMARY KEY, reparto_id TEXT NOT NULL REFERENCES reparti(id), nome TEXT NOT NULL,',
+        "  tipo TEXT NOT NULL DEFAULT 'armadio', ripiani INTEGER NOT NULL DEFAULT 4, colonne INTEGER NOT NULL DEFAULT 6,",
+        "  ordine INTEGER NOT NULL DEFAULT 0, colore TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',",
+        '  attivo INTEGER NOT NULL DEFAULT 1, rev INTEGER NOT NULL DEFAULT 0);',
+        'CREATE INDEX IF NOT EXISTS armadi_reparto ON armadi(reparto_id);',
+        'CREATE INDEX IF NOT EXISTS armadi_rev ON armadi(rev);',
+        'CREATE TABLE IF NOT EXISTS assortimento (',
+        '  id TEXT PRIMARY KEY, reparto_id TEXT NOT NULL REFERENCES reparti(id), articolo_id TEXT NOT NULL REFERENCES articoli(id),',
+        '  scorta_min REAL NOT NULL DEFAULT 0, punto_riordino REAL NOT NULL DEFAULT 0, scorta_max REAL NOT NULL DEFAULT 0,',
+        '  armadio_id TEXT REFERENCES armadi(id) ON DELETE SET NULL, ripiano INTEGER, posizione INTEGER,',
+        "  note TEXT NOT NULL DEFAULT '', attivo INTEGER NOT NULL DEFAULT 1, rev INTEGER NOT NULL DEFAULT 0,",
+        '  UNIQUE (reparto_id, articolo_id));',
+        'CREATE INDEX IF NOT EXISTS assortimento_rev ON assortimento(rev);',
+        'CREATE INDEX IF NOT EXISTS assortimento_armadio ON assortimento(armadio_id);',
+        'CREATE TABLE IF NOT EXISTS richieste (',
+        '  id TEXT PRIMARY KEY, numero TEXT NOT NULL UNIQUE, anno INTEGER NOT NULL, progressivo INTEGER NOT NULL,',
+        '  reparto_id TEXT NOT NULL REFERENCES reparti(id), fornitore_id TEXT NOT NULL REFERENCES reparti(id),',
+        "  stato TEXT NOT NULL DEFAULT 'bozza', urgente INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT '',",
+        "  creata_da TEXT, creata_da_nome TEXT NOT NULL DEFAULT '', creata_il TEXT NOT NULL, inviata_il TEXT,",
+        "  presa_da TEXT, presa_da_nome TEXT NOT NULL DEFAULT '', presa_il TEXT,",
+        "  chiusa_il TEXT, chiusa_da TEXT, chiusa_da_nome TEXT NOT NULL DEFAULT '', motivo TEXT NOT NULL DEFAULT '',",
+        '  rev INTEGER NOT NULL DEFAULT 0);',
+        'CREATE INDEX IF NOT EXISTS richieste_rev ON richieste(rev);',
+        'CREATE INDEX IF NOT EXISTS richieste_stato ON richieste(stato, reparto_id);',
+        'CREATE TABLE IF NOT EXISTS richieste_righe (',
+        '  id TEXT PRIMARY KEY, richiesta_id TEXT NOT NULL REFERENCES richieste(id) ON DELETE CASCADE,',
+        '  articolo_id TEXT NOT NULL REFERENCES articoli(id), quantita REAL NOT NULL, approvata REAL,',
+        "  nota TEXT NOT NULL DEFAULT '', ordine INTEGER NOT NULL DEFAULT 0, rev INTEGER NOT NULL DEFAULT 0);",
+        'CREATE INDEX IF NOT EXISTS richieste_righe_richiesta ON richieste_righe(richiesta_id);',
+        'CREATE INDEX IF NOT EXISTS richieste_righe_rev ON richieste_righe(rev);',
+        'CREATE TABLE IF NOT EXISTS ddt (',
+        '  id TEXT PRIMARY KEY, numero TEXT NOT NULL UNIQUE, anno INTEGER NOT NULL, progressivo INTEGER NOT NULL,',
+        '  origine_id TEXT NOT NULL REFERENCES reparti(id), destinazione_id TEXT NOT NULL REFERENCES reparti(id),',
+        "  richiesta_id TEXT REFERENCES richieste(id), stato TEXT NOT NULL DEFAULT 'in_preparazione',",
+        "  causale TEXT NOT NULL DEFAULT 'Trasferimento interno', colli INTEGER NOT NULL DEFAULT 1, note TEXT NOT NULL DEFAULT '',",
+        "  preparato_da TEXT, preparato_da_nome TEXT NOT NULL DEFAULT '', preparato_il TEXT NOT NULL,",
+        "  trasportatore_id TEXT, trasportatore_nome TEXT NOT NULL DEFAULT '', partito_il TEXT,",
+        "  ricevuto_da TEXT, ricevuto_da_nome TEXT NOT NULL DEFAULT '', ricevuto_il TEXT, note_ricezione TEXT NOT NULL DEFAULT '',",
+        "  annullato_il TEXT, annullato_da TEXT, motivo_annullo TEXT NOT NULL DEFAULT '', rev INTEGER NOT NULL DEFAULT 0);",
+        'CREATE INDEX IF NOT EXISTS ddt_rev ON ddt(rev);',
+        'CREATE INDEX IF NOT EXISTS ddt_stato ON ddt(stato, destinazione_id);',
+        'CREATE INDEX IF NOT EXISTS ddt_richiesta ON ddt(richiesta_id);',
+        'CREATE TABLE IF NOT EXISTS ddt_righe (',
+        '  id TEXT PRIMARY KEY, ddt_id TEXT NOT NULL REFERENCES ddt(id) ON DELETE CASCADE,',
+        '  articolo_id TEXT NOT NULL REFERENCES articoli(id), richiesta_riga_id TEXT REFERENCES richieste_righe(id),',
+        "  lotto TEXT NOT NULL DEFAULT '', scadenza TEXT NOT NULL DEFAULT '', quantita REAL NOT NULL, ricevuta REAL,",
+        "  esito TEXT NOT NULL DEFAULT '', nota TEXT NOT NULL DEFAULT '', ordine INTEGER NOT NULL DEFAULT 0,",
+        '  rev INTEGER NOT NULL DEFAULT 0);',
+        'CREATE INDEX IF NOT EXISTS ddt_righe_ddt ON ddt_righe(ddt_id);',
+        'CREATE INDEX IF NOT EXISTS ddt_righe_rev ON ddt_righe(rev);',
+        'CREATE INDEX IF NOT EXISTS ddt_righe_riga ON ddt_righe(richiesta_riga_id);'
+      ].join('\n'));
+      db.exec('PRAGMA user_version = 3');
+      db.exec('COMMIT');
+    } catch (e) {
+      try { db.exec('ROLLBACK'); } catch (e2) { /* già chiusa */ }
+      throw e;
+    }
+  }
 }
 
 function creaSchemaAccessi(db) {
   if (versioneSchema(db) >= VERSIONE_SCHEMA_ACCESSI) return;
+  if (versioneSchema(db) >= 1) { aggiornaSchemaAccessi(db); return; }
   db.exec([
     'CREATE TABLE IF NOT EXISTS utenti (',
     '  id TEXT PRIMARY KEY, username TEXT NOT NULL COLLATE NOCASE UNIQUE, nome TEXT NOT NULL, ruolo TEXT NOT NULL,',
@@ -137,7 +248,35 @@ function creaSchemaAccessi(db) {
     "  azione TEXT NOT NULL, dettagli TEXT NOT NULL DEFAULT '{}', ip TEXT NOT NULL DEFAULT '');",
     'CREATE INDEX IF NOT EXISTS eventi_quando ON eventi(quando);'
   ].join('\n'));
-  db.exec('PRAGMA user_version = ' + VERSIONE_SCHEMA_ACCESSI);
+  aggiornaSchemaAccessi(db);
+}
+
+/* Aggiornamenti dello schema degli accessi (anche per i database della versione precedente). */
+function aggiornaSchemaAccessi(db) {
+  if (versioneSchema(db) < 2) {
+    // versione 2: autenticazione a due fattori (TOTP) e dispositivi attendibili
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      var col = db.prepare('PRAGMA table_info(utenti)').all().map(function (c) { return c.name; });
+      if (col.indexOf('totp_segreto') < 0) db.exec("ALTER TABLE utenti ADD COLUMN totp_segreto TEXT NOT NULL DEFAULT ''");
+      if (col.indexOf('totp_attivo') < 0) db.exec('ALTER TABLE utenti ADD COLUMN totp_attivo INTEGER NOT NULL DEFAULT 0');
+      if (col.indexOf('totp_attivato_il') < 0) db.exec('ALTER TABLE utenti ADD COLUMN totp_attivato_il TEXT');
+      if (col.indexOf('totp_ultimo_passo') < 0) db.exec('ALTER TABLE utenti ADD COLUMN totp_ultimo_passo INTEGER NOT NULL DEFAULT 0');
+      if (col.indexOf('codici_recupero') < 0) db.exec("ALTER TABLE utenti ADD COLUMN codici_recupero TEXT NOT NULL DEFAULT '[]'");
+      if (col.indexOf('tentativi_2fa') < 0) db.exec('ALTER TABLE utenti ADD COLUMN tentativi_2fa INTEGER NOT NULL DEFAULT 0');
+      db.exec([
+        'CREATE TABLE IF NOT EXISTS dispositivi (',
+        '  token_hash TEXT PRIMARY KEY, utente_id TEXT NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,',
+        "  creato INTEGER NOT NULL, scade INTEGER NOT NULL, ip TEXT NOT NULL DEFAULT '', agente TEXT NOT NULL DEFAULT '');",
+        'CREATE INDEX IF NOT EXISTS dispositivi_utente ON dispositivi(utente_id);'
+      ].join('\n'));
+      db.exec('PRAGMA user_version = 2');
+      db.exec('COMMIT');
+    } catch (e) {
+      try { db.exec('ROLLBACK'); } catch (e2) { /* già chiusa */ }
+      throw e;
+    }
+  }
 }
 
 /* ---------- conversione righe <-> oggetti del client ---------- */
@@ -153,13 +292,88 @@ function articoloDaRiga(r) {
   return {
     id: r.id, nome: r.nome, categoria: r.categoria, unita: r.unita, principio: r.principio, confezione: r.confezione,
     codice: r.codice, prezzo: r.prezzo, scortaMinima: r.scorta_minima, note: r.note, attivo: !!r.attivo, versione: r.versione,
-    barcode: codiciDaTesto(r.barcode), pezziConfezione: r.pezzi_confezione > 0 ? r.pezzi_confezione : 1
+    barcode: codiciDaTesto(r.barcode), pezziConfezione: r.pezzi_confezione > 0 ? r.pezzi_confezione : 1,
+    attributi: codiciDaTesto(r.attributi), leadTime: r.lead_time === null || r.lead_time === undefined ? null : r.lead_time,
+    fornitore: r.fornitore || ''
   };
 }
 
 function repartoDaRiga(r) {
-  return { id: r.id, nome: r.nome, centrale: !!r.centrale, attivo: !!r.attivo };
+  return {
+    id: r.id, nome: r.nome, centrale: !!r.centrale, attivo: !!r.attivo, ordine: r.ordine,
+    tipo: r.tipo || (r.centrale ? 'centrale' : 'periferico'), piano: r.piano || '', livello: r.livello || 0,
+    colore: r.colore || '', descrizione: r.descrizione || ''
+  };
 }
+
+function nullo(v) { return v === undefined ? null : v; }
+
+function armadioDaRiga(r) {
+  return {
+    id: r.id, repartoId: r.reparto_id, nome: r.nome, tipo: r.tipo, ripiani: r.ripiani, colonne: r.colonne,
+    ordine: r.ordine, colore: r.colore, note: r.note, attivo: !!r.attivo
+  };
+}
+
+function assortimentoDaRiga(r) {
+  return {
+    id: r.id, repartoId: r.reparto_id, articoloId: r.articolo_id, scortaMin: r.scorta_min, puntoRiordino: r.punto_riordino,
+    scortaMax: r.scorta_max, armadioId: nullo(r.armadio_id), ripiano: nullo(r.ripiano), posizione: nullo(r.posizione),
+    note: r.note, attivo: !!r.attivo
+  };
+}
+
+function richiestaDaRiga(r) {
+  return {
+    id: r.id, numero: r.numero, anno: r.anno, progressivo: r.progressivo, repartoId: r.reparto_id, fornitoreId: r.fornitore_id,
+    stato: r.stato, urgente: !!r.urgente, note: r.note, creataDa: nullo(r.creata_da), creataDaNome: r.creata_da_nome,
+    creataIl: r.creata_il, inviataIl: nullo(r.inviata_il), presaDa: nullo(r.presa_da), presaDaNome: r.presa_da_nome,
+    presaIl: nullo(r.presa_il), chiusaIl: nullo(r.chiusa_il), chiusaDa: nullo(r.chiusa_da), chiusaDaNome: r.chiusa_da_nome,
+    motivo: r.motivo
+  };
+}
+
+function richiestaRigaDaRiga(r) {
+  return {
+    id: r.id, richiestaId: r.richiesta_id, articoloId: r.articolo_id, quantita: r.quantita, approvata: nullo(r.approvata),
+    nota: r.nota, ordine: r.ordine
+  };
+}
+
+function ddtDaRiga(r) {
+  return {
+    id: r.id, numero: r.numero, anno: r.anno, progressivo: r.progressivo, origineId: r.origine_id, destinazioneId: r.destinazione_id,
+    richiestaId: nullo(r.richiesta_id), stato: r.stato, causale: r.causale, colli: r.colli, note: r.note,
+    preparatoDa: nullo(r.preparato_da), preparatoDaNome: r.preparato_da_nome, preparatoIl: r.preparato_il,
+    trasportatoreId: nullo(r.trasportatore_id), trasportatoreNome: r.trasportatore_nome, partitoIl: nullo(r.partito_il),
+    ricevutoDa: nullo(r.ricevuto_da), ricevutoDaNome: r.ricevuto_da_nome, ricevutoIl: nullo(r.ricevuto_il),
+    noteRicezione: r.note_ricezione, annullatoIl: nullo(r.annullato_il), annullatoDa: nullo(r.annullato_da),
+    motivoAnnullo: r.motivo_annullo
+  };
+}
+
+function ddtRigaDaRiga(r) {
+  return {
+    id: r.id, ddtId: r.ddt_id, articoloId: r.articolo_id, richiestaRigaId: nullo(r.richiesta_riga_id), lotto: r.lotto,
+    scadenza: r.scadenza, quantita: r.quantita, ricevuta: nullo(r.ricevuta), esito: r.esito, nota: r.nota, ordine: r.ordine
+  };
+}
+
+/*
+ * Tabelle sincronizzate con i browser (/api/dati): chiave in App.S, tabella SQL, ordinamento, conversione.
+ * Nelle cancellazioni (tabella "cancellati") si usa la chiave di App.S.
+ */
+var TABELLE_SYNC = [
+  { chiave: 'reparti', tabella: 'reparti', ordine: 'ordine, nome', daRiga: repartoDaRiga },
+  { chiave: 'articoli', tabella: 'articoli', ordine: '', daRiga: articoloDaRiga },
+  { chiave: 'movimenti', tabella: 'movimenti', ordine: 'data, creato', daRiga: movimentoDaRiga },
+  { chiave: 'armadi', tabella: 'armadi', ordine: 'reparto_id, ordine, nome', daRiga: armadioDaRiga },
+  { chiave: 'assortimento', tabella: 'assortimento', ordine: '', daRiga: assortimentoDaRiga },
+  { chiave: 'richieste', tabella: 'richieste', ordine: 'anno, progressivo', daRiga: richiestaDaRiga },
+  { chiave: 'richiesteRighe', tabella: 'richieste_righe', ordine: 'richiesta_id, ordine', daRiga: richiestaRigaDaRiga },
+  { chiave: 'ddt', tabella: 'ddt', ordine: 'anno, progressivo', daRiga: ddtDaRiga },
+  { chiave: 'ddtRighe', tabella: 'ddt_righe', ordine: 'ddt_id, ordine', daRiga: ddtRigaDaRiga }
+];
 
 function movimentoDaRiga(r) {
   return {
@@ -168,7 +382,8 @@ function movimentoDaRiga(r) {
     fornitore: r.fornitore, documento: r.documento, causale: r.causale, note: r.note,
     prezzo: r.prezzo === null ? undefined : r.prezzo, operatore: r.operatore, utenteId: r.utente_id || undefined,
     creato: r.creato,
-    annullato: r.annullato_il ? { il: r.annullato_il, da: r.annullato_da || '', motivo: r.annullato_motivo || '' } : null
+    annullato: r.annullato_il ? { il: r.annullato_il, da: r.annullato_da || '', motivo: r.annullato_motivo || '' } : null,
+    ddtId: r.ddt_id || null
   };
 }
 
@@ -208,16 +423,29 @@ Database.prototype.chiudi = function () {
 Database.prototype.scrivi = function (fn) {
   var db = this.dati;
   db.exec('BEGIN IMMEDIATE');
+  var rev;
+  var risultato;
   try {
-    var rev = Number(db.prepare("SELECT valore FROM meta WHERE chiave = 'rev'").get().valore) + 1;
+    rev = Number(db.prepare("SELECT valore FROM meta WHERE chiave = 'rev'").get().valore) + 1;
     db.prepare("UPDATE meta SET valore = ? WHERE chiave = 'rev'").run(String(rev));
-    var risultato = fn(rev);
+    risultato = fn(rev);
     db.exec('COMMIT');
-    return { rev: rev, risultato: risultato };
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch (e2) { /* già chiusa */ }
     throw e;
   }
+  // dopo il commit: chi ascolta (per esempio il giornale delle modifiche) riceve la revisione appena scritta
+  var self = this;
+  (this.ascoltatoriScrittura || []).forEach(function (f) {
+    try { f({ rev: rev }); } catch (e) { if (self.log) self.log('Errore dopo la scrittura: ' + (e && e.message)); }
+  });
+  return { rev: rev, risultato: risultato };
+};
+
+/* Registra fn({ rev }) da chiamare dopo ogni scrittura riuscita del magazzino. */
+Database.prototype.dopoScrittura = function (fn) {
+  if (!this.ascoltatoriScrittura) this.ascoltatoriScrittura = [];
+  this.ascoltatoriScrittura.push(fn);
 };
 
 Database.prototype.transazioneAccessi = function (fn) {
@@ -309,12 +537,12 @@ Database.prototype.cambiamenti = function (da, storia) {
   var out = {
     rev: rev,
     storia: this.storia,
-    completo: completo,
-    reparti: db.prepare('SELECT * FROM reparti WHERE rev > ? ORDER BY ordine, nome').all(soglia).map(repartoDaRiga),
-    articoli: db.prepare('SELECT * FROM articoli WHERE rev > ?').all(soglia).map(articoloDaRiga),
-    movimenti: db.prepare('SELECT * FROM movimenti WHERE rev > ? ORDER BY data, creato').all(soglia).map(movimentoDaRiga),
-    cancellati: completo ? [] : db.prepare('SELECT tabella, id FROM cancellati WHERE rev > ?').all(soglia).map(function (r) { return { tabella: r.tabella, id: r.id }; })
+    completo: completo
   };
+  TABELLE_SYNC.forEach(function (t) {
+    out[t.chiave] = db.prepare('SELECT * FROM ' + t.tabella + ' WHERE rev > ?' + (t.ordine ? ' ORDER BY ' + t.ordine : '')).all(soglia).map(t.daRiga);
+  });
+  out.cancellati = completo ? [] : db.prepare('SELECT tabella, id FROM cancellati WHERE rev > ?').all(soglia).map(function (r) { return { tabella: r.tabella, id: r.id }; });
   var impCambiate = db.prepare('SELECT COUNT(*) n FROM impostazioni WHERE rev > ?').get(soglia).n;
   if (completo || impCambiate) out.impostazioni = this.impostazioni();
   return out;
@@ -325,6 +553,14 @@ module.exports = {
   articoloDaRiga: articoloDaRiga,
   repartoDaRiga: repartoDaRiga,
   movimentoDaRiga: movimentoDaRiga,
+  armadioDaRiga: armadioDaRiga,
+  assortimentoDaRiga: assortimentoDaRiga,
+  richiestaDaRiga: richiestaDaRiga,
+  richiestaRigaDaRiga: richiestaRigaDaRiga,
+  ddtDaRiga: ddtDaRiga,
+  ddtRigaDaRiga: ddtRigaDaRiga,
+  TABELLE_SYNC: TABELLE_SYNC,
+  ID_TRANSITO: ID_TRANSITO,
   IMPOSTAZIONI_PREDEFINITE: IMPOSTAZIONI_PREDEFINITE,
   REPARTI_PREDEFINITI: REPARTI_PREDEFINITI
 };

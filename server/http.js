@@ -26,6 +26,8 @@ var TIPI_MIME = {
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
   '.vtt': 'text/vtt; charset=utf-8',
+  '.webp': 'image/webp',
+  '.woff2': 'font/woff2',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 };
 
@@ -67,6 +69,8 @@ function percorsoStatico(url) {
   if (rel === 'index.html') return rel;
   if (/^(css|js|vendor)\/[A-Za-z0-9._-]+\.(js|css)$/.test(rel)) return rel;
   if (/^guide\/[a-z0-9-]+\.(mp4|webm|vtt|jpg|png)$/.test(rel)) return rel; // videoguide
+  if (/^fonts\/[a-z0-9-]+\.woff2$/.test(rel)) return rel; // caratteri (Manrope, Inter, JetBrains Mono)
+  if (/^brand\/[a-z0-9-]+\.(png|svg|webp)$/.test(rel)) return rel; // marchio incorporato della struttura
   return null;
 }
 
@@ -178,9 +182,13 @@ Server.prototype.statoPubblico = function (ctx) {
   return {
     inizializzato: this.accessi.contaUtenti() > 0,
     daServer: ctx.locale,
+    nomeProdotto: imp.nomeProdotto,
+    sigla: imp.sigla,
     struttura: imp.struttura,
     sottotitolo: imp.sottotitolo,
     logo: imp.logo,
+    coloreAccento: imp.coloreAccento,
+    tema: imp.tema,
     versione: this.versione,
     utente: ctx.utente || null,
     permessi: ctx.utente ? A.permessi(ctx.utente) : null
@@ -332,6 +340,12 @@ Server.prototype.definisciRotte = function () {
     return op.importaArchivio(ctx, ctx.corpo);
   });
   this.rotta('POST', '/api/demo', {}, function (ctx) { return op.caricaDemo(ctx); });
+
+  // versione 3.0: ogni parte registra le proprie rotte nel proprio modulo (docs/NOVITA-3.0.md)
+  require('./logistica.js').rotte(this);   // richieste, DDT, consegne (parte A)
+  require('./struttura.js').rotte(this);   // magazzini, armadi, assortimento (parte B)
+  require('./sicurezza.js').rotte(this);   // autenticazione a due fattori (parte C)
+  require('./salute.js').rotte(this);      // stato della base dati, giornale, copie (parte E)
 };
 
 /* Avvisa i browser degli utenti indicati che ruolo o reparti sono cambiati. */

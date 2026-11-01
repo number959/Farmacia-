@@ -18,7 +18,7 @@ var Operazioni = require('./operazioni.js').Operazioni;
 var Backup = require('./backup.js').Backup;
 var Server = require('./http.js').Server;
 
-var VERSIONE = '2.1.0';
+var VERSIONE = '3.0.0';
 
 /* Scrive in console senza mai bloccare il programma: avviato come attività pianificata non c'è una console. */
 function stampa(testo, errore) {

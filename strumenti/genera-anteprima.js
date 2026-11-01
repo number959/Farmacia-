@@ -27,7 +27,7 @@ html.replace(/(?:src|href)="((?:css|js|vendor)\/[^"]+)"/g, (_, rel) => { file.ad
 sostituisci('<script src="js/calcoli.js"></script>', '<script src="js/calcoli.js"></script>\n  <script src="js/demo.js"></script>\n  <script src="anteprima/server-finto.js"></script>');
 sostituisci('<script src="js/avvio.js"></script>', '<script src="js/avvio.js"></script>\n  <script src="anteprima/banda.js"></script>');
 sostituisci('<link rel="stylesheet" href="css/app.css">', '<link rel="stylesheet" href="css/app.css">\n  <link rel="stylesheet" href="anteprima/anteprima.css">');
-sostituisci('<title>Gestionale Farmacia · Clinica Posillipo</title>', '<title>Gestionale Farmacia · Anteprima</title>');
+sostituisci('<title>NefroCenter Pharmacy</title>', '<title>Pharmacy · anteprima</title>');
 fs.writeFileSync(path.join(OUT, 'index.html'), html);
 for (const rel of file) {
   fs.mkdirSync(path.dirname(path.join(OUT, rel)), { recursive: true });
@@ -38,11 +38,17 @@ if (fs.existsSync(guide)) {
   fs.mkdirSync(path.join(OUT, 'guide'), { recursive: true });
   fs.readdirSync(guide).filter((n) => /\.(mp4|vtt|jpg|png)$/.test(n)).forEach((n) => fs.copyFileSync(path.join(guide, n), path.join(OUT, 'guide', n)));
 }
+// caratteri (sì) e marchio della struttura (no: l'anteprima pubblicata non usa il marchio di una struttura reale)
+const caratteri = path.join(RADICE, 'fonts');
+if (fs.existsSync(caratteri)) {
+  fs.mkdirSync(path.join(OUT, 'fonts'), { recursive: true });
+  fs.readdirSync(caratteri).filter((n) => /\.woff2$/.test(n)).forEach((n) => fs.copyFileSync(path.join(caratteri, n), path.join(OUT, 'fonts', n)));
+}
 // versione "frammento" per la pubblicazione come Artifact: titolo, fogli di stile e contenuto del body
 const testa = /<head>([\s\S]*?)<\/head>/.exec(html)[1];
 const corpo = /<body>([\s\S]*?)<\/body>/.exec(html)[1];
 const stili = testa.match(/<link rel="stylesheet"[^>]*>/g).join('\n');
-fs.writeFileSync(path.join(OUT, 'pagina-artifact.html'), '<title>Gestionale Farmacia Posillipo</title>\n' + stili + '\n' + corpo.trim() + '\n');
+fs.writeFileSync(path.join(OUT, 'pagina-artifact.html'), '<title>Pharmacy · anteprima</title>\n' + stili + '\n' + corpo.trim() + '\n');
 console.log('Anteprima in ' + path.relative(RADICE, OUT) + ' (' + (file.size + 1) + ' file più le videoguide)');
 // senza la funzione "downloads" i file Excel nella pagina pubblicata non si scaricano (i download diretti sono bloccati)
 console.log('Per pubblicarla come Artifact: pagina-artifact.html, gli altri file accanto con gli stessi percorsi, capabilities { downloads: true }.');

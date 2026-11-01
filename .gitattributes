@@ -4,3 +4,5 @@ installazione/*.ps1 text eol=crlf
 installazione/*.json text eol=crlf
 guide/*.mp4 binary
 guide/*.jpg binary
+fonts/*.woff2 binary
+brand/*.png binary

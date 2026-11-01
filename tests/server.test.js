@@ -691,6 +691,6 @@ test('codici a barre: un database della versione precedente si aggiorna all\'ape
     await new Promise((ok) => { proc.once('exit', ok); proc.kill('SIGTERM'); });
   }
   const db2 = new DatabaseSync(path.join(dati, 'farmacia.db'), { readOnly: true });
-  assert.equal(db2.prepare('PRAGMA user_version').get().user_version, 2);
+  assert.equal(db2.prepare('PRAGMA user_version').get().user_version, 3);
   db2.close();
 });

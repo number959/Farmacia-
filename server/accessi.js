@@ -5,11 +5,12 @@
 
 var crypto = require('crypto');
 
+// id invariati dalla 2.x, etichette della 3.0 (docs/NOVITA-3.0.md)
 var RUOLI = {
   amministratore: 'Amministratore',
-  farmacista: 'Farmacista',
-  reparto: 'Reparto',
-  consultazione: 'Consultazione'
+  farmacista: 'Farmacista (farmacia centrale)',
+  reparto: 'Responsabile di magazzino',
+  consultazione: 'Direzione (sola lettura)'
 };
 
 var SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
@@ -81,6 +82,18 @@ function permessi(utente) {
     perdita: farm || rep,
     registro: farm || rep,
     annullaTutti: farm,
+    // versione 3.0
+    richieste: farm || rep,
+    evadiRichieste: farm,
+    ddt: farm || rep,
+    riceviDdt: farm || rep,
+    struttura: admin,
+    assortimento: farm,
+    ubicazioni: farm || rep,
+    previsioni: true,
+    ordini: farm,
+    sistema: admin,
+    sicurezza: admin,
     reparti: rep ? (utente.reparti || []).slice() : null
   };
 }

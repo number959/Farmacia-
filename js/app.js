@@ -28,19 +28,29 @@
     { id: 'oggi', voce: 'Oggi', ico: '🏠', tasto: 'O' },
     { id: 'carico', voce: 'Carico', ico: '📥', tasto: 'C', perm: 'carico' },
     { id: 'consumi', voce: 'Consumi del giorno', ico: '💊', tasto: 'S', perm: 'consumo' },
-    { id: 'trasferimenti', voce: 'Trasferimenti', ico: '🔁', tasto: 'T', perm: 'trasferimento' },
+    { id: 'richieste', voce: 'Richieste', ico: '📝', tasto: 'Q', perm: ['richieste', 'evadiRichieste'], conta: 'richieste' },
+    { id: 'consegne', voce: 'DDT e consegne', ico: '🚚', tasto: 'D', perm: ['ddt', 'riceviDdt'], conta: 'consegne' },
+    { id: 'trasferimenti', voce: 'Trasferimenti', ico: '🔁', tasto: 'T', perm: 'ddt' },
     { id: 'perdite', voce: 'Perdite e scaduti', ico: '🗑️', tasto: 'P', perm: 'perdita' },
     { gruppo: 'Magazzino' },
+    { id: 'struttura', voce: 'Struttura', ico: '🏥', tasto: 'K' },
+    { id: 'armadi', voce: 'Armadi', ico: '🗄️', tasto: 'B' },
     { id: 'giacenze', voce: 'Giacenze', ico: '📦', tasto: 'G' },
     { id: 'scadenze', voce: 'Scadenze', ico: '⏳', tasto: 'Z', conta: 'scadenze' },
     { id: 'movimenti', voce: 'Movimenti', ico: '🧾', tasto: 'M' },
     { id: 'inventario', voce: 'Inventario', ico: '✅', tasto: 'I', perm: 'rettifica' },
+    { gruppo: 'Analisi' },
+    { id: 'previsioni', voce: 'Previsioni e fabbisogno', ico: '📈', tasto: 'E', perm: 'previsioni' },
+    { id: 'distribuzione', voce: 'Distribuzione', ico: '🧭', tasto: 'N', perm: 'previsioni' },
     { gruppo: 'Registri' },
     { id: 'registro', voce: 'Nota consumi mensile', ico: '📅', tasto: 'R' },
     { gruppo: 'Archivio' },
     { id: 'articoli', voce: 'Articoli', ico: '🏷️', tasto: 'A' },
+    { id: 'magazzini', voce: 'Magazzini e assortimento', ico: '🏬', tasto: 'W', perm: ['struttura', 'assortimento'] },
     { id: 'utenti', voce: 'Utenti', ico: '👥', tasto: 'U', perm: 'utenti' },
+    { id: 'sicurezza', voce: 'Sicurezza', ico: '🔐', tasto: 'Y', perm: 'sicurezza' },
     { id: 'attivita', voce: 'Attività', ico: '📜', tasto: 'V', perm: 'attivita' },
+    { id: 'sistema', voce: 'Sistema', ico: '🩺', tasto: 'X', perm: 'sistema' },
     { id: 'configura', voce: 'Configura', ico: '⚙️', tasto: 'F', perm: ['impostazioni', 'backup'] },
     { id: 'guida', voce: 'Guida', ico: '❓', tasto: 'H' }
   ];
@@ -48,11 +58,12 @@
   // pagine solo di consultazione: si ridisegnano da sole quando altri utenti cambiano i dati
   App.PAGINE_CONSULTAZIONE = ['oggi', 'giacenze', 'scadenze', 'movimenti', 'articoli', 'attivita'];
 
+  // id invariati dalla 2.x, etichette della 3.0 (uguali a server/accessi.js)
   App.RUOLI = {
     amministratore: 'Amministratore',
-    farmacista: 'Farmacista',
-    reparto: 'Reparto',
-    consultazione: 'Consultazione'
+    farmacista: 'Farmacista (farmacia centrale)',
+    reparto: 'Responsabile di magazzino',
+    consultazione: 'Direzione (sola lettura)'
   };
 
   /* ---------- utilità ---------- */
@@ -187,8 +198,17 @@
   App.nomeArticolo = function (id) { var a = App.articolo(id); return a ? a.nome : '(articolo eliminato)'; };
   App.nomeReparto = function (id) { var r = App.reparto(id); return r ? r.nome : '—'; };
 
+  // magazzini attivi (escluso il magazzino di sistema "In transito": la merce in viaggio non sta in nessun magazzino vero)
   App.repartiAttivi = function () {
-    return App.S.reparti.filter(function (r) { return r.attivo !== false; });
+    return App.S.reparti.filter(function (r) { return r.attivo !== false && r.tipo !== 'transito'; });
+  };
+
+  App.magazzinoTransito = function () {
+    return App.S.reparti.filter(function (r) { return r.tipo === 'transito'; })[0] || null;
+  };
+
+  App.magazziniPeriferici = function () {
+    return App.repartiAttivi().filter(function (r) { return !r.centrale && r.tipo !== 'centrale'; });
   };
 
   App.repartoCentrale = function () {
@@ -532,8 +552,15 @@
 
   App.ridisegna = function () { App.mostra(App.paginaCorrente); };
 
+  /* Contatori delle voci del menu (voci con "conta: nome"): ogni parte registra il suo. */
+  var contatori = {};
+  App.registraContatore = function (nome, fn) { contatori[nome] = fn; };
+
   App.disegnaMenu = function () {
     var conte = { scadenze: App.contaScadenze() };
+    Object.keys(contatori).forEach(function (k) {
+      try { conte[k] = Number(contatori[k]()) || 0; } catch (e) { conte[k] = 0; }
+    });
     var voci = [];
     App.MENU.forEach(function (v) {
       if (v.gruppo) { voci.push(v); return; }
@@ -543,7 +570,8 @@
     voci = voci.filter(function (v, i) { return !v.gruppo || (voci[i + 1] && !voci[i + 1].gruppo); });
     document.getElementById('menu').innerHTML = voci.map(function (v) {
       if (v.gruppo) return '<div class="menu-gruppo">' + h(v.gruppo) + '</div>';
-      var c = v.conta && conte[v.conta] ? '<span class="conta" title="Lotti in scadenza o scaduti">' + conte[v.conta] + '</span>' : '';
+      var titoli = { scadenze: 'Lotti in scadenza o scaduti', richieste: 'Richieste da gestire', consegne: 'DDT da preparare o da ricevere' };
+      var c = v.conta && conte[v.conta] ? '<span class="conta" title="' + h(titoli[v.conta] || '') + '">' + conte[v.conta] + '</span>' : '';
       return '<a href="#' + v.id + '" data-pagina="' + v.id + '"' + (v.id === App.paginaCorrente ? ' class="attivo"' : '') + '>' +
         '<span class="ico" aria-hidden="true">' + v.ico + '</span><span class="voce">' + h(v.voce) + '</span>' + c +
         '<kbd title="Tasto rapido">' + v.tasto + '</kbd></a>';

@@ -1,6 +1,6 @@
 {
   "name": "gestionale-farmacia-posillipo",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "private": true,
   "description": "Gestionale carico e scarico farmaci e presidi della Clinica Posillipo - server multiutente",
   "scripts": {

@@ -55,7 +55,7 @@ jobs:
           $t0 = Get-Date
           $stato = Invoke-RestMethod http://localhost:8080/api/stato
           "Risposta da localhost in $([int]((Get-Date) - $t0).TotalMilliseconds) ms"
-          if ($stato.versione -ne '2.1.0') { throw "Il servizio non risponde come previsto" }
+          if ($stato.versione -ne '3.0.0') { throw "Il servizio non risponde come previsto" }
           $att = Get-ScheduledTask -TaskName 'Gestionale Farmacia'
           $att | Format-List TaskName, State
           if ($att.Triggers.Count -ne 2) { throw "Servono due avvii: all'accensione e il controllo ogni 5 minuti" }

@@ -178,8 +178,13 @@
 
   /* ---------- sincronizzazione ---------- */
 
+  // tabelle sincronizzate con il server (stesse chiavi di TABELLE_SYNC in server/db.js)
+  Api.TABELLE = ['reparti', 'articoli', 'movimenti', 'armadi', 'assortimento', 'richieste', 'richiesteRighe', 'ddt', 'ddtRighe'];
+
   function statoVuoto() {
-    return { impostazioni: {}, reparti: [], articoli: [], movimenti: [] };
+    var s = { impostazioni: {} };
+    Api.TABELLE.forEach(function (t) { s[t] = []; });
+    return s;
   }
 
   /*
@@ -195,7 +200,8 @@
       App.S = nuovo;
     }
     var S = App.S;
-    var cambi = { impostazioni: false, reparti: 0, articoli: 0, movimenti: 0, cancellati: 0, completo: !!completo, qualcosa: false };
+    var cambi = { impostazioni: false, cancellati: 0, completo: !!completo, qualcosa: false };
+    Api.TABELLE.forEach(function (t) { cambi[t] = 0; if (!Array.isArray(S[t])) S[t] = []; });
     if (d.impostazioni) { S.impostazioni = Object.assign({}, d.impostazioni); cambi.impostazioni = true; }
     // prima le cancellazioni, poi le righe: una riga ricreata con lo stesso id deve restare
     (Array.isArray(d.cancellati) ? d.cancellati : []).forEach(function (c) {
@@ -205,7 +211,7 @@
       S[t] = S[t].filter(function (x) { return x.id !== c.id; });
       if (S[t].length !== prima) cambi.cancellati++;
     });
-    ['reparti', 'articoli', 'movimenti'].forEach(function (t) {
+    Api.TABELLE.forEach(function (t) {
       var righe = Array.isArray(d[t]) ? d[t] : [];
       if (completo) {
         S[t] = righe.slice();
@@ -221,7 +227,7 @@
       });
       cambi[t] = righe.length;
     });
-    cambi.qualcosa = !!(cambi.impostazioni || cambi.reparti || cambi.articoli || cambi.movimenti || cambi.cancellati);
+    cambi.qualcosa = !!(cambi.impostazioni || cambi.cancellati || Api.TABELLE.some(function (t) { return cambi[t]; }));
     return cambi;
   }
 

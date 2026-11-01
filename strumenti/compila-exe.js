@@ -97,6 +97,11 @@ function preparaBlob() {
   if (fs.existsSync(cartellaGuide)) {
     fs.readdirSync(cartellaGuide).filter((n) => /^[a-z0-9-]+\.(mp4|webm|vtt|jpg|png)$/.test(n)).forEach((n) => { assets['guide/' + n] = path.join(cartellaGuide, n); });
   }
+  // caratteri (fonts/) e marchio della struttura (brand/), letti dai fogli di stile e dalle impostazioni
+  [['fonts', /^[a-z0-9-]+\.woff2$/], ['brand', /^[a-z0-9-]+\.(png|svg|webp)$/]].forEach(([dir, re]) => {
+    const c = path.join(RADICE, dir);
+    if (fs.existsSync(c)) fs.readdirSync(c).filter((n) => re.test(n)).forEach((n) => { assets[dir + '/' + n] = path.join(c, n); });
+  });
   console.log('Interfaccia incorporata: ' + Object.keys(assets).join(', '));
   const conf = {
     main: path.join(BUILD, 'sea', 'server.js'),
@@ -170,6 +175,12 @@ function copiaSupporto(cartella) {
     if (/\.(txt|bat|ps1|json)$/i.test(n)) copiaTesto(da, path.join(cartella, n)); else fs.copyFileSync(da, path.join(cartella, n));
   });
   copiaTesto(path.join(RADICE, 'vendor', 'exceljs.LICENSE'), path.join(cartella, 'LICENZA-ExcelJS.txt'));
+  // licenze delle altre librerie e dei caratteri incorporati (vendor/LICENZE/)
+  const licenze = path.join(RADICE, 'vendor', 'LICENZE');
+  // (lo zip è piatto: un file "LICENZA-<nome>.txt" accanto all'exe per ciascuna)
+  if (fs.existsSync(licenze)) {
+    fs.readdirSync(licenze).filter((n) => /\.txt$/.test(n)).forEach((n) => copiaTesto(path.join(licenze, n), path.join(cartella, 'LICENZA-' + n)));
+  }
 }
 
 function zip(cartella, fileZip) {
