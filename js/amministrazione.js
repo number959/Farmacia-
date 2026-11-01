@@ -349,6 +349,8 @@
     // verifica in due passaggi (parte C)
     'accesso.2fa.attivata': 'Verifica in due passaggi attivata',
     'accesso.2fa.riconfigurata': 'Verifica in due passaggi: telefono cambiato',
+    'accesso.2fa.cambio-telefono-fallito': 'Cambio di telefono: password sbagliata',
+    'accesso.2fa.chiave-annullata': 'Collegamento del telefono annullato (troppi codici sbagliati)',
     'accesso.2fa.disattivata': 'Verifica in due passaggi disattivata',
     'accesso.2fa.disattiva-fallito': 'Disattivazione della verifica non riuscita',
     'accesso.2fa.nuovi-codici': 'Nuovi codici di recupero',
@@ -356,6 +358,7 @@
     'accesso.2fa.fallito': 'Codice della verifica sbagliato',
     'accesso.2fa.codice-riusato': 'Codice della verifica già usato',
     'accesso.2fa.bloccato': 'Verifica bloccata (troppi codici sbagliati)',
+    'accesso.2fa.sfida-annullata': 'Verifica annullata: troppi codici sbagliati',
     'accesso.2fa.recupero': 'Accesso con un codice di recupero',
     'accesso.2fa.ricorda-computer': 'Computer ricordato per 30 giorni',
     'accesso.2fa.dimentica-computer': 'Computer attendibili dimenticati',
@@ -426,7 +429,10 @@
     ricreato: 'ricreata da capo', danneggiato: 'danneggiata', mancante: 'file mancante', nuovo: 'nuova',
     rientro: 'rientro all’origine', perdita: 'perdita in viaggio'
   };
-  var NOMI_METODI = { copia: 'dalla copia + giornale', giornale: 'dal giornale', recupero: 'dal file danneggiato + giornale', vuoto: 'archivio vuoto + giornale', nuovo: 'archivio nuovo' };
+  var NOMI_METODI = {
+    copia: 'dalla copia + giornale', giornale: 'dal giornale', recupero: 'dal file danneggiato + giornale', vuoto: 'archivio vuoto + giornale', nuovo: 'archivio nuovo',
+    coda: 'ultime modifiche riprese dal giornale', 'linea-nuova': 'ripartito da una revisione nuova'
+  };
 
   function nomeAzione(a) {
     if (NOMI_AZIONI[a]) return NOMI_AZIONI[a];
@@ -453,20 +459,32 @@
     // verifica in due passaggi
     dueFattori: 'verifica', tentativo: 'tentativo', tentativi: 'tentativi', codiciRimasti: 'codici rimasti',
     codiciRecupero: 'codici di recupero', giorni: 'giorni', computer: 'computer', daAttivare: 'da attivare',
-    eraAttiva: 'era attiva', dueFattoriAzzerata: 'verifica azzerata',
+    eraAttiva: 'era attiva', dueFattoriAzzerata: 'verifica azzerata', codiciSbagliati: 'codici sbagliati', daServer: 'dal server stesso',
+    cambio: 'cambio di telefono',
     // base dati (pagina Sistema)
     durataMs: 'durata (ms)', copie: 'copie', verificate: 'verificate', riapplicate: 'modifiche riapplicate', percorso: 'cartella',
     file: 'file', metodo: 'come', revCopia: 'revisione della copia', revFinale: 'revisione finale', perse: 'modifiche perse',
     spostatoIn: 'file danneggiato spostato in', revFile: 'revisione del file', revGiornale: 'revisione del giornale',
+    nuova: 'revisione nuova', riassunto: 'cosa manca', scrittureSenzaGiornale: 'scritture non nel giornale',
+    // articoli: caratteristiche, giorni di consegna, fornitore abituale (3.0) e altri campi del modulo
+    attributi: 'caratteristiche', leadTime: 'giorni di consegna', unita: 'unità', principio: 'principio attivo', confezione: 'confezione',
+    codice: 'codice', pezziConfezione: 'pezzi per confezione',
     messaggio: ''
   };
   // dettagli che non si mostrano (l'ora c'è già nella colonna "Quando"; i messaggi tecnici della cura sono nella pagina Sistema)
   var NASCOSTI = { quando: true, messaggi: true };
 
+  // caratteristiche dell'articolo (frigo, stupefacente…) con i nomi brevi del modulo (js/pagine.js)
+  function nomeAttributo(x) {
+    var el = (App.ATTRIBUTI_ARTICOLO || []).filter(function (a) { return a.id === x; })[0];
+    return el ? el.breve : String(x);
+  }
+
   // valore leggibile: id di reparti e articoli diventano nomi, tipi e ruoli in italiano
   function descriviValore(chiave, v, profondita) {
     if (v === null || v === undefined || v === '') return '—';
     if (typeof v === 'boolean') return v ? 'sì' : 'no';
+    if (chiave === 'attributi' && Array.isArray(v)) return v.length ? v.map(nomeAttributo).join(', ') : 'nessuna';
     if ((chiave === 'reparto' || chiave === 'repartoId' || chiave === 'verso' || chiave === 'repartoDestId') && typeof v === 'string') {
       var r = App.S && App.reparto(v);
       return r ? r.nome : v;
@@ -498,11 +516,12 @@
       var parti = v.slice(0, max).map(function (x) { return descriviDettagli(x, profondita + 1); });
       return parti.join('; ') + (v.length > max ? '; e altri ' + (v.length - max) : '');
     }
-    if (typeof v === 'object') return '(' + descriviDettagli(v, profondita + 1) + ')';
+    if (typeof v === 'object') return '(' + descriviDettagli(v, profondita + 1, chiave) + ')';
     return String(v);
   }
 
-  function descriviDettagli(d, profondita) {
+  // campo: la chiave da cui arriva l'oggetto ("cambi", oppure il campo cambiato di { prima, dopo })
+  function descriviDettagli(d, profondita, campo) {
     profondita = profondita || 0;
     if (d === null || d === undefined || d === '') return '';
     if (typeof d === 'string') {
@@ -527,7 +546,10 @@
       return true;
     }).map(function (k) {
       var etichetta = ETICHETTE[k] !== undefined ? ETICHETTE[k] : k;
-      var v = descriviValore(k, d[k], profondita);
+      // "fornitore" di un articolo è il fornitore abituale (in richieste e DDT è il magazzino che fornisce)
+      if (k === 'fornitore' && (d.articolo !== undefined || campo === 'cambi')) etichetta = 'fornitore abituale';
+      // { prima, dopo } di un campo cambiato: i valori si leggono come quelli del campo (nomi dei magazzini, caratteristiche…)
+      var v = descriviValore((k === 'prima' || k === 'dopo') && campo && campo !== 'cambi' ? campo : k, d[k], profondita);
       return etichetta ? etichetta + ': ' + v : v;
     }).join(' · ');
   }

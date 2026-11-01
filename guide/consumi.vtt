@@ -1,25 +1,29 @@
 WEBVTT
 
 1
-00:00:03.107 --> 00:00:11.543
-Apri Consumi del giorno (tasto S). Scegli la data e il reparto: vedi solo i reparti in cui puoi registrare.
+00:00:03.086 --> 00:00:10.589
+Apri «Consumi del giorno» (tasto S). Scegli «Data» e «Reparto»: vedi solo i magazzini in cui puoi registrare.
 
 2
-00:00:11.544 --> 00:00:17.567
-Per trovare prima gli articoli scegli la categoria o cerca per nome.
+00:00:10.589 --> 00:00:17.872
+Per trovare prima gli articoli scegli «Categoria» (farmaci o presidi) o scrivi parte del nome in «Cerca».
 
 3
-00:00:17.570 --> 00:00:24.571
-Nell’ultima colonna scrivi le quantità usate. Invio passa alla riga sotto.
+00:00:17.872 --> 00:00:26.069
+Vedi gli articoli presenti nel magazzino; se quello che cerchi non c’è spunta «Mostra anche gli articoli senza giacenza».
 
 4
-00:00:24.571 --> 00:00:32.513
-Le righe compilate diventano verdi. Accanto vedi la giacenza del reparto e quanto è già registrato.
+00:00:26.090 --> 00:00:34.196
+Nell’ultima colonna scrivi le quantità usate, in unità. Invio passa alla riga sotto; le righe compilate diventano verdi.
 
 5
-00:00:32.513 --> 00:00:40.083
-Premi Registra consumi: la giacenza scende e i consumi finiscono nella nota consumi del mese.
+00:00:34.196 --> 00:00:40.126
+Accanto vedi la giacenza del magazzino e quanto è già registrato in quel giorno.
 
 6
-00:00:40.083 --> 00:00:49.546
-Sotto ci sono i consumi già registrati nel giorno. Hai sbagliato? Annulla il tuo consumo scrivendo il motivo.
+00:00:40.126 --> 00:00:48.453
+Premi «Registra consumi»: si registrano tutte le righe compilate. Se la giacenza non basta, il programma te lo chiede prima.
+
+7
+00:00:48.453 --> 00:00:57.312
+Sotto ci sono i consumi già registrati nel giorno. Hai sbagliato? Premi «Annulla» sul tuo consumo e scrivi il motivo.

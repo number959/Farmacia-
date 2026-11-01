@@ -483,9 +483,10 @@
     var stato = statoArticolo(m.articoloId);
     if (m.lotto && C.disponibilitaLotto(stato, m.articoloId, m.repartoId, m.data, m.lotto) <= 0) {
       throw errore(409, 'Il lotto ' + m.lotto + ' di ' + m.articolo.nome + ' non è più disponibile in ' + m.reparto.nome +
-        ' alla data indicata (forse l’ha appena usato un altro utente): aggiorna e scegli di nuovo il lotto.');
+        ' alla data indicata (forse l’ha appena usato un altro utente, o è già uscito dopo quella data): aggiorna e scegli di nuovo il lotto.');
     }
-    return C.allocaUscita(stato, m.articoloId, m.repartoId, m.data, m.quantita, m.lotto);
+    // la scelta automatica salta i lotti già scaduti finché ce ne sono altri, tranne per le perdite (che li tolgono)
+    return C.allocaUscita(stato, m.articoloId, m.repartoId, m.data, m.quantita, m.lotto, { ancheScaduti: m.tipo === 'perdita' });
   }
 
   function registraMovimenti(ctx, lista) {
@@ -596,6 +597,25 @@
     if (n > 100000) throw errore(400, 'I pezzi per confezione sono troppi (massimo 100000).');
     return n;
   }
+  /* Caratteristiche dell'articolo (come server/operazioni.js): servono alla disposizione negli armadi e alle previsioni. */
+  var ATTRIBUTI = ['frigo', 'stupefacente', 'alto-rischio', 'lasa', 'urgenza'];
+  function validaAttributi(lista) {
+    if (lista === undefined) return undefined;
+    if (lista === null || lista === '') return [];
+    if (!Array.isArray(lista)) throw errore(400, 'Caratteristiche dell’articolo non valide.');
+    lista.forEach(function (x) {
+      if (ATTRIBUTI.indexOf(x) < 0) throw errore(400, 'Caratteristica dell’articolo non valida: ' + String(x).slice(0, 40) + '.');
+    });
+    return ATTRIBUTI.filter(function (x) { return lista.indexOf(x) >= 0; });
+  }
+  /* Giorni di consegna del fornitore: 0–365, vuoto (null) = l'impostazione generale, undefined = non indicati. */
+  function validaLeadTime(v) {
+    if (v === undefined) return undefined;
+    if (v === null || (typeof v === 'string' && !v.trim())) return null;
+    var n = numero(v, 'giorni di consegna');
+    if (n < 0 || n > 365) throw errore(400, 'I giorni di consegna vanno da 0 a 365 (lascia vuoto per usare quelli generali).');
+    return Math.round(n);
+  }
   function validaArticolo(d) {
     if (!d || typeof d !== 'object') throw errore(400, 'Articolo non valido.');
     var nome = testo(d.nome, 200, 'denominazione');
@@ -608,8 +628,20 @@
       prezzo: numero(d.prezzo, 'prezzo', { min: 0, facoltativo: true }),
       scortaMinima: numero(d.scortaMinima, 'scorta minima', { min: 0, facoltativo: true }),
       note: testo(d.note, 1000, 'note'), attivo: d.attivo !== false,
-      barcode: validaCodici(d.barcode), pezziConfezione: validaPezzi(d.pezziConfezione)
+      barcode: validaCodici(d.barcode), pezziConfezione: validaPezzi(d.pezziConfezione),
+      attributi: validaAttributi(d.attributi),
+      leadTime: validaLeadTime(d.leadTime),
+      fornitore: d.fornitore === undefined ? undefined : testo(d.fornitore, 200, 'fornitore abituale')
     };
+  }
+  /* Valori predefiniti (articolo nuovo) o di prima (modifica) per i campi che il client non ha mandato. */
+  function completaArticolo(a, prima) {
+    if (a.barcode === undefined) a.barcode = prima ? prima.barcode.slice() : [];
+    if (a.pezziConfezione === undefined) a.pezziConfezione = prima ? prima.pezziConfezione : 1;
+    if (a.attributi === undefined) a.attributi = prima ? (prima.attributi || []).slice() : [];
+    if (a.leadTime === undefined) a.leadTime = prima ? (prima.leadTime === undefined ? null : prima.leadTime) : null;
+    if (a.fornitore === undefined) a.fornitore = prima ? (prima.fornitore || '') : '';
+    return a;
   }
   function articoloPerNome(nome) {
     var n = String(nome).trim().toLowerCase();
@@ -624,21 +656,23 @@
   function nuovoArticolo(v, id) {
     return { id: id, nome: v.nome, categoria: v.categoria, unita: v.unita || '', principio: v.principio || '', confezione: v.confezione || '', codice: v.codice || '',
       prezzo: v.prezzo || 0, scortaMinima: v.scortaMinima || 0, note: v.note || '', attivo: v.attivo !== false, versione: 1,
-      barcode: v.barcode || [], pezziConfezione: v.pezziConfezione || 1, attributi: [], leadTime: null, fornitore: '' };
+      barcode: v.barcode || [], pezziConfezione: v.pezziConfezione || 1,
+      attributi: v.attributi || [], leadTime: v.leadTime === undefined ? null : v.leadTime, fornitore: v.fornitore || '' };
   }
 
   function creaArticolo(ctx, dati) {
     richiedi(ctx, 'articoli');
-    var a = validaArticolo(dati);
+    var a = completaArticolo(validaArticolo(dati), null);
     if (articoloPerNome(a.nome)) throw errore(409, 'Esiste già un articolo con questo nome.');
-    if (a.barcode === undefined) a.barcode = [];
-    if (a.pezziConfezione === undefined) a.pezziConfezione = 1;
     var id = nuovoId('a');
     var w = scrivi(function (r) {
       controllaCodici(a.barcode, id);
       ins('articoli', nuovoArticolo(a, id), r);
     });
-    evento(ctx, 'articoli.crea', { articolo: a.nome, categoria: a.categoria, barcode: a.barcode.length ? a.barcode : undefined });
+    evento(ctx, 'articoli.crea', {
+      articolo: a.nome, categoria: a.categoria, barcode: a.barcode.length ? a.barcode : undefined,
+      attributi: a.attributi.length ? a.attributi : undefined, leadTime: a.leadTime === null ? undefined : a.leadTime, fornitore: a.fornitore || undefined
+    });
     return { rev: w.rev, articolo: copia(articolo(id)) };
   }
 
@@ -650,13 +684,14 @@
     var a = validaArticolo(dati);
     var doppio = articoloPerNome(a.nome);
     if (doppio && doppio.id !== prima.id) throw errore(409, 'Esiste già un articolo con questo nome.');
-    if (a.barcode === undefined) a.barcode = prima.barcode.slice();
-    if (a.pezziConfezione === undefined) a.pezziConfezione = prima.pezziConfezione;
+    // chi non manda codici a barre, pezzi per confezione, caratteristiche, giorni di consegna o fornitore non li cancella
+    completaArticolo(a, prima);
     var vecchio = copia(prima);
     var w = scrivi(function (r) {
       controllaCodici(a.barcode, prima.id);
       agg('articoli', prima, { nome: a.nome, categoria: a.categoria, unita: a.unita, principio: a.principio, confezione: a.confezione, codice: a.codice,
-        prezzo: a.prezzo, scortaMinima: a.scortaMinima, note: a.note, attivo: a.attivo, barcode: a.barcode, pezziConfezione: a.pezziConfezione, versione: prima.versione + 1 }, r);
+        prezzo: a.prezzo, scortaMinima: a.scortaMinima, note: a.note, attivo: a.attivo, barcode: a.barcode, pezziConfezione: a.pezziConfezione,
+        attributi: a.attributi, leadTime: a.leadTime, fornitore: a.fornitore, versione: prima.versione + 1 }, r);
     });
     var cambi = {};
     Object.keys(a).forEach(function (k) { if (JSON.stringify(a[k]) !== JSON.stringify(vecchio[k])) cambi[k] = { prima: vecchio[k], dopo: a[k] }; });
@@ -687,8 +722,25 @@
     if (S.movimenti.some(function (m) { return m.articoloId === a.id; })) {
       throw errore(409, 'L’articolo ha dei movimenti: non si può eliminare. Togli la spunta “Articolo attivo” per nasconderlo.');
     }
-    var w = scrivi(function (r) { canc('articoli', a, r); });
-    evento(ctx, 'articoli.elimina', { articolo: a.nome });
+    if (S.richiesteRighe.some(function (x) { return x.articoloId === a.id; }) || S.ddtRighe.some(function (x) { return x.articoloId === a.id; })) {
+      throw errore(409, 'L’articolo compare in richieste o DDT: non si può eliminare. Togli la spunta “Articolo attivo” per nasconderlo.');
+    }
+    // l'assortimento è solo configurazione: le righe già tolte (non attive) si cancellano con l'articolo, quelle attive no
+    var ordine = {};
+    repartiOrdinati().forEach(function (r, i) { ordine[r.id] = i; });
+    var nelleScorte = S.assortimento.filter(function (x) { return x.articoloId === a.id && x.attivo; })
+      .sort(function (x, y) { return (ordine[x.repartoId] === undefined ? -1 : ordine[x.repartoId]) - (ordine[y.repartoId] === undefined ? -1 : ordine[y.repartoId]); })
+      .map(function (x) { var rep = reparto(x.repartoId); return rep ? rep.nome : x.repartoId; });
+    if (nelleScorte.length) {
+      throw errore(409, 'L’articolo è nell’assortimento di ' + nelleScorte.join(', ') + ': toglilo prima da Magazzini e assortimento, ' +
+        'oppure togli la spunta “Articolo attivo” per nasconderlo.');
+    }
+    var righe = S.assortimento.filter(function (x) { return x.articoloId === a.id; });
+    var w = scrivi(function (r) {
+      righe.forEach(function (x) { canc('assortimento', x, r); });
+      canc('articoli', a, r);
+    });
+    evento(ctx, 'articoli.elimina', { articolo: a.nome, assortimento: righe.length || undefined });
     return { rev: w.rev };
   }
 
@@ -707,7 +759,11 @@
     }
     var origine = testo(dati.origine, 200, 'origine');
     var validi = lista.map(function (x) {
-      var a = validaArticolo({ nome: x.nome, categoria: x.categoria, prezzo: x.prezzo, scortaMinima: x.scortaMinima, unita: x.unita });
+      if (!x || typeof x !== 'object') throw errore(400, 'Articolo non valido.');
+      var a = completaArticolo(validaArticolo({
+        nome: x.nome, categoria: x.categoria, prezzo: x.prezzo, scortaMinima: x.scortaMinima, unita: x.unita,
+        attributi: x.attributi, leadTime: x.leadTime, fornitore: x.fornitore
+      }), null);
       a.giacenza = numero(x.giacenza, 'giacenza', { facoltativo: true });
       return a;
     });
@@ -719,7 +775,8 @@
         var esiste = articoloPerNome(a.nome);
         var id = esiste ? esiste.id : nuovoId('a');
         if (!esiste) {
-          ins('articoli', nuovoArticolo({ nome: a.nome, categoria: a.categoria, unita: a.unita, prezzo: a.prezzo, scortaMinima: a.scortaMinima }, id), r);
+          ins('articoli', nuovoArticolo({ nome: a.nome, categoria: a.categoria, unita: a.unita, prezzo: a.prezzo, scortaMinima: a.scortaMinima,
+            attributi: a.attributi, leadTime: a.leadTime, fornitore: a.fornitore }, id), r);
           nuovi++;
         }
         if (conGiacenza && a.giacenza > 0) {
@@ -816,6 +873,12 @@
     if (!lista.length) throw errore(400, 'Elenco dei reparti vuoto.');
     var nomi = {};
     nomi[NOME_TRANSITO.toLowerCase()] = 'riservato';
+    // i nomi dei magazzini che non sono nell'elenco restano: niente doppioni nemmeno con loro
+    var inElenco = {};
+    lista.forEach(function (r) { if (r && r.id) inElenco[String(r.id)] = true; });
+    Object.keys(esistenti).forEach(function (id) {
+      if (!inElenco[id] && esistenti[id].tipo !== 'transito') nomi[esistenti[id].nome.toLowerCase()] = true;
+    });
     var centraleVisto = false;
     var norm = lista.map(function (r, i) {
       var nome = testo(r && r.nome, 80, 'nome del reparto');
@@ -830,15 +893,54 @@
       if (centrale) centraleVisto = true;
       return { id: id || nuovoId('r'), nome: nome, centrale: centrale, attivo: r.attivo !== false, ordine: i, nuovo: !id };
     });
-    if (!norm.some(function (r) { return r.attivo; })) throw errore(400, 'Deve restare almeno un reparto attivo.');
+    /*
+     * Interfaccia della 2.x: valgono le stesse regole dei magazzini della 3.0 (come server/operazioni.js). Lo stato finale
+     * comprende anche i magazzini che non sono nell'elenco: una sola farmacia centrale, sempre attiva (sceglierne un'altra
+     * declassa quella di prima a periferico), e un magazzino non si disattiva con DDT da spedire o in viaggio o richieste aperte.
+     */
+    var finale = {};
+    var centraliPrima = 0;
+    Object.keys(esistenti).forEach(function (id) {
+      var e = esistenti[id];
+      if (e.tipo === 'transito') return;
+      var c = e.tipo === 'centrale' || !!e.centrale;
+      if (c) centraliPrima++;
+      finale[id] = { nome: e.nome, centrale: c, attivo: !!e.attivo };
+    });
+    var nuovoCentrale = norm.filter(function (x) { return x.centrale; })[0] || null;
+    norm.forEach(function (x) { finale[x.id] = { nome: x.nome, centrale: x.centrale, attivo: x.attivo }; });
+    if (nuovoCentrale) Object.keys(finale).forEach(function (id) { if (id !== nuovoCentrale.id) finale[id].centrale = false; });
+    var centrali = Object.keys(finale).filter(function (id) { return finale[id].centrale; });
+    if (centrali.length > 1) throw errore(400, 'Ci può essere una sola farmacia centrale: indica quale.');
+    if (!centrali.length && centraliPrima) {
+      throw errore(400, 'Ci vuole sempre una farmacia centrale: per cambiarla, apri il magazzino che deve diventarlo e scegli «Farmacia centrale».');
+    }
+    if (centrali.length && !finale[centrali[0]].attivo) {
+      throw errore(400, 'La farmacia centrale non si può disattivare: prima scegli un altro magazzino come farmacia centrale.');
+    }
+    if (!Object.keys(finale).some(function (id) { return finale[id].attivo; })) throw errore(400, 'Deve restare almeno un reparto attivo.');
+    norm.forEach(function (x) {
+      if (!x.nuovo && esistenti[x.id].attivo && !x.attivo) controllaDisattivazione(esistenti[x.id]);
+    });
+    var exCentrale = null;
+    if (nuovoCentrale) {
+      Object.keys(esistenti).forEach(function (id) {
+        var e = esistenti[id];
+        if (id !== nuovoCentrale.id && e.tipo !== 'transito' && (e.tipo === 'centrale' || e.centrale)) exCentrale = e.nome;
+      });
+    }
     var w = scrivi(function (r) {
+      if (nuovoCentrale) declassaCentrale(r, nuovoCentrale.id);
       norm.forEach(function (x) {
         var tipo = x.centrale ? 'centrale' : 'periferico';
         if (x.nuovo) ins('reparti', { id: x.id, nome: x.nome, centrale: x.centrale, attivo: x.attivo, ordine: x.ordine, tipo: tipo, piano: '', livello: 0, colore: '', descrizione: '' }, r);
         else agg('reparti', esistenti[x.id], { nome: x.nome, centrale: x.centrale, attivo: x.attivo, ordine: x.ordine, tipo: tipo }, r);
       });
     });
-    evento(ctx, 'reparti.modifica', { reparti: norm.map(function (x) { return { id: x.id, nome: x.nome, centrale: x.centrale, attivo: x.attivo, nuovo: x.nuovo }; }) });
+    evento(ctx, 'reparti.modifica', {
+      reparti: norm.map(function (x) { return { id: x.id, nome: x.nome, centrale: x.centrale, attivo: x.attivo, nuovo: x.nuovo }; }),
+      exCentrale: exCentrale || undefined
+    });
     return { rev: w.rev, reparti: repartiOrdinati().map(copia) };
   }
 
@@ -847,6 +949,9 @@
     var rep = reparto(String(id));
     if (!rep) throw errore(404, 'Reparto non trovato.');
     if (rep.tipo === 'transito') throw errore(400, 'Il magazzino «' + NOME_TRANSITO + '» è del programma (la merce in viaggio con i DDT): non si può eliminare.');
+    if (rep.tipo === 'centrale' || rep.centrale) {
+      throw errore(400, 'La farmacia centrale non si elimina: prima scegli un altro magazzino come farmacia centrale.');
+    }
     if (S.movimenti.some(function (m) { return m.repartoId === rep.id || m.repartoDestId === rep.id; })) {
       throw errore(409, 'Il reparto ha dei movimenti: non si può eliminare. Togli la spunta “Attivo” per nasconderlo.');
     }
@@ -1110,13 +1215,32 @@
     if (lista.length > MAX_RIGHE) throw errore(400, 'Troppe righe (massimo ' + MAX_RIGHE + ').');
     var valori = lista.map(function (x, i) {
       if (!x || typeof x !== 'object' || !x.id) throw errore(400, 'Riga ' + (i + 1) + ' non valida.');
-      return { id: String(x.id), approvata: numero(x.approvata, 'quantità approvata', { min: 0 }) };
+      var v = { id: String(x.id), approvata: numero(x.approvata, 'quantità approvata', { min: 0 }) };
+      // l'approvata che il client mostrava (null = non ancora approvata): se nel frattempo è cambiata, 409
+      if (Object.prototype.hasOwnProperty.call(x, 'prima')) {
+        v.controlla = true;
+        v.prima = x.prima === null || x.prima === '' ? null : numero(x.prima, 'quantità approvata di prima', { min: 0 });
+      }
+      return v;
     });
     var cambi = [];
     var nuovoStato = null;
     var w = scrivi(function (r) {
       var ora = richiesta(prima.id);
       controllaInLavorazione(ora, 'approvare');
+      var viste = {};
+      righeRichiesta(ora.id).forEach(function (x) { viste[x.id] = x; });
+      valori.forEach(function (v) {
+        var x = viste[v.id];
+        if (!v.controlla || !x) return;
+        var adesso = x.approvata === null || x.approvata === undefined ? null : r3(x.approvata);
+        if (adesso !== v.prima) {
+          var art = articolo(x.articoloId);
+          var chiE = ora.presaDa && ora.presaDa !== ctx.utente.id ? (ora.presaDaNome || 'un altro utente') : 'un altro utente';
+          throw errore(409, 'Nel frattempo ' + chiE + ' ha cambiato la quantità approvata di ' + (art ? art.nome : 'un articolo') +
+            ' (ora ' + (adesso === null ? 'non approvata' : fmt(adesso)) + '): ho ricaricato la richiesta, controlla e salva di nuovo.');
+        }
+      });
       prendi(ctx, r, ora);
       var perRiga = {};
       avanzamento(ora.id).forEach(function (x) { perRiga[x.rigaId] = x; });
@@ -1178,14 +1302,19 @@
   /* ---------- DDT: preparazione e lotti ---------- */
 
   function nuovaRipartizione(origineId, tranneDdtId) { return { origineId: origineId, tranne: tranneDdtId || '', presi: {} }; }
-  // lotti liberi (FEFO): giacenza dei lotti meno quanto è già in altri DDT in preparazione dallo stesso magazzino
+  // lotti liberi (FEFO): giacenza dei lotti meno quanto è già in altri DDT in preparazione dallo stesso magazzino;
+  // scaduto: true per i lotti già scaduti oggi (la scelta automatica non li spedisce)
   function lottiLiberi(rip, articoloId) {
+    var giorno = oggi();
     var impegnati = {};
     var inPrep = {};
     S.ddt.forEach(function (d) { if (d.stato === 'in_preparazione' && d.origineId === rip.origineId && d.id !== rip.tranne) inPrep[d.id] = true; });
     S.ddtRighe.forEach(function (x) { if (inPrep[x.ddtId] && x.articoloId === articoloId) impegnati[x.lotto] = r3((impegnati[x.lotto] || 0) + x.quantita); });
     return C.lotti(statoArticolo(articoloId), articoloId, rip.origineId).map(function (l) {
-      return { lotto: l.lotto, scadenza: l.scadenza, quantita: r3(l.quantita - (impegnati[l.lotto] || 0) - (rip.presi[articoloId + '|' + l.lotto] || 0)) };
+      return {
+        lotto: l.lotto, scadenza: l.scadenza, scaduto: C.scaduto(l.scadenza, giorno),
+        quantita: r3(l.quantita - (impegnati[l.lotto] || 0) - (rip.presi[articoloId + '|' + l.lotto] || 0))
+      };
     }).filter(function (l) { return l.quantita > 0; });
   }
   function ripartisciDdt(rip, art, quantita, lottoScelto, nomeOrigine) {
@@ -1208,9 +1337,15 @@
       }
       prendiL(scelto);
     }
-    for (var i = 0; i < liberi.length && q > 0; i++) prendiL(liberi[i]);
+    // il lotto scelto a mano vale anche se scaduto (per esempio per un reso); la scelta automatica salta gli scaduti
+    for (var i = 0; i < liberi.length && q > 0; i++) if (!liberi[i].scaduto) prendiL(liberi[i]);
     parti.forEach(function (p) { var k = art.id + '|' + p.lotto; rip.presi[k] = r3((rip.presi[k] || 0) + p.quantita); });
-    return { parti: parti, mancante: q };
+    var scaduti = r3(liberi.reduce(function (t, l) { return t + (l.scaduto ? l.quantita : 0); }, 0));
+    return { parti: parti, mancante: q, scaduti: scaduti };
+  }
+  /* Spiegazione da aggiungere ai messaggi di merce mancante quando una parte è in lotti scaduti. */
+  function notaScaduti(scaduti) {
+    return scaduti > 0 ? ' (altri ' + fmt(scaduti) + ' sono in lotti scaduti: non si spediscono da soli; toglili con una perdita «Scaduto» o, per un reso, scegli il lotto nella riga)' : '';
   }
   function scriviRigheDdt(r, ddtId, righe) {
     S.ddtRighe.filter(function (x) { return x.ddtId === ddtId; }).forEach(function (x) { canc('ddtRighe', x, r); });
@@ -1259,7 +1394,7 @@
       res.parti.forEach(function (p) {
         out.push({ articoloId: x.articolo.id, richiestaRigaId: x.richiestaRigaId, lotto: p.lotto, scadenza: p.scadenza, quantita: p.quantita, nota: x.nota });
       });
-      if (res.mancante > 0) scoperti.push(x.articolo.nome + ' (liberi ' + fmt(x.quantita - res.mancante) + ' su ' + fmt(x.quantita) + ')');
+      if (res.mancante > 0) scoperti.push(x.articolo.nome + ' (liberi ' + fmt(x.quantita - res.mancante) + ' su ' + fmt(x.quantita) + ')' + notaScaduti(res.scaduti));
     });
     if (scoperti.length) {
       throw errore(409, 'In ' + origine.nome + ' non c’è abbastanza merce per: ' + scoperti.join(', ') +
@@ -1338,11 +1473,17 @@
         res.parti.forEach(function (p) {
           parti.push({ articoloId: art.id, richiestaRigaId: x.rigaId, lotto: p.lotto, scadenza: p.scadenza, quantita: p.quantita, nota: x.nota });
         });
-        if (res.mancante > 0) mancanti.push({ articoloId: art.id, articolo: art.nome, richiesta: q, preparata: r3(q - res.mancante) });
+        if (res.mancante > 0) {
+          var m = { articoloId: art.id, articolo: art.nome, richiesta: q, preparata: r3(q - res.mancante) };
+          if (res.scaduti > 0) m.scaduti = res.scaduti;
+          mancanti.push(m);
+        }
       });
       if (!parti.length) {
         if (!av.some(function (x) { return x.residuo > 0; })) throw errore(409, 'Per la richiesta ' + ora.numero + ' non resta niente da preparare: l’approvato è già in DDT o spedito.');
-        throw errore(409, 'In ' + origine.nome + ' non c’è merce libera per gli articoli da preparare: il DDT non è stato creato.');
+        var inScaduti = r3(mancanti.reduce(function (t, x) { return t + (x.scaduti || 0); }, 0));
+        throw errore(409, 'In ' + origine.nome + ' non c’è merce libera per gli articoli da preparare: il DDT non è stato creato.' +
+          (inScaduti > 0 ? ' C’è merce solo in lotti scaduti: toglili con una perdita «Scaduto».' : ''));
       }
       creato = inserisciDdt(ctx, r, { origineId: origine.id, destinazioneId: dest.id, richiestaId: ora.id, causale: causale, colli: colli, note: note }, parti);
     });
@@ -1488,8 +1629,10 @@
     var noteRicezione = testo(dati.note, 500, 'note');
     var c = chi(ctx);
     var differenze = [];
+    var nuovoStatoRichiesta = null;
     var w = scrivi(function (r) {
       differenze = [];
+      nuovoStatoRichiesta = null;
       var d = ddtDi(prima.id);
       if (d.stato === 'in_preparazione') throw errore(409, 'Il DDT ' + d.numero + ' non è ancora partito: si riceve dopo la spedizione.');
       if (d.stato !== 'in_transito') throw erroreStatoDdt(d, 'ricevere');
@@ -1524,8 +1667,12 @@
         agg('ddtRighe', rr, { ricevuta: v.ricevuta, esito: diff > 0 ? v.esito : '', nota: v.nota || rr.nota || '' }, r);
       });
       agg('ddt', d, { stato: differenze.length ? 'ricevuto_con_differenze' : 'ricevuto', ricevutoDa: c.id, ricevutoDaNome: c.nome, ricevutoIl: new Date().toISOString(), noteRicezione: noteRicezione }, r);
+      // la merce rientrata all'origine torna nel residuo della richiesta (come con l'annullo): evasa → in lavorazione
+      if (d.richiestaId) nuovoStatoRichiesta = aggiornaStatoRichiesta(ctx, r, d.richiestaId);
     });
-    evento(ctx, 'ddt.ricevi', { numero: prima.numero, a: dest.nome, differenze: differenze.length ? differenze : undefined });
+    evento(ctx, 'ddt.ricevi', {
+      numero: prima.numero, a: dest.nome, differenze: differenze.length ? differenze : undefined, richiesta: nuovoStatoRichiesta || undefined
+    });
     return rispostaDdt(w.rev, prima.id);
   }
 
@@ -1558,7 +1705,7 @@
 
   function trasportatori(ctx) {
     richiedi(ctx, 'ddt');
-    return { utenti: utentiPerNome().filter(function (u) { return u.attivo; }).map(function (u) { return { id: u.id, nome: u.nome, ruolo: u.ruolo }; }) };
+    return { utenti: utentiPerNome().filter(function (u) { return u.attivo; }).map(function (u) { return { id: u.id, nome: u.nome }; }) };
   }
 
   /* ======================= magazzini, armadi, assortimento (server/struttura.js) ======================= */
@@ -1956,11 +2103,13 @@
   var SFIDA_MS = 5 * 60 * 1000;
   var DISPOSITIVO_MS = 30 * 24 * 60 * 60 * 1000;
   var ATTIVAZIONE_MS = 60 * 60 * 1000;
+  var SFIDE_PER_COMPUTER = 3;       // sfide valide insieme per lo stesso utente (come server/accessi.js)
+  var ERRORI_ATTIVAZIONE_MAX = 10;  // codici sbagliati per la stessa chiave del QR: poi si ricomincia (come server/accessi.js)
   var CODICI_RECUPERO = 10;
   var ALFABETO_RECUPERO = '23456789abcdefghjkmnpqrstuvwxyz';
   var fallitiPerCoppia = {};   // username -> [istanti] (nell'anteprima c'è un solo "computer")
   var erroriSessione = 0;      // password attuali sbagliate nella sessione aperta
-  var sfide = {};              // sfida -> { utenteId, scade }
+  var sfide = {};              // sfida -> { utenteId, scade, creata }
   var attivazioni = {};        // id utente -> { segreto (base32), scade }
   var ultimoErrore2fa = {};
   var dispositivi = [];        // { token, utenteId, scade }: "Ricorda questo computer"
@@ -2022,8 +2171,14 @@
       var attendibile = dispositivi.some(function (d) { return d.utenteId === u.id && d.scade > adesso && dispositiviBrowser.indexOf(d.token) >= 0; });
       if (attendibile) return apriSessione(u, { dueFattori: 'computer attendibile' });
       if ((u.bloccatoFino || 0) > adesso) throw errore(429, messaggioBlocco2fa(u.bloccatoFino, adesso));
+      // al massimo 3 sfide valide insieme per lo stesso utente dallo stesso computer (nell'anteprima ce n'è uno solo):
+      // la più vecchia non vale più, come server/accessi.js nuovaSfida
+      Object.keys(sfide).forEach(function (k) { if (sfide[k].scade <= adesso) delete sfide[k]; });
+      var stesse = Object.keys(sfide).filter(function (k) { return sfide[k].utenteId === u.id; })
+        .sort(function (a, b) { return sfide[a].creata - sfide[b].creata; });
+      stesse.slice(0, Math.max(0, stesse.length - SFIDE_PER_COMPUTER + 1)).forEach(function (k) { delete sfide[k]; });
       var s = token();
-      sfide[s] = { utenteId: u.id, scade: adesso + SFIDA_MS };
+      sfide[s] = { utenteId: u.id, scade: adesso + SFIDA_MS, creata: adesso };
       return { dueFattori: true, sfida: s };
     }
     return apriSessione(u, {});
@@ -2235,13 +2390,21 @@
       giorniDispositivo: DISPOSITIVO_MS / 86400000, oraServer: new Date().toISOString()
     };
   }
-  function inizia2fa(ctx) {
+  // cambio di telefono (verifica già attiva): serve la password, come in server/accessi.js inizia2fa; prima attivazione no
+  function inizia2fa(ctx, password) {
     var u = ctx.utente;
+    var cambio = !!u.totpAttivo;
+    if (cambio) {
+      if (password === undefined || password === null || password === '') throw errore(400, 'Per collegare un telefono nuovo scrivi la tua password.', { servePassword: true });
+      if (!passwordGiusta(u, String(password).slice(0, 200))) erroreSessione(ctx, 'accesso.2fa.cambio-telefono', 'La password non è giusta.');
+      erroriSessione = 0;
+    }
     var base32 = T().base32Codifica(T().segretoCasuale(20));
-    attivazioni[u.id] = { segreto: base32, scade: Date.now() + ATTIVAZIONE_MS };
+    // l'anteprima ha una sessione sola: il legame con la sessione del server vero (409 da un'altra sessione) qui non serve
+    attivazioni[u.id] = { segreto: base32, scade: Date.now() + ATTIVAZIONE_MS, cambio: cambio, errori: 0 };
     var em = emittente();
     return { segretoBase32: base32, chiave: T().formattaChiave(base32), uri: T().uriOtpauth({ emittente: em, utente: u.username, segretoBase32: base32 }),
-      emittente: em, utente: u.username, cambio: !!u.totpAttivo, oraServer: new Date().toISOString() };
+      emittente: em, utente: u.username, cambio: cambio, oraServer: new Date().toISOString() };
   }
   function conferma2fa(ctx, codice) {
     var u = ctx.utente;
@@ -2249,9 +2412,19 @@
     var att = attivazioni[u.id];
     if (att && att.scade <= adesso) { delete attivazioni[u.id]; att = null; }
     if (!att) throw errore(409, 'La chiave mostrata non vale più (è passata più di un’ora o il server è stato riavviato). Ricomincia: il programma ne mostrerà una nuova.', { ricomincia: true });
+    if (u.totpAttivo && !att.cambio) {
+      throw errore(409, 'La verifica in due passaggi è già attiva: per collegare un telefono nuovo serve la tua password. Ricomincia da «Cambia telefono».', { ricomincia: true, servePassword: true });
+    }
     var passo = T().verifica(att.segreto, codice, adesso, { finestra: 1 });
     if (passo < 0) {
-      throw errore(400, /^\s*\d{3}\s*-?\s*\d{3}\s*$/.test(String(codice || ''))
+      var formatoGiusto = /^\d{6}$/.test(String(codice === undefined || codice === null ? '' : codice).replace(/[\s-]+/g, ''));
+      if (formatoGiusto) att.errori = (att.errori || 0) + 1;
+      if (att.errori >= ERRORI_ATTIVAZIONE_MAX) {
+        delete attivazioni[u.id];
+        evento(ctx, 'accesso.2fa.chiave-annullata', { codiciSbagliati: att.errori, cambio: !!u.totpAttivo });
+        throw errore(409, 'Troppi codici sbagliati: per sicurezza quella chiave non vale più. Togli dall’app il collegamento appena aggiunto e ricomincia: il programma mostrerà un codice QR nuovo.', { ricomincia: true });
+      }
+      throw errore(400, formatoGiusto
         ? 'Il codice non è giusto. Controlla di aver inquadrato il codice QR qui sopra (o scritto bene la chiave) e che l’ora del telefono sia impostata in automatico.'
         : 'Scrivi le 6 cifre che mostra l’app.');
     }
@@ -2264,6 +2437,7 @@
     u.codiciRecupero = codici.hash;
     u.tentativi2fa = 0;
     delete attivazioni[u.id];
+    delete ultimoErrore2fa[u.id]; // gli errori erano per la chiave vecchia
     evento(ctx, giaAttiva ? 'accesso.2fa.riconfigurata' : 'accesso.2fa.attivata', { codiciRecupero: CODICI_RECUPERO });
     return { codiciRecupero: codici.chiari, utente: vistaUtente(u) };
   }
@@ -2448,10 +2622,17 @@
     var x = copie.filter(function (c) { return c.nome === nome && c.prefisso === 'farmacia'; })[0];
     if (!x) throw errore(404, 'Copia non trovata.');
     var sicurezza = nuovaCopia('farmacia', 'prima-del-ripristino', new Date(), istantanea());
+    // i numeri di richieste e DDT già dati (anche dopo la copia) restano usati, come server/backup.js
+    // (leggiContatori prima del ripristino, portaContatori dopo)
+    var contatori = {};
+    Object.keys(meta).forEach(function (k) { if (/^prog_(ric|ddt)_\d{4}$/.test(k)) contatori[k] = Number(meta[k]) || 0; });
+    S.richieste.forEach(function (r) { var k = 'prog_ric_' + r.anno; contatori[k] = Math.max(contatori[k] || 0, r.progressivo); });
+    S.ddt.forEach(function (d) { var k = 'prog_ddt_' + d.anno; contatori[k] = Math.max(contatori[k] || 0, d.progressivo); });
     var dati = JSON.parse(x.dati || datiIniziali);
     TABELLE.forEach(function (t) { S[t] = dati[t]; });
     S.impostazioni = dati.impostazioni;
     meta = dati.meta || {};
+    Object.keys(contatori).forEach(function (k) { if (contatori[k] > (Number(meta[k]) || 0)) meta[k] = contatori[k]; });
     rev++;
     revBase = rev;
     revRiga = {};
@@ -2741,7 +2922,7 @@
   // verifica in due passaggi (server/sicurezza.js)
   var ADMIN = P('sicurezza');
   rotta('GET', '/api/2fa', DA_ATTIVARE, function (ctx) { return stato2fa(ctx.utente); });
-  rotta('POST', '/api/2fa/inizia', DA_ATTIVARE, function (ctx) { return inizia2fa(ctx); });
+  rotta('POST', '/api/2fa/inizia', DA_ATTIVARE, function (ctx) { return inizia2fa(ctx, ctx.corpo.password); });
   rotta('POST', '/api/2fa/conferma', DA_ATTIVARE, function (ctx) { return conferma2fa(ctx, ctx.corpo.codice); });
   rotta('POST', '/api/2fa/disattiva', {}, function (ctx) { return disattiva2fa(ctx, ctx.corpo.password, ctx.corpo.codice); });
   rotta('POST', '/api/2fa/codici', {}, function (ctx) { return nuoviCodici2fa(ctx, ctx.corpo.password); });
@@ -2951,7 +3132,11 @@
     // un collega della Degenza 1° piano registra un consumo (per vedere gli aggiornamenti in tempo reale)
     collega: function () {
       var luca = utente('u-reparto');
-      var conGiacenza = S.articoli.filter(function (a) { return C.giacenza(statoArticolo(a.id), a.id, 'r-degenza') >= 1; });
+      // solo articoli con almeno un pezzo in un lotto non scaduto: il collega non usa i lotti scaduti
+      var giorno = oggi();
+      var conGiacenza = S.articoli.filter(function (a) {
+        return C.lotti(statoArticolo(a.id), a.id, 'r-degenza').some(function (l) { return l.quantita >= 1 && !C.scaduto(l.scadenza, giorno); });
+      });
       if (!conGiacenza.length || !luca) return null;
       var a = conGiacenza[Math.floor(Math.random() * conGiacenza.length)];
       var prima = sessione;

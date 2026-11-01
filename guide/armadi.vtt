@@ -1,0 +1,37 @@
+WEBVTT
+
+1
+00:00:03.087 --> 00:00:11.414
+Apri «Armadi» (tasto B) e scegli il «Magazzino»: sotto compaiono i suoi armadi, frigorifero, cassettiere, carrelli e cassaforte.
+
+2
+00:00:11.416 --> 00:00:20.408
+In «Dove si trova?» scrivi il nome di un farmaco, o leggi la confezione con il lettore: si apre l’armadio giusto e la sua scatola lampeggia.
+
+3
+00:00:20.408 --> 00:00:29.664
+Ogni scatola è un articolo al suo posto (ripiano e posto). Colore e segno dicono lo stato: regolare, ↻ da riordinare, ! sotto la scorta minima, ∅ esaurito, ⏳ lotti in scadenza, ⚠ lotti scaduti.
+
+4
+00:00:29.664 --> 00:00:38.840
+L’altezza della scatola dice quanta merce c’è rispetto alla scorta massima. Tocca uno stato nella legenda per far risaltare solo quelle scatole.
+
+5
+00:00:38.840 --> 00:00:48.115
+Tocca una scatola: nel pannello a destra vedi giacenza, scorte, lotti e scadenze, con i pulsanti «💊 Consumi», «🗑️ Perdite», «📝 Nuova richiesta» e «🏷️ Scheda articolo».
+
+6
+00:00:48.124 --> 00:01:00.151
+Per sistemare gli articoli premi «✋ Disponi» e trascina un articolo dall’elenco in una casella (con il mouse, o con il dito sulla maniglia ⠿).
+
+7
+00:01:00.151 --> 00:01:08.790
+Trascina una scatola su un’altra casella per spostarla, oppure sull’elenco per toglierla. Da tastiera: «Metti», poi le frecce e Invio.
+
+8
+00:01:08.790 --> 00:01:19.280
+«✨ Disposizione automatica» sistema da sola gli articoli senza posto, per categoria e nome: nel frigorifero mette solo gli articoli con la spunta «Da frigorifero 2–8 °C», nella cassaforte solo quelli con «Stupefacente (cassaforte)». «Svuota» toglie tutto dall’armadio.
+
+9
+00:01:19.280 --> 00:01:25.962
+Ogni spostamento si salva subito. Quando hai finito premi «✓ Fine disposizione».

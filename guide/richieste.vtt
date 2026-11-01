@@ -1,0 +1,37 @@
+WEBVTT
+
+1
+00:00:03.077 --> 00:00:11.071
+Apri «Richieste» (tasto Q) e premi «+ Nuova richiesta». «Magazzino che chiede» è il tuo, «Chiedi a» è già la farmacia centrale.
+
+2
+00:00:11.071 --> 00:00:16.456
+Spunta «Urgente» solo se serve subito: la farmacia la vede in cima, in rosso.
+
+3
+00:00:16.456 --> 00:00:25.368
+Premi «✨ Proponi le quantità»: per gli articoli dell’assortimento arrivati al punto di riordino il programma propone quanto serve per tornare alla scorta massima.
+
+4
+00:00:25.368 --> 00:00:36.203
+Aggiungi o correggi le righe: articolo e quantità (anche leggendo le confezioni con il lettore). Sotto la riga vedi giacenza, scorta e merce libera in farmacia.
+
+5
+00:00:36.203 --> 00:00:44.621
+Scrivi se serve le «Note per la farmacia (facoltative)», poi premi «📨 Invia la richiesta» (oppure «Salva come bozza» per finirla dopo).
+
+6
+00:00:44.636 --> 00:00:55.495
+Farmacia: apri la scheda «Da evadere» e tocca la richiesta; premi «✋ Prendi in carico» così il magazzino sa che te ne occupi.
+
+7
+00:00:55.495 --> 00:01:04.445
+Controlla la colonna «Approvata»: puoi approvare di meno, o di più per arrivare alla confezione intera. «Libera» dice quanto hai senza la merce già in altri DDT.
+
+8
+00:01:04.445 --> 00:01:13.124
+Premi «📦 Prepara DDT»: il programma prepara il documento di trasporto con quello che resta da spedire, scegliendo i lotti che scadono prima.
+
+9
+00:01:13.124 --> 00:01:25.174
+Se non si può evadere premi «Rifiuta» e scrivi il motivo; dopo un DDT parziale «Chiudi con residuo» chiude la richiesta senza spedire il resto.

@@ -83,12 +83,14 @@ dati/
    (se ci sono copie) va in `danneggiati/` e si cura (vedi [Base dati che si cura da sola](#base-dati-che-si-cura-da-sola));
 3. apertura del database e aggiornamento automatico dello schema (`creaSchemaDati`, `creaSchemaAccessi`);
 4. giornale (`Giornale.collega()` su `database.dopoScrittura`), copie (`Backup`), `salute.collega()`: riapplicazione dal
-   giornale delle scritture perse in uno spegnimento improvviso, copia dopo un'eventuale cura;
-5. server HTTP o HTTPS in ascolto, poi `salute.avviato()`: ogni 5 minuti copie orarie, verifica di una copia vecchia,
+   giornale delle scritture perse in uno spegnimento improvviso (o linea nuova "con perdite"), confronto con il registro
+   attività, copia dopo un'eventuale cura;
+5. server HTTP o HTTPS in ascolto, poi `salute.avviato()`: checkpoint completo del WAL nel file e voce `avvio` durevole
+   nel giornale; ogni 5 minuti copie orarie, verifica di una copia vecchia, giornale nuovo nella seconda cartella,
    campione della crescita, controllo completo notturno (fra le 2 e le 6, o subito se manca da più di 3 giorni).
 
-All'arresto ordinato (`SIGINT`, `SIGTERM`, `SIGBREAK`): copia finale se c'è stato lavoro, chiusura del giornale, delle
-notifiche e del database. Prima dell'avvio completo un errore va in `log/errori-avvio.log`; dopo, un errore imprevisto si
+All'arresto ordinato (`SIGINT`, `SIGTERM`, `SIGBREAK`): copia finale se c'è stato lavoro, checkpoint completo e voce
+`chiusura` durevole nel giornale, chiusura del giornale, delle notifiche e del database. Prima dell'avvio completo un errore va in `log/errori-avvio.log`; dopo, un errore imprevisto si
 registra e il server resta acceso.
 
 ## Ruoli e permessi
@@ -135,8 +137,17 @@ permessi = {
 - 5 password attuali sbagliate in `POST /api/password` (o nelle rotte 2FA che chiedono la password) chiudono la sessione.
 - **Verifica in due passaggi (TOTP, RFC 6238)**: SHA-1, 6 cifre, passo 30 s, finestra ±1 passo; segreto di 20 byte cifrato
   AES-256-GCM con `dati/chiave-2fa.key` (creata al primo uso, mai sostituita se rovinata: errore chiaro); un codice dello
-  stesso passo non vale due volte (`totp_ultimo_passo`); 5 codici sbagliati bloccano l'utente per 15 minuti (non dal
-  server stesso); 10 codici di recupero monouso salvati come SHA-256 con l'id dell'utente (valgono anche senza la chiave).
+  stesso passo non vale due volte (`totp_ultimo_passo`); 5 codici sbagliati bloccano l'utente per 15 minuti; 10 codici di
+  recupero monouso salvati come SHA-256 con l'id dell'utente (valgono anche senza la chiave).
+- **Dal server stesso** (`127.0.0.1`/`::1`, l'accesso d'emergenza) nessun blocco, ma la sfida si annulla dopo 10 codici
+  sbagliati (401 `sfidaScaduta`: si riscrive la password; evento `accesso.2fa.sfida-annullata`); dopo 20 codici
+  sbagliati in 15 minuti per lo stesso utente, una sfida nuova solo ogni 30 s (429 `attesaSecondi`). Da qualsiasi
+  computer al massimo 3 sfide valide insieme per (utente, computer): la più vecchia decade. Una conferma riuscita di un
+  telefono nuovo azzera questi contatori (che stanno solo in memoria).
+- **Cambio di telefono** (2FA già attiva): `POST /api/2fa/inizia` chiede la password, come disattivare la 2FA o creare
+  codici nuovi (5 password sbagliate chiudono la sessione, evento `accesso.2fa.cambio-telefono-fallito`). La chiave nuova
+  vale solo per la sessione che l'ha chiesta e decade dopo 10 codici sbagliati (`accesso.2fa.chiave-annullata`). La
+  prima attivazione non chiede di nuovo la password.
   "Ricorda questo computer": cookie `gf_dispositivo` 30 giorni, `HttpOnly; SameSite=Strict; Path=/api/login`, fino a 5
   utenti per browser, sul server solo l'hash (tabella `dispositivi`).
 - Criterio `richiedi2fa` (`nessuno` | `amministratori` | `farmacisti` = amministratori e farmacisti | `tutti`): chi deve
@@ -171,9 +182,9 @@ permessi = {
 | Tabella | Colonne (oltre a `rev`, la revisione dell'ultima modifica, usata per la sincronizzazione) |
 |---|---|
 | `impostazioni` | `chiave`, `valore` (JSON) |
-| `meta` | `chiave`, `valore`: `rev`, `rev_base` (linea della storia), `sessione`, `prog_ric_AAAA`, `prog_ddt_AAAA` |
+| `meta` | `chiave`, `valore`: `rev`, `rev_base` (linea della storia), `sessione` (avvio che ha aperto il file: solo informativo, la cura non lo usa più), `prog_ric_AAAA`, `prog_ddt_AAAA` (portati avanti da ripristini e cure: un numero già usato non si riassegna) |
 | `reparti` (magazzini) | `id`, `nome`, `centrale`, `attivo`, `ordine`; **3.0:** `tipo` (`centrale` \| `periferico` \| `transito`), `piano`, `livello` (−1, 0, 1…), `colore` (`''` o `#rrggbb`), `descrizione` |
-| `articoli` | `id`, `nome`, `categoria`, `unita`, `principio`, `confezione`, `codice`, `prezzo`, `scorta_minima`, `note`, `attivo`, `versione`, `barcode` (JSON), `pezzi_confezione`; **3.0:** `attributi` (JSON: `frigo`, `stupefacente`, `alto-rischio`, `lasa`, `urgenza`), `lead_time`, `fornitore` |
+| `articoli` | `id`, `nome`, `categoria`, `unita`, `principio`, `confezione`, `codice`, `prezzo`, `scorta_minima`, `note`, `attivo`, `versione`, `barcode` (JSON), `pezzi_confezione`; **3.0:** `attributi` (JSON: `frigo`, `stupefacente`, `alto-rischio`, `lasa`, `urgenza`), `lead_time` (giorni di consegna, NULL = impostazione generale), `fornitore` (fornitore abituale) |
 | `movimenti` | `id`, `tipo`, `data`, `articolo_id`, `reparto_id`, `reparto_dest_id`, `quantita`, `lotto`, `scadenza`, `fornitore`, `documento`, `causale`, `note`, `prezzo`, `operatore`, `utente_id`, `creato`, annullo; **3.0:** `ddt_id` |
 | `armadi` | `id`, `reparto_id`, `nome`, `tipo` (`armadio` \| `frigorifero` \| `cassettiera` \| `carrello` \| `cassaforte`), `ripiani` (1–12), `colonne` (1–20), `ordine`, `colore`, `note`, `attivo` |
 | `assortimento` | `id`, `reparto_id`, `articolo_id` (UNIQUE con il magazzino), `scorta_min`, `punto_riordino`, `scorta_max`, `armadio_id`, `ripiano`, `posizione`, `note`, `attivo` |
@@ -226,7 +237,21 @@ utente       = { id, username, nome, ruolo, reparti: [id], attivo, cambioPasswor
 
 `js/calcoli.js` (condiviso con il server) calcola giacenze per magazzino e lotto, ripartizione FEFO, Nota consumi,
 avanzamento delle richieste (`Calcoli.avanzamentoRichiesta`: approvato, spedito, in preparazione, residuo per riga) e
-disponibilità libera dei lotti (giacenza meno quanto è già in DDT in preparazione).
+disponibilità libera dei lotti (giacenza meno quanto è già in DDT in preparazione). Regole da sapere:
+
+- **Rientri** (DDT annullato in viaggio, differenza "rientra" alla ricezione: `trasferimento` da "In transito" al
+  magazzino d'origine, con `ddtId`): non sono un carico. Nella Nota consumi tolgono l'uscita del giorno della partenza se
+  è nello stesso mese (un DDT partito e annullato nel mese sparisce dal modulo), altrimenti quella del giorno del rientro
+  (la casella può risultare negativa). `Calcoli.partenzeDdt(stato, repartoId)` e `Calcoli.rientroAllOrigine(m, repartoId,
+  partenze)` li riconoscono; le usano anche le previsioni e "Proponi dai consumi". Ogni riga della Nota ha `trasferiti`
+  (la parte delle caselle dei consumi che non è un consumo registrato).
+- **Residuo della richiesta**: la quantità rientrata alla ricezione non conta come spedita e torna nel residuo (si può
+  rispedire); la perdita in viaggio resta spedita.
+- **Uscite con data passata** (`Calcoli.lottiDisponibili`): da ogni lotto al massimo il minimo fra la giacenza a quella
+  data e quella di oggi, così un consumo registrato in ritardo non prende un lotto già uscito dopo.
+- **Lotti scaduti** (`Calcoli.scaduto`, `allocaUscita`): la scelta automatica di consumi e trasferimenti li salta finché
+  ci sono altri lotti (se restano solo quelli li usa, invece di lasciare un debito "senza lotto"); le perdite
+  (`ancheScaduti`) li prendono in ordine di scadenza come gli altri. Un lotto scelto a mano vale anche se scaduto.
 
 ## API
 
@@ -242,12 +267,12 @@ Ogni scrittura risponde con la nuova revisione `rev`, va nel registro attività 
 | `GET /api/stato` (pubblica) | | `{ inizializzato, daServer, nomeProdotto, sigla, struttura, sottotitolo, logo, coloreAccento, tema, versione, utente\|null, permessi\|null }` |
 | `POST /api/setup` (nessun utente, solo dal server) | `{ username, nome, password }` | come `/api/stato`, con la sessione aperta |
 | `POST /api/login` | `{ username, password }` | `{ utente, permessi }` + cookie; **oppure** `{ dueFattori: true, sfida }` senza sessione se l'utente ha la 2FA e il computer non è attendibile |
-| `POST /api/login/2fa` | `{ sfida, codice \| codiceRecupero, ricorda }` | `{ utente, permessi, codiciRimasti? }` + cookie (e `gf_dispositivo` con `ricorda`). 400 codice sbagliato (`tentativiRimasti`) o già usato (`codiceUsato`), 401 sfida scaduta (`sfidaScaduta`: 5 minuti, stesso IP, una volta sola), 429 blocco |
+| `POST /api/login/2fa` | `{ sfida, codice \| codiceRecupero, ricorda }` | `{ utente, permessi, codiciRimasti? }` + cookie (e `gf_dispositivo` con `ricorda`). 400 codice sbagliato (`tentativiRimasti`) o già usato (`codiceUsato`), 401 sfida scaduta (`sfidaScaduta`: 5 minuti, stesso IP, una volta sola, al massimo 10 codici sbagliati), 429 blocco (dalla rete) o attesa (`attesaSecondi`, dal server stesso) |
 | `POST /api/logout` | | `{ ok: true }` |
 | `POST /api/password` | `{ attuale, nuova }` | `{ ok: true, utente }`; chiude le altre sessioni |
 | `GET /api/2fa` | | `{ attiva, attivataIl, obbligatoria, daAttivare, criterio, codiciRimasti, dispositivi, giorniDispositivo, oraServer }` |
-| `POST /api/2fa/inizia` | | `{ segretoBase32, chiave, uri /* otpauth:// */, emittente /* nomeProdotto */, utente, cambio, oraServer }`; la chiave resta in memoria un'ora finché non si conferma (un "Cambia telefono" non spegne quella attiva) |
-| `POST /api/2fa/conferma` | `{ codice }` | `{ codiciRecupero: [10], utente }`; chiude le altre sessioni dell'utente; 409 `ricomincia` se la chiave è scaduta |
+| `POST /api/2fa/inizia` | `{ password? }` (obbligatoria se la 2FA è già attiva: cambio di telefono) | `{ segretoBase32, chiave, uri /* otpauth:// */, emittente /* nomeProdotto */, utente, cambio, oraServer }`; la chiave resta in memoria un'ora finché non si conferma (un "Cambia telefono" non spegne quella attiva) e vale solo per questa sessione. Cambio di telefono senza password: 400 `servePassword` (non conta come errore); password sbagliata: 400, alla quinta 401 e sessione chiusa |
+| `POST /api/2fa/conferma` | `{ codice }` | `{ codiciRecupero: [10], utente }`; chiude le altre sessioni dell'utente; 409 `ricomincia` se la chiave è scaduta, se è stata chiesta da un'altra sessione o dopo 10 codici sbagliati (anche `servePassword` se la 2FA è stata attivata dopo aver chiesto la chiave senza password) |
 | `POST /api/2fa/disattiva` | `{ password, codice }` | `{ utente }`; 409 se il criterio la richiede |
 | `POST /api/2fa/codici` | `{ password }` | `{ codiciRecupero }` (i vecchi non valgono più) |
 | `DELETE /api/2fa/dispositivi` | | `{ ok, tolti }` e toglie il cookie |
@@ -266,10 +291,10 @@ Ogni scrittura risponde con la nuova revisione `rev`, va nel registro attività 
 
 | Metodo e percorso | Corpo | Note |
 |---|---|---|
-| `POST /api/movimenti` | `{ movimenti: [ { tipo, data, articoloId, repartoId, repartoDestId?, quantita, lotto?, scadenza?, fornitore?, documento?, causale?, note?, prezzo?, teorica? } ] }` | Tutti nella stessa transazione (massimo 500). `consumo`, `perdita`, `trasferimento` si ripartiscono sui lotti (FEFO, prima il `lotto` indicato; 409 se non c'è più). `rettifica` ha la quantità con segno e `teorica` (409 se la giacenza è cambiata). Un `carico` con `prezzo` aggiorna il prezzo dell'articolo. "In transito" non si usa qui (400). `{ rev, movimenti }` |
+| `POST /api/movimenti` | `{ movimenti: [ { tipo, data, articoloId, repartoId, repartoDestId?, quantita, lotto?, scadenza?, fornitore?, documento?, causale?, note?, prezzo?, teorica? } ] }` | Tutti nella stessa transazione (massimo 500). `consumo`, `perdita`, `trasferimento` si ripartiscono sui lotti (FEFO, prima il `lotto` indicato; 409 se non c'è più, anche alla data indicata). La scelta automatica salta i lotti scaduti tranne per le perdite; con una data passata si prende da ogni lotto al massimo il minimo fra la giacenza a quella data e quella di oggi. `rettifica` ha la quantità con segno e `teorica` (409 se la giacenza è cambiata). Un `carico` con `prezzo` aggiorna il prezzo dell'articolo. "In transito" non si usa qui (400). `{ rev, movimenti }` |
 | `POST /api/movimenti/:id/annulla` | `{ motivo }` | `{ rev }`; 409 per i movimenti con `ddtId` (si annulla il DDT) |
 | `POST /api/consumo-giorno` | `{ articoloId, repartoId, data, quantita, prima }` | Correzione dalla Nota consumi; 409 se `prima` non è più il consumo registrato. `{ rev }` |
-| `POST /api/articoli`, `PUT /api/articoli/:id`, `DELETE /api/articoli/:id` | articolo (`versione` in PUT) | 409 nome doppio o `versione` superata; DELETE solo senza movimenti |
+| `POST /api/articoli`, `PUT /api/articoli/:id`, `DELETE /api/articoli/:id` | articolo (`versione` in PUT); 3.0: `attributi` (fra `frigo`, `stupefacente`, `alto-rischio`, `lasa`, `urgenza`, senza doppioni), `leadTime` (giorni interi 0–365, `null` = impostazione generale), `fornitore` (fino a 200 caratteri) | 409 nome doppio o `versione` superata; 400 caratteristica o giorni non validi. Chi non manda i campi nuovi (client vecchi, importazioni) non li cancella. DELETE: 409 se l'articolo ha movimenti, se compare in richieste o DDT, o se è nell'assortimento attivo di un magazzino (con il nome del magazzino); le righe di assortimento non attive si cancellano con lui |
 | `POST /api/articoli/importa` | `{ articoli: [...], repartoId, data, conGiacenza, origine }` | `{ rev, nuovi, carichi, saltati }` |
 | `POST /api/articoli/:id/barcode` | `{ chiave }` | permesso `articoli`; `{ rev, articolo }` (vedi [Codici a barre](#codici-a-barre)) |
 
@@ -286,23 +311,25 @@ scrivibile. Le richieste rispondono `{ rev, richiesta, righe }`, i DDT `{ rev, d
 | `POST /api/richieste/:id/invia` | | `bozza` → `inviata` |
 | `POST /api/richieste/:id/annulla` | `{ motivo? }` | da `bozza` o `inviata` → `annullata` |
 | `POST /api/richieste/:id/prendi` | | `inviata` → `in_lavorazione`; `approvata` = `quantita` per le righe senza approvazione; 409 se presa da un altro |
-| `POST /api/richieste/:id/approva` | `{ righe: [{ id, approvata }] }` | prende in carico se serve; 409 se si approva meno di quanto è già in DDT o spedito; può portare a `evasa` |
+| `POST /api/richieste/:id/approva` | `{ righe: [{ id, approvata, prima? }] }` | prende in carico se serve; 409 se si approva meno di quanto è già in DDT o spedito; può portare a `evasa`. `prima` è l'approvata che la pagina mostrava (`null` = non ancora approvata): se nel frattempo un altro l'ha cambiata, 409 «Nel frattempo X ha cambiato la quantità approvata di …» e la pagina si ricarica. Senza `prima` nessun controllo (client vecchi) |
 | `POST /api/richieste/:id/rifiuta` | `{ motivo }` (obbligatorio) | → `rifiutata`; 409 se ha già DDT non annullati (si chiude con residuo) |
 | `POST /api/richieste/:id/chiudi` | `{ motivo? }` | → `chiusa` (con residuo); 409 se un suo DDT è ancora in preparazione |
-| `POST /api/richieste/:id/ddt` | `{ righe?: [{ rigaId, quantita }], causale?, colli?, note? }` | DDT `in_preparazione` dal residuo approvato (o dalle quantità indicate, 0 = non in questo DDT), ripartito sui lotti liberi FEFO. Se la merce non basta prepara quello che c'è: risposta con in più `mancanti: [{ articoloId, articolo, richiesta, preparata }]` e `richiesta`; 409 se non c'è niente da preparare |
-| `POST /api/ddt` | `{ origineId, destinazioneId, causale?, colli? (1–999), note?, righe: [{ articoloId, quantita, lotto?, nota? }] }` | DDT senza richiesta (pagina Trasferimenti, resi). 409 con l'elenco se la merce libera non basta |
+| `POST /api/richieste/:id/ddt` | `{ righe?: [{ rigaId, quantita }], causale?, colli?, note? }` | DDT `in_preparazione` dal residuo approvato (o dalle quantità indicate, 0 = non in questo DDT), ripartito sui lotti liberi FEFO **non scaduti**. Se la merce non basta prepara quello che c'è: risposta con in più `mancanti: [{ articoloId, articolo, richiesta, preparata, scaduti? }]` e `richiesta`; 409 se non c'è niente da preparare (con «C'è merce solo in lotti scaduti…» se è così) |
+| `POST /api/ddt` | `{ origineId, destinazioneId, causale?, colli? (1–999), note?, righe: [{ articoloId, quantita, lotto?, nota? }] }` | DDT senza richiesta (pagina Trasferimenti, resi). 409 con l'elenco se la merce libera non basta («altri N sono in lotti scaduti…» quando è così). La scelta automatica non spedisce mai lotti scaduti; un lotto scaduto scelto a mano nella riga sì (per un reso) |
 | `PUT /api/ddt/:id` | `{ righe?, causale?, colli?, note? }` | solo `in_preparazione`; le righe collegate a una richiesta non superano il residuo approvato |
 | `POST /api/ddt/:id/spedisci` | `{ trasportatoreId \| trasportatoreNome, colli? }` | `in_preparazione` → `in_transito`: ricontrolla le giacenze per lotto (409 se nel frattempo non bastano) e scrive per ogni riga un `trasferimento` origine → `r-transito` (`ddtId`, `documento` = numero); la richiesta collegata può diventare `evasa` |
-| `POST /api/ddt/:id/ricevi` | `{ righe?: [{ id, ricevuta, esito: 'rientro'\|'perdita', nota? }], note? }` | `in_transito` → `ricevuto` o `ricevuto_con_differenze`. Righe non indicate = ricevute per intero. Ricevuto: `trasferimento` `r-transito` → destinazione; differenza: `trasferimento` `r-transito` → origine (`rientro`) o `perdita` su `r-transito` con causale "Differenza alla ricezione DDT …". 400 se si riceve più del partito o manca l'esito di una differenza |
+| `POST /api/ddt/:id/ricevi` | `{ righe?: [{ id, ricevuta, esito: 'rientro'\|'perdita', nota? }], note? }` | `in_transito` → `ricevuto` o `ricevuto_con_differenze`. Righe non indicate = ricevute per intero. Ricevuto: `trasferimento` `r-transito` → destinazione; differenza: `trasferimento` `r-transito` → origine (`rientro`) o `perdita` su `r-transito` con causale "Differenza alla ricezione DDT …". 400 se si riceve più del partito o manca l'esito di una differenza. Se il DDT nasce da una richiesta ne aggiorna lo stato: con merce rientrata un'`evasa` torna `in_lavorazione` (il rientrato torna nel residuo); il passaggio va nel registro attività (`richiesta` nei dettagli di `ddt.ricevi`) |
 | `POST /api/ddt/:id/annulla` | `{ motivo? }` | da `in_preparazione` (niente da fare) o `in_transito` (tutto rientra all'origine) → `annullato`; 409 se già ricevuto (si fa un DDT di reso) |
-| `GET /api/trasportatori` | | permesso `ddt`: `{ utenti: [{ id, nome, ruolo }] }` (utenti attivi) |
+| `GET /api/trasportatori` | | permesso `ddt`: `{ utenti: [{ id, nome }] }` (utenti attivi; solo nome e id, non il ruolo) |
 
 **Stati.** Richiesta: `bozza` → `inviata` → `in_lavorazione` → `evasa` | `chiusa` | `rifiutata`; `annullata` (da bozza o
 inviata). La quantità spedita di una riga è la somma delle righe dei DDT collegati non annullati e partiti; quando tutto
-l'approvato è partito la richiesta diventa `evasa` (torna `in_lavorazione` se un DDT in viaggio si annulla).
+l'approvato è partito la richiesta diventa `evasa` (torna `in_lavorazione` se un DDT in viaggio si annulla o se alla
+ricezione una parte rientra all'origine: il rientrato non conta come spedito).
 DDT: `in_preparazione` → `in_transito` → `ricevuto` | `ricevuto_con_differenze`; `annullato`.
 Nella Nota consumi e nell'Excel il magazzino d'origine vede l'uscita alla data di partenza e il destinatario l'entrata alla
-data di ricezione, come trasferimenti dal/verso il magazzino vero (non "In transito").
+data di ricezione, come trasferimenti dal/verso il magazzino vero (non "In transito"). La merce che rientra all'origine
+non è un carico: toglie l'uscita (vedi le regole di `js/calcoli.js` sopra).
 
 ### Struttura: magazzini, armadi, assortimento, ubicazioni (`server/struttura.js`)
 
@@ -324,7 +351,7 @@ l'assortimento non ha soglie per l'articolo, la scorta minima dell'anagrafica (`
 |---|---|---|
 | `GET /api/sistema` | | `{ versione, avvio, adesso, cartella, file: { farmacia: { dimensione, wal }, accessi }, revisione, base, conteggi, controllo: { ultimo, ultimoCompleto, prossimoNotturno }, controlli[], cure[], copie[{ nome, prefisso, tipo, data, dimensione, verificata, rev, base, conteggi, seconda }], copieRiassunto, giornale: { cartella, file, dimensione, dal, ultimaRevisione, ultimaScrittura, errore }, disco: { libero, totale }, secondaCartella: { percorso, origine, raggiungibile, ultimaSincronizzazione, errore }, secondaDaConfigurazione, provaRipristino, crescita[], stato: 'ok'\|'attenzione'\|'problema', motivi: [{ livello, testo }] }` |
 | `POST /api/sistema/controlla` | | `{ controllo, sistema }` (controllo completo adesso) |
-| `POST /api/sistema/copia` | | `{ copie, sistema }` (copia verificata di magazzino e utenti) |
+| `POST /api/sistema/copia` | | `{ copie, sistema }` (copia verificata di magazzino e utenti). Con la seconda cartella risponde quando le copie sono arrivate anche lì, al massimo dopo 20 s (poi `sistema.secondaCartella` dice se si sta ancora aggiornando) |
 | `POST /api/sistema/prova-ripristino` | | `{ prova: { esito: 'ok'\|'differenze', copia, riapplicate, revRicostruita, revAttuale, tabelle: [{ tabella, attuale, ricostruita, uguale }], messaggi, avvisi }, sistema }`; 409 senza copie verificate |
 | `PUT /api/sistema/seconda-cartella` | `{ percorso }` (`''` = nessuna) | `{ seconda, sistema }`; 400 percorso non valido o dentro la cartella dati; 409 se è in `configurazione.json` |
 
@@ -336,7 +363,7 @@ l'assortimento non ha soglie per l'articolo, la scorta minima dell'anagrafica (`
 | Metodo e percorso | Permesso | Note |
 |---|---|---|
 | `PUT /api/impostazioni` | `impostazioni` | campi di `impostazioni` (marchio, tema, previsioni…); `richiedi2fa` si cambia con `PUT /api/sicurezza` |
-| `PUT /api/reparti`, `DELETE /api/reparti/:id` | `impostazioni` | interfaccia della 2.x, ancora accettata; la 3.0 usa `/api/magazzini` |
+| `PUT /api/reparti`, `DELETE /api/reparti/:id` | `impostazioni` | interfaccia della 2.x, ancora accettata (la 3.0 usa `/api/magazzini`) con le **regole della 3.0** sullo stato finale di tutti i magazzini, anche quelli fuori elenco: una sola farmacia centrale (indicarne un'altra declassa quella di prima a periferica), mai tolta né disattivata (400); non si disattiva un magazzino con DDT da spedire o in viaggio o richieste aperte (409, stesso messaggio di `/api/magazzini`); nomi doppi controllati anche contro i magazzini fuori elenco; "In transito" resta com'è. DELETE: la farmacia centrale e "In transito" 400; 409 con movimenti, richieste, DDT, armadi o assortimento |
 | `GET /api/utenti` | `utenti` | `{ utenti: [] }` |
 | `POST /api/utenti` | `utenti` | `{ username, nome, ruolo, reparti, password }` (cambio password al primo accesso) |
 | `PUT /api/utenti/:id` | `utenti` | `{ nome, ruolo, reparti, attivo }`; disattivare chiude le sue sessioni; resta sempre un amministratore attivo; un cambio può far scattare l'obbligo della 2FA |
@@ -351,12 +378,16 @@ l'assortimento non ha soglie per l'articolo, la scorta minima dell'anagrafica (`
 
 ## Base dati che si cura da sola
 
-- **Giornale** (`server/giornale.js`): dopo ogni `Database.scrivi` (`database.dopoScrittura(fn({ rev }))`) una riga
-  `{ rev, base, storia, quando, cambiamenti }` in `giornale/AAAA-MM-GG.jsonl`, con `fsync`. `cambiamenti` ha la forma di
-  `/api/dati` ma solo con le righe di quella revisione (lette per `rev = R`) e le tabelle toccate, cancellazioni e
-  impostazioni comprese. Righe di segnalazione `{ tipo: 'ripristino' | 'nuova-linea' }`. Una riga rimasta a metà da uno
-  spegnimento si chiude prima di scrivere la successiva. `catena()` dà le righe da riapplicare senza buchi e della stessa
-  linea (`base`). Si conserva fino alla copia più vecchia conservata, con 2 giorni di margine.
+- **Giornale** (`server/giornale.js`), la fonte di verità: dopo ogni `Database.scrivi`
+  (`database.dopoScrittura(fn({ rev }))`) una riga `{ rev, base, storia, quando, evento, cambiamenti }` in
+  `giornale/AAAA-MM-GG.jsonl`, con `fsync`. `cambiamenti` ha la forma di `/api/dati` ma solo con le righe di quella
+  revisione (lette per `rev = R`) e le tabelle toccate, cancellazioni e impostazioni comprese. `evento` è l'ultimo numero
+  del registro attività in quel momento (l'evento della scrittura viene subito dopo): serve a confrontare giornale e
+  registro. Righe di segnalazione senza cambiamenti `{ tipo: 'ripristino' | 'nuova-linea' | 'avvio' | 'chiusura' }`,
+  con `durevole: true` quando sono scritte dopo un checkpoint completo (`Database.fissaSulDisco`): a quella revisione il
+  magazzino era tutto nel file principale. Una riga rimasta a metà da uno spegnimento si chiude prima di scrivere la
+  successiva. `catena()` dà le righe da riapplicare senza buchi e della stessa linea (`base`). Si conserva fino alla copia
+  più vecchia conservata, con 2 giorni di margine.
 - **Copie** (`server/backup.js`): `VACUUM INTO`, poi la copia si riapre in sola lettura, `integrity_check`, tabelle attese,
   conteggi e revisione; esito nella scheda `<copia>.json`. Automatiche orarie (solo se è cambiato qualcosa, comunque una al
   giorno), finale alla chiusura, dopo ogni cura e ripristino. Conservazione a scaglioni delle automatiche (`daConservare`):
@@ -364,16 +395,40 @@ l'assortimento non ha soglie per l'articolo, la scorta minima dell'anagrafica (`
   del ripristino" le ultime 30. Le copie della 2.x si verificano una ogni 5 minuti. Le copie di `accessi.db` nella cartella
   dati portano con sé `chiave-2fa.key`.
 - **Seconda cartella**: sincronizzazione in sottofondo (limite 60 s) delle copie verificate che mancano, delle schede e del
-  giornale, mai della chiave; scaglioni anche lì, ma le cancellazioni della cartella dati non si copiano. Non raggiungibile
-  = avviso (giallo), non errore.
+  giornale, mai della chiave; scaglioni anche lì, ma le cancellazioni della cartella dati non si copiano. Una richiesta
+  che arriva durante un giro ne mette in coda un altro (uno solo), e chi aspetta (`POST /api/sistema/copia`, al massimo
+  20 s) aspetta anche quello. Il giornale nuovo ci va anche fra una copia e l'altra: nel giro dei 5 minuti, se il
+  giornale è andato avanti dall'ultima sincronizzazione (se il disco del server si rompe, mancano al massimo 5 minuti di
+  lavoro). Non raggiungibile = avviso (giallo), non errore.
 - **Cura** (`server/salute.js`): all'avvio, prima di aprire il database, `quick_check`; un file danneggiato va in
   `danneggiati/` e si preparano fino a tre ricostruzioni, tenendo quella che arriva più avanti (a parità copia + giornale):
   1) recupero dal file stesso (`VACUUM INTO`) + giornale; 2) copia valida più recente (cartella dati, poi seconda cartella)
   + giornale; 3) archivio vuoto + tutto il giornale. La riapplicazione usa le conversioni inverse oggetto → riga
   (`rigaDaOggetto`) con `INSERT OR REPLACE` e i vincoli sospesi. Poi `integrity_check`, evento `sistema.cura`, log e copia.
-  `accessi.db`: recupero dal file, altrimenti ultima copia valida, altrimenti archivio nuovo (si ricrea l'amministratore).
-- **Spegnimento improvviso**: se il giornale è più avanti del file e della stessa sessione (`meta.sessione`), si
-  riapplicano le righe mancanti; un file rimesso a mano da una copia vecchia non si riporta avanti (linea nuova).
+  `farmacia.db` sparito o vuoto non è un'installazione nuova se ci sono copie **o il giornale** (anche solo nella seconda
+  cartella): si ricostruisce (senza copie: archivio vuoto + tutto il giornale). `accessi.db`: recupero dal file,
+  altrimenti ultima copia valida, altrimenti archivio nuovo (si ricrea l'amministratore). `metodo` della cura: `recupero`,
+  `copia`, `giornale`, `vuoto`, `nuovo` (accessi), `coda`, `linea-nuova`; `esito`: `curato`, `curato-con-perdite`,
+  `ricreato`.
+- **Spegnimento improvviso** (`recuperaCoda`, in `salute.collega()`): il file è integro ma più indietro del giornale
+  sulla stessa linea. La coda si cerca **sempre** nel giornale, non nel WAL (che può essere sparito, vuoto dopo il
+  checkpoint o con la testata rovinata), e le voci mancanti si riapplicano senza buchi (cura `metodo: 'coda'`), **a meno
+  che** il giornale abbia una segnalazione durevole (`avvio`, `chiusura`, `ripristino`, `nuova-linea`) più avanti della
+  revisione del file: allora il file è stato rimesso a mano da una copia vecchia (o il disco ha perso dati già al sicuro)
+  e non si riporta avanti. `meta.sessione` non conta più.
+- **Linea nuova "con perdite"** (`allineaLinea`): se il magazzino resta più indietro del giornale e la coda non si può
+  riapplicare, riparte da una revisione nuova sopra l'ultima del giornale (i browser ricaricano tutto) con una cura
+  `metodo: 'linea-nuova'`, `esito: 'curato-con-perdite'`, semaforo rosso: `perse` (quante modifiche del giornale il file
+  non ha) e `riassunto` ("2 articoli, 2 DDT…"). Evento `sistema.linea-nuova`.
+- **Numeri di richieste e DDT**: `Backup.ripristina` porta con sé i contatori `prog_ric_AAAA`/`prog_ddt_AAAA` (il più alto
+  fra `meta` e il numero più alto nel file); la linea nuova li alza al numero più alto trovato nelle voci del giornale
+  che il file non ha. Un numero già usato (e magari stampato su un DDT partito) non si riassegna.
+- **Confronto con il registro attività** (`verificaRegistro`): dopo una cura o una coda riapplicata si contano le
+  scritture del magazzino nel registro attività dopo l'ultima voce del giornale (saltando l'evento di quella voce); se ce
+  ne sono, nessuna cura le può recuperare: la cura diventa `curato-con-perdite` (`scrittureSenzaGiornale`) e le elenca.
+  Si confronta anche l'ultima revisione vista dal programma acceso (`salute.json`, `ultimaVista`, ogni 5 minuti e
+  all'arresto). Il riassunto "Controllo della base dati all'avvio" si scrive dopo questo confronto. La cura a programma
+  acceso si rifiuta se il registro ha scritture che il giornale non ha, e chiede di riavviare.
 - **A programma acceso**: controllo completo notturno con `integrity_check`, `PRAGMA optimize`, `wal_checkpoint(TRUNCATE)`;
   un magazzino danneggiato si sostituisce subito solo se copia + giornale arrivano all'ultima revisione, altrimenti il
   semaforo è rosso con "riavvia il servizio".
@@ -391,14 +446,31 @@ Modulo UMD condiviso fra le pagine e le prove (`tests/previsioni.test.js`); ness
   settimanale (con tendenza smorzata, se ≥ 4 settimane), Croston-SBA (domanda intermittente). Scelta per retro-verifica
   sulle ultime 4 settimane: errore = MAE giornaliero + MAE delle somme di 7 giorni; a parità entro il 2% vince il più
   semplice; poi il modello si riadatta a tutta la storia. Fascia al 90% dai residui, più larga con l'orizzonte.
+- **Giorni anomali** (`limitaAnomali`): un giorno isolato (i giorni accanto sono normali) sopra la soglia
+  `max(m + 5·s, 3·m)` (m = mediana dei giorni con consumo, s = il più grande fra 1,4826 × MAD e min(√m, m)) si conta
+  come la soglia per i modelli e per σ; al massimo l'1% dei giorni con consumo (almeno 1), servono almeno 5 giorni con
+  consumo. Più
+  giorni alti di fila sono un cambio vero e non si toccano. La serie vera resta per grafico, medie, tendenza, XYZ e totali;
+  `stima().anomali` dice quali giorni sono stati limitati (nota «Un giorno insolito…» nel dettaglio).
+- **σ robusta** (`sigmaRobusta`): i residui oltre `max(4 · scarto tipico, 2 · il residuo dopo l'1% più grande)` contano
+  come il limite: si limitano solo pochi residui staccati dagli altri (le "scatole grandi ogni tanto" restano coperte).
+  `stima(…, { anomali: false })` fa i conti come prima (nessun limite, σ semplice).
 - `analizza(stato, opz)`: per ogni articolo dell'ambito consumo medio giornaliero/settimanale/mensile, tendenza, copertura
   (giorni), data di esaurimento, scorta di sicurezza `z · σ · √LT`, punto di riordino `domanda(LT) + SS`, quantità da
   ordinare `domanda(LT + R) + SS − disponibile` arrotondata alle confezioni (`pezziConfezione`), ABC (80/15/5 sul valore)
   e XYZ (variabilità dei consumi settimanali). LT = `articolo.leadTime` o `leadTimeGiorni`; R = `periodoRevisioneGiorni`;
   z dal `livelloServizio`. Fornitore = `articolo.fornitore` o quello dell'ultimo carico.
+- **Disponibile** = giacenza + in viaggio + `giaChiesto`. Il "già chiesto" (magazzini periferici) è residuo + in
+  preparazione delle richieste aperte (bozza, inviata, in lavorazione) dei magazzini dell'ambito a un fornitore fuori
+  dall'ambito, con `Calcoli.avanzamentoRichiesta`: gli stessi numeri della proposta della pagina Richieste ("📝 N già
+  chiesti", colonna "Già chiesto" nell'Excel). Per tutta la struttura vale 0.
 - `consumoGiornaliero`, `consumoMedio` (per "Proponi le quantità" delle richieste e "Proponi dai consumi"
   dell'assortimento), `distribuzione(stato, opz)` (pagina Distribuzione: dato, consumato, perso, reso, in viaggio per
-  magazzino e mese).
+  magazzino e mese). Per la farmacia centrale `consumoMedio` conta anche quello che dà agli altri magazzini (alla
+  partenza) meno i **rientri** all'origine (DDT annullato in viaggio, differenza "rientra"), tolti nel giorno della
+  partenza: un DDT annullato non conta. "Proponi dai consumi" (`js/pagine-struttura.js`) usa `consumoMedio`; senza il
+  modulo delle previsioni fa lo stesso conto da sola (`StrutturaMagazzini.consumiMediDaMovimenti`, con
+  `Calcoli.partenzeDdt` e `Calcoli.rientroAllOrigine`).
 - La proposta d'ordine è sempre su tutta la struttura (giacenze ovunque + in viaggio); `js/excel-ordini.js` la esporta, un
   foglio per fornitore. I calcoli si ricordano finché `Api.rev` non cambia.
 

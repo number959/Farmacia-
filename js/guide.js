@@ -153,7 +153,10 @@
         ['Avviso “Attenzione all’ora” durante l’attivazione', 'L’ora del server e quella del computer sono diverse di oltre 90 secondi: i codici non tornano. Avvisa chi gestisce il server, che deve tenere l’ora sincronizzata (NTP).'],
         ['Non riesci a inquadrare il codice QR', 'Apri «Non riesci a inquadrarlo? Scrivi la chiave a mano»: nell’app scegli «Inserisci una chiave» e copia la chiave, tipo «basata sul tempo». Se sei già sul telefono usa «Sei sul telefono? Aggiungi all’app».'],
         ['“La chiave mostrata non vale più”', 'È passata più di un’ora o il server è stato riavviato: ricomincia, il programma mostra un codice QR nuovo.'],
-        ['Hai perso il telefono', 'All’accesso premi «Usa un codice di recupero» e scrivi uno dei 10 codici salvati (ognuno vale una volta). Poi, dentro, «Cambia telefono» per collegare quello nuovo.'],
+        ['“Troppi codici sbagliati: per sicurezza quella chiave non vale più”', 'Dopo 10 codici sbagliati il codice QR mostrato non vale più. Togli dall’app il collegamento appena aggiunto e ricomincia: compare un codice QR nuovo.'],
+        ['“Questa chiave è stata chiesta da un’altra finestra o da un altro computer”', 'Hai aperto «Cambia telefono» (o l’attivazione) anche in un’altra scheda: ricomincia da questa finestra, il programma mostra un codice QR nuovo.'],
+        ['«Cambia telefono» chiede la password', 'È una protezione: chi trova il programma aperto non può collegare il suo telefono al tuo utente. Scrivi la password con cui entri; dopo 5 password sbagliate la sessione si chiude e bisogna rientrare.'],
+        ['Hai perso il telefono', 'All’accesso premi «Usa un codice di recupero» e scrivi uno dei 10 codici salvati (ognuno vale una volta). Poi, dentro, «Cambia telefono» (ti chiede la password) per collegare quello nuovo.'],
         ['Hai perso telefono e codici di recupero', 'Chiedi all’amministratore di premere «Azzera» accanto al tuo nome nella pagina Sicurezza: entri con la sola password e, se il criterio la chiede, la riattivi subito.'],
         ['“La chiave del server è cambiata”', 'La cartella dati è stata rimessa senza il file chiave-2fa.key. L’amministratore azzera la verifica dell’utente, che poi la riattiva; nel frattempo valgono i codici di recupero.']
       ],
@@ -172,8 +175,8 @@
           'Quando ne restano pochi, in «Sicurezza dell’account» premi «Nuovi codici» (serve la password): quelli vecchi smettono di valere.'
         ] },
         { titolo: 'Se cambi o perdi il telefono', punti: [
-          'Telefono nuovo, quello vecchio in mano: «Sicurezza dell’account» → «Cambia telefono» e inquadra il codice QR nuovo con l’app del telefono nuovo.',
-          'Telefono perso o rotto: entra con un codice di recupero, poi «Cambia telefono». Se qualcuno può usare il tuo telefono, cambia anche la password.',
+          'Telefono nuovo, quello vecchio in mano: «Sicurezza dell’account» → «Cambia telefono» (ti chiede la password) e inquadra il codice QR nuovo con l’app del telefono nuovo.',
+          'Telefono perso o rotto: entra con un codice di recupero, poi «Cambia telefono» (ti chiede la password). Se qualcuno può usare il tuo telefono, cambia anche la password.',
           'Senza telefono e senza codici: l’amministratore usa «Azzera» nella pagina Sicurezza. L’accesso d’emergenza dal server (--reimposta-password) azzera anche la verifica.',
           '«Dimentica i computer» toglie il «Ricorda questo computer» da tutti i computer: utile se ne hai usato uno che non è più tuo.'
         ] }
@@ -450,18 +453,20 @@
         'Tocca una scatola: nel pannello a destra vedi giacenza, scorte, lotti e scadenze, con i pulsanti «💊 Consumi», «🗑️ Perdite», «📝 Nuova richiesta» e «🏷️ Scheda articolo».',
         'Per sistemare gli articoli premi «✋ Disponi» e trascina un articolo dall’elenco in una casella (con il mouse, o con il dito sulla maniglia ⠿).',
         'Trascina una scatola su un’altra casella per spostarla, oppure sull’elenco per toglierla. Da tastiera: «Metti», poi le frecce e Invio.',
-        '«✨ Disposizione automatica» sistema da sola gli articoli senza posto, per categoria e nome; «Svuota» toglie tutto dall’armadio.',
+        '«✨ Disposizione automatica» sistema da sola gli articoli senza posto, per categoria e nome: nel frigorifero mette solo gli articoli con la spunta «Da frigorifero 2–8 °C», nella cassaforte solo quelli con «Stupefacente (cassaforte)». «Svuota» toglie tutto dall’armadio.',
         'Ogni spostamento si salva subito. Quando hai finito premi «✓ Fine disposizione».'
       ],
       dopo: [
         'Le posizioni le vedono subito tutti, anche nella scheda dell’articolo e nella ricerca «Dove si trova?».',
-        'La disposizione automatica mette nel frigorifero solo gli articoli segnati come da frigorifero e nella cassaforte gli stupefacenti: controlla sempre a occhio dove finiscono questi farmaci e spostali a mano se serve.'
+        'Le spunte «Da frigorifero 2–8 °C» e «Stupefacente (cassaforte)» si mettono nel modulo dell’articolo (pagina «Articoli» → «Modifica», riquadro «Caratteristiche»): la farmacia le mette una volta e valgono in tutti i magazzini.',
+        'Se il magazzino non ha un frigorifero o una cassaforte, quegli articoli vanno negli armadi normali come gli altri. Nel pannello della scatola, alla voce «Attenzione», compaiono le caratteristiche dell’articolo (Frigorifero, Stupefacente, Alto rischio, LASA, Urgenze).'
       ],
       errori: [
         ['Il pulsante «Disponi» non c’è', 'Puoi disporre solo negli armadi dei tuoi magazzini (responsabile di magazzino) o con il ruolo di farmacia. La direzione vede soltanto.'],
         ['“Nessun armadio” nel magazzino', 'Gli armadi li crea l’amministratore in «Magazzini e assortimento» → scheda «Armadi» → «+ Nuovo armadio».'],
         ['La casella è occupata', 'In ogni casella c’è un solo articolo: sposta prima quello che c’è, oppure trascina sulla casella e lo scambio avviene in un colpo solo.'],
-        ['Un articolo non è nell’elenco da disporre', 'Non è nell’assortimento del magazzino: usa «Metti nell’armadio» per un articolo fuori assortimento, oppure chiedi alla farmacia di aggiungerlo.']
+        ['Un articolo non è nell’elenco da disporre', 'Non è nell’assortimento del magazzino: usa «Metti nell’armadio» per un articolo fuori assortimento, oppure chiedi alla farmacia di aggiungerlo.'],
+        ['La disposizione automatica non mette un farmaco nel frigorifero (o nella cassaforte)', 'L’articolo non ha la spunta «Da frigorifero 2–8 °C» (o «Stupefacente (cassaforte)»): chiedi alla farmacia di metterla in «Articoli» → «Modifica». Intanto spostalo a mano con «Disponi».']
       ]
     }),
     guida({
@@ -559,8 +564,8 @@
         ['La proposta chiede di passare a tutta la struttura', 'La proposta d’ordine si calcola sempre su tutta la struttura (consumi di tutti i magazzini, giacenze ovunque e merce in viaggio): premi «Passa a tutta la struttura».'],
         ['Un articolo che si ordina non compare', 'Senza consumi negli ultimi mesi non c’è niente da prevedere: spunta «Anche senza consumi» per vederlo comunque.'],
         ['La proposta conta merce già ordinata e non arrivata', 'Il programma non conosce gli ordini già mandati ai fornitori: correggi a mano le confezioni di quegli articoli.'],
-        ['Un articolo è sotto «Senza fornitore abituale»', 'Il fornitore si prende dall’ultimo carico dell’articolo: quando registri un carico scrivi sempre il «Fornitore».'],
-        ['I giorni di consegna non sono giusti', 'L’amministratore li cambia in «Configura» → «Previsioni e ordini» («Giorni di consegna del fornitore»).']
+        ['Un articolo è sotto «Senza fornitore abituale»', 'Scrivi il «Fornitore abituale» nel modulo dell’articolo («Articoli» → «Modifica»). Se il campo è vuoto il fornitore si prende dall’ultimo carico dell’articolo: quando registri un carico scrivi sempre il «Fornitore».'],
+        ['I giorni di consegna non sono giusti', 'Per un solo articolo scrivili in «Giorni di consegna» nel modulo dell’articolo («Articoli» → «Modifica»). Per tutti gli altri l’amministratore li cambia in «Configura» → «Previsioni e ordini» («Giorni di consegna del fornitore»).']
       ],
       approfondimenti: [
         { titolo: 'Come prevede: i metodi in parole semplici', punti: [
@@ -584,7 +589,7 @@
           'Gli AX si seguono da vicino e si ordinano spesso; i CZ si tengono al minimo.'
         ] },
         { titolo: 'Le impostazioni (amministratore, in Configura)', punti: [
-          '«Giorni di consegna del fornitore» (7): quanto passa dall’ordine all’arrivo.',
+          '«Giorni di consegna del fornitore» (7): quanto passa dall’ordine all’arrivo. Vale per gli articoli che non hanno i propri «Giorni di consegna» nel modulo dell’articolo.',
           '«Ogni quanti giorni si ordina» (7): il periodo fino al prossimo ordine.',
           '«Livello di servizio» (95%): quanto si vuole evitare l’esaurimento.',
           '«Storico da usare» (180 giorni): quanti giorni di consumi guardare.'
@@ -640,7 +645,7 @@
     guida({
       id: 'articoli', ico: '🏷️', gruppo: 'amministrazione', permesso: 'articoli', giro: 'articoli', pagina: 'articoli', perChi: 'Farmacia centrale',
       titolo: 'Articoli e importazione',
-      descrizione: 'L’anagrafica di farmaci e presidi: cercare, creare un articolo, codici a barre, importazione da Excel.',
+      descrizione: 'L’anagrafica di farmaci e presidi: cercare, creare un articolo, codici a barre, fornitore e giorni di consegna, frigorifero e stupefacenti, importazione da Excel.',
       aChi: 'Alla farmacia centrale e all’amministratore, che gestiscono l’anagrafica. Gli altri la consultano.',
       quando: 'Quando arriva un prodotto nuovo, cambia un prezzo o una confezione, o all’inizio per importare l’elenco da Excel.',
       passi: [
@@ -649,15 +654,24 @@
         'Per un articolo nuovo premi «+ Nuovo articolo» e scrivi la «Denominazione *» come sul modulo.',
         'Poi «Categoria», «Unità di misura», «Principio attivo», «Confezione / formato» e «Codice (AIC / minsan / interno)».',
         '«Pezzi per confezione» e «Codici a barre» servono al lettore; «Prezzo unitario €» e la scorta minima della farmacia centrale al controllo del magazzino.',
+        '«Fornitore abituale»: la ditta da cui si ordina (il campo propone i fornitori già scritti nei carichi). Nella proposta d’ordine l’articolo finisce sotto questo fornitore.',
+        '«Giorni di consegna»: quanti giorni passano dall’ordine all’arrivo per questo articolo. Lascia vuoto per usare quelli generali di «Configura» (il campo vuoto li mostra in grigio, per esempio «vuoto = 7 (generale)»).',
+        'Nel riquadro «Caratteristiche» spunta quelle giuste: «Da frigorifero 2–8 °C», «Stupefacente (cassaforte)», «Alto rischio», «LASA (nome o aspetto simile)», «Urgenze».',
         'Premi «Salva»: l’articolo si può caricare e scaricare subito.',
         'Un articolo con movimenti non si elimina: togli la spunta «Articolo attivo» per nasconderlo. «Mostra non attivi» lo fa rivedere.',
         '«Importa da Excel» legge un elenco o i vecchi moduli Nota consumi compilati, senza doppioni. «Esporta Excel» salva l’anagrafica.'
       ],
-      dopo: 'L’articolo compare in tutte le pagine. Per i magazzini di piano va aggiunto anche all’assortimento (scorte e posto negli armadi) in «Magazzini e assortimento».',
+      dopo: [
+        'L’articolo compare in tutte le pagine. Per i magazzini di piano va aggiunto anche all’assortimento (scorte e posto negli armadi) in «Magazzini e assortimento».',
+        'Le caratteristiche compaiono come etichette nella scheda dell’articolo e nel pannello degli Armadi. «Da frigorifero 2–8 °C» e «Stupefacente (cassaforte)» decidono anche dove la «Disposizione automatica» degli armadi mette l’articolo: nel frigorifero e nella cassaforte del magazzino.',
+        'Fornitore abituale e giorni di consegna servono alle previsioni: punto di riordino, scorta di sicurezza e proposta d’ordine usano i giorni di consegna dell’articolo, se ci sono. «Esporta Excel» li salva in tre colonne (con le caratteristiche).'
+      ],
       errori: [
         ['“Esiste già un articolo con questo nome”', 'Cerca l’articolo esistente: forse è non attivo (spunta «Mostra non attivi»).'],
         ['Il codice a barre è di un altro articolo', 'Un codice appartiene a un solo articolo: toglilo dall’altro articolo e aggiungilo a questo.'],
-        ['Non vedi «+ Nuovo articolo»', 'L’anagrafica la modificano la farmacia centrale e l’amministratore.']
+        ['Non vedi «+ Nuovo articolo»', 'L’anagrafica la modificano la farmacia centrale e l’amministratore.'],
+        ['“Giorni di consegna: scrivi un numero da 0 a 365…”', 'Scrivi un numero di giorni da 0 a 365, oppure lascia vuoto il campo per usare i giorni generali di «Configura».'],
+        ['“L’articolo compare in richieste o DDT” oppure “è nell’assortimento di …”', 'Un articolo già usato in richieste, DDT o nell’assortimento di un magazzino non si elimina: togli la spunta «Articolo attivo» per nasconderlo (oppure toglilo prima dall’assortimento).']
       ]
     }),
     guida({

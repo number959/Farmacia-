@@ -1,0 +1,33 @@
+WEBVTT
+
+1
+00:00:03.074 --> 00:00:12.592
+Apri «Magazzini e assortimento» (tasto W). A sinistra i magazzini per piano; il numero rosso dice gli articoli sotto scorta. Tocca un magazzino per aprirlo.
+
+2
+00:00:12.592 --> 00:00:26.174
+Amministratore: «+ Nuovo magazzino» → «Nome *», «Tipo» (✚ Farmacia centrale o Magazzino di piano), «Piano», «Livello», «Colore sulla mappa», «Descrizione» → «Crea magazzino».
+
+3
+00:00:26.174 --> 00:00:38.150
+Scheda «Armadi»: «+ Nuovo armadio», scegli il tipo (armadio, frigorifero, cassettiera, carrello, cassaforte), «Ripiani (1–12)» e «Posti per ripiano (1–20)», poi «Crea armadio».
+
+4
+00:00:38.150 --> 00:00:47.718
+Scheda «Assortimento»: scrivi il nome in «Aggiungi un articolo all’assortimento» e premi «Aggiungi», oppure «+ Quelli usati negli ultimi 90 giorni».
+
+5
+00:00:47.718 --> 00:00:56.969
+Per ogni articolo scrivi «Scorta minima», «Punto di riordino» e «Scorta massima» (minima ≤ riordino ≤ massima).
+
+6
+00:00:56.969 --> 00:01:11.197
+Oppure premi «📈 Proponi dai consumi»: propone circa 3 giorni di consumo come minima, 7 come riordino e 14 come massima. Controlla e correggi.
+
+7
+00:01:11.197 --> 00:01:20.689
+Premi «Salva assortimento». «Annulla le modifiche» toglie quello che non hai salvato; «Solo da controllare» mostra solo gli articoli da guardare.
+
+8
+00:01:20.689 --> 00:01:28.280
+Un magazzino già usato non si elimina: nella scheda «Dati» togli la spunta «Magazzino attivo».

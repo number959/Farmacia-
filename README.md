@@ -91,7 +91,13 @@ script in linea), registro attività di accessi e operazioni, HTTPS facoltativo.
   e i DDT in viaggio fra i piani.
 - **Armadi**: ogni articolo al suo posto (ripiano e posto) con il suo stato (regolare, da riordinare, sotto scorta,
   esaurito, in scadenza, scaduto); "Dove si trova?" anche leggendo la confezione; **Disponi** per trascinare gli articoli
-  (anche da tastiera) o con la disposizione automatica (per categoria e nome).
+  (anche da tastiera) o con la disposizione automatica (per categoria e nome): nel frigorifero vanno solo gli articoli
+  con la spunta *Da frigorifero 2–8 °C*, nella cassaforte solo quelli con *Stupefacente (cassaforte)*.
+- **Caratteristiche dell'articolo** (pagina Articoli → *Modifica*, riquadro *Caratteristiche*): *Da frigorifero 2–8 °C*,
+  *Stupefacente (cassaforte)*, *Alto rischio*, *LASA (nome o aspetto simile)*, *Urgenze*. Compaiono come etichette nella
+  scheda dell'articolo e negli Armadi; le prime due decidono dove la disposizione automatica mette l'articolo. Nello
+  stesso modulo *Fornitore abituale* e *Giorni di consegna* (vuoto = quelli generali di Configura) servono alle
+  previsioni e alla proposta d'ordine.
 - **"In transito"** è un magazzino di sistema invisibile negli elenchi: la sua giacenza è la merce in viaggio, mostrata
   nella colonna "In viaggio" delle Giacenze.
 
@@ -104,12 +110,20 @@ Tutto si calcola nel browser dai consumi registrati (consumi + perdite), per art
   ultime 4 settimane come se non le conoscesse e tiene quello che sbaglia meno; a parità, il più semplice.
 - **Indicatori**: consumo medio giornaliero, settimanale e mensile, tendenza, **giorni di copertura**, data stimata di
   esaurimento, fascia di incertezza al 90%.
+- **Un giorno strano non pesa**: un consumo isolato molto sopra il solito (per esempio "500" scritto al posto di "5")
+  si conta come la soglia nella previsione e nella scorta di sicurezza; grafico e medie mostrano il dato vero e il
+  dettaglio dell'articolo lo segnala.
 - **Scorta di sicurezza** = z · σ · √(giorni di consegna), con z dal livello di servizio (95% → 1,65).
   **Punto di riordino** = consumo previsto nei giorni di consegna + scorta di sicurezza.
   **Da ordinare** = consumo previsto per consegna e periodo fino al prossimo ordine + scorta di sicurezza − merce disponibile
-  (giacenze di tutta la struttura e merce in viaggio), arrotondato a confezioni intere.
-- **Proposta d'ordine** divisa per fornitore (quello dell'ultimo carico dell'articolo), correggibile, in Excel (un foglio
-  per fornitore) o stampata. Il programma non manda ordini: è un aiuto per la farmacia.
+  (giacenze di tutta la struttura e merce in viaggio), arrotondato a confezioni intere. Per un magazzino di piano
+  "Da chiedere alla farmacia" toglie anche quello che ha già chiesto con richieste aperte ("📝 N già chiesti").
+- I giorni di consegna sono quelli dell'articolo (*Giorni di consegna* nel suo modulo) o, se mancano, quelli generali.
+- **Proposta d'ordine** divisa per fornitore (il *Fornitore abituale* dell'articolo, altrimenti quello dell'ultimo
+  carico), correggibile, in Excel (un foglio per fornitore) o stampata. Il programma non manda ordini: è un aiuto per la
+  farmacia.
+- Per la farmacia centrale i consumi comprendono quello che dà agli altri magazzini, ma non la merce che torna indietro
+  (DDT annullati in viaggio, differenze rientrate alla ricezione).
 - **Classi ABC-XYZ**: A, B, C per peso sulla spesa (80/15/5%), X, Y, Z per regolarità dei consumi settimanali.
 - Impostazioni in *Configura → Previsioni e ordini*: giorni di consegna del fornitore (7), ogni quanti giorni si ordina
   (7), livello di servizio (95%), storico da usare (180 giorni).
@@ -121,7 +135,11 @@ Tutto si calcola nel browser dai consumi registrati (consumi + perdite), per art
   *Sicurezza dell'account*: si inquadra il codice QR, si scrive il codice dell'app, si salvano i **10 codici di recupero**
   (monouso, conservati solo come impronta).
 - "Ricorda questo computer per 30 giorni" (facoltativo); 5 codici sbagliati bloccano per 15 minuti; un codice già usato non
-  vale una seconda volta.
+  vale una seconda volta. Dal server stesso (accesso d'emergenza) non c'è blocco, ma dopo 10 codici sbagliati si riscrive
+  la password e, dopo 20 in un quarto d'ora, si aspettano 30 secondi prima di poterla riscrivere.
+- **Cambia telefono** (telefono nuovo o app reinstallata) chiede la tua password prima di mostrare il codice QR nuovo:
+  chi trova il programma aperto non può collegare il suo telefono al tuo utente. Il telefono vecchio vale finché non
+  confermi quello nuovo; dopo 10 codici sbagliati il codice QR mostrato non vale più e si ricomincia.
 - L'amministratore, dalla pagina **Sicurezza**, sceglie per chi è obbligatoria (nessuno, amministratori, amministratori e
   farmacisti, tutti) e la **azzera** a chi ha perso telefono e codici. Chi deve averla viene guidato ad attivarla al primo
   accesso.
@@ -136,12 +154,16 @@ Tutto si calcola nel browser dai consumi registrati (consumi + perdite), per art
 - **Giornale delle modifiche**: dopo ogni scrittura le righe cambiate vanno in `dati\giornale\AAAA-MM-GG.jsonl`, forzate
   sul disco.
 - **Cura**: un file rovinato si sposta in `dati\danneggiati\` e si ricostruisce dalla copia buona più recente più il
-  giornale (o dal recupero del file stesso, se arriva più avanti); dopo uno spegnimento improvviso si riapplicano dal
-  giornale le ultime scritture.
+  giornale (o dal recupero del file stesso, se arriva più avanti); dopo uno spegnimento improvviso (anche con il file
+  `-wal` sparito o rovinato) si riapplicano dal giornale le ultime scritture. Se `farmacia.db` sparisce ma resta il
+  giornale, si ricostruisce da lì. Un `farmacia.db` rimesso a mano da una copia vecchia non si riporta avanti: il
+  programma riparte da lì, segnala in rosso quante modifiche mancano e cosa sono, e non riusa i numeri di richieste e
+  DDT già dati. Ogni cura si confronta con il registro attività, così "nessun dato perso" è vero.
 - **Copie verificate**: ogni ora, se c'è stato lavoro, di `farmacia.db` e `accessi.db`; ogni copia si riapre e si
   controlla. Si tengono tutte quelle delle ultime 24 ore, poi una al giorno per 14 giorni, una alla settimana per 8
   settimane, una al mese per 12 mesi; le copie fatte a mano e quelle "prima del ripristino" le ultime 30.
-- **Seconda cartella** facoltativa (disco esterno o di rete) per le copie verificate e il giornale.
+- **Seconda cartella** facoltativa (disco esterno o di rete) per le copie verificate e il giornale; il giornale nuovo ci
+  arriva ogni 5 minuti. *Copia adesso* aspetta che le copie arrivino anche lì (al massimo 20 secondi).
 - **Pagina Sistema** (amministratore): semaforo verde/giallo/rosso con i motivi, controllo e copia a mano, **prova di
   ripristino** (ricostruisce per finta e confronta), elenco delle copie, crescita della base dati, cronologia delle cure.
 
@@ -165,7 +187,7 @@ Tutto si calcola nel browser dai consumi registrati (consumi + perdite), per art
 | Previsioni e fabbisogno | E | Previsioni, copertura, punto di riordino, classi ABC-XYZ, proposta d'ordine |
 | Distribuzione | N | Quanto la farmacia ha dato a ogni magazzino e dove si trova la merce |
 | Nota consumi mensile | R | Il modulo del mese per magazzino e categoria, modificabile giorno per giorno, da stampare o esportare nel modulo Excel originale |
-| Articoli | A | Anagrafica, codici a barre, importazione da Excel |
+| Articoli | A | Anagrafica, codici a barre, fornitore abituale e giorni di consegna, caratteristiche (frigorifero, stupefacenti, alto rischio, LASA, urgenze), importazione da Excel |
 | Magazzini e assortimento | W | Magazzini, armadi, assortimento e scorte |
 | Utenti | U | Utenti, ruoli e magazzini (amministratore) |
 | Sicurezza | Y | Criterio della 2FA, stato degli utenti, azzeramento (amministratore) |
@@ -231,13 +253,16 @@ L'anteprima usa nomi dimostrativi ("Clinica Demo") e nessun logo; i dati sparisc
 
 Colonne calcolate come nel modulo: residui mesi precedenti (2), carichi (3: carichi dai fornitori, merce ricevuta con i DDT
 alla data di ricezione, rettifiche in aumento), totale carico (4 = 2+3), consumi giornalieri 1-31 (per la farmacia centrale
-comprendono la merce mandata agli altri magazzini, alla data di partenza del DDT), totale consumo (6), perdite (7), totale
+comprendono la merce mandata agli altri magazzini, alla data di partenza del DDT; la merce che torna indietro con un DDT
+annullato o una differenza "rientra" non è un carico ma toglie quell'uscita), totale consumo (6), perdite (7), totale
 scarico (8 = 6+7), controllo scadenze (9), residui (10 = 4−8), prezzo unitario e importo. **Esporta nel modulo Excel**
 compila il file originale della clinica (`modelli/`) con le stesse celle e impaginazione; oltre 48 articoli aggiunge altri
 fogli identici.
 
 Consumi, perdite e DDT scalano per primo il lotto che scade prima (la ripartizione la fa il server, dentro la stessa
-transazione, così due utenti non possono prelevare lo stesso lotto). I movimenti non si cancellano: si annullano con un
+transazione, così due utenti non possono prelevare lo stesso lotto). I lotti già scaduti non si usano da soli per consumi
+e DDT (si tolgono con una perdita "Scaduto"; nelle tendine sono segnati SCADUTO); per un reso il lotto scaduto si sceglie
+a mano. I movimenti non si cancellano: si annullano con un
 motivo e restano visibili.
 
 ## Librerie e caratteri open source

@@ -1,29 +1,33 @@
 WEBVTT
 
 1
-00:00:03.113 --> 00:00:11.307
-Apri Carico dal menu (tasto C). In alto ci sono la data e il reparto che riceve, di solito la Farmacia.
+00:00:03.075 --> 00:00:10.745
+Apri «Carico» dal menu (tasto C). In alto ci sono «Data» e «Reparto che riceve»: di solito la farmacia centrale.
 
 2
-00:00:11.307 --> 00:00:18.634
-Scrivi il fornitore e il numero del DDT o della fattura.
+00:00:10.745 --> 00:00:17.064
+Scrivi il «Fornitore» e il numero in «Documento (DDT / fattura n.)».
 
 3
-00:00:18.634 --> 00:00:27.318
-Nella riga scrivi le prime lettere dell’articolo e sceglilo dall’elenco: sotto compare la giacenza del reparto.
+00:00:17.064 --> 00:00:24.501
+Nella riga scrivi le prime lettere dell’articolo e sceglilo dall’elenco: sotto compare la giacenza attuale.
 
 4
-00:00:27.318 --> 00:00:34.453
-Scrivi la quantità arrivata, poi lotto e scadenza come sono stampati sulla confezione.
+00:00:24.501 --> 00:00:32.718
+Scrivi la quantità arrivata (in unità: compresse, fiale, pezzi), poi lotto e scadenza come sono stampati sulla confezione.
 
 5
-00:00:34.453 --> 00:00:45.863
-Il prezzo arriva dall’anagrafica. Con Invio passi alla riga sotto per l’articolo successivo.
+00:00:32.718 --> 00:00:41.492
+Con il lettore di codici a barre la riga si compila da sola, con lotto e scadenza del Data Matrix. Il prezzo arriva dall’anagrafica.
 
 6
-00:00:45.864 --> 00:00:52.690
-Controlla e premi Registra carico: la giacenza sale subito, per tutti gli utenti.
+00:00:41.492 --> 00:00:51.828
+Con «+ Aggiungi riga» (o Invio) passi all’articolo successivo; la ✕ toglie una riga.
 
 7
-00:00:52.690 --> 00:01:01.474
-Il carico compare tra gli ultimi carichi. Se hai sbagliato, da qui lo annulli scrivendo il motivo.
+00:00:51.828 --> 00:00:57.790
+Controlla le righe e premi «Registra carico»: la giacenza sale subito, per tutti.
+
+8
+00:00:57.790 --> 00:01:05.987
+Il carico compare tra gli ultimi carichi. Se hai sbagliato premi «Annulla» sulla riga e scrivi il motivo.

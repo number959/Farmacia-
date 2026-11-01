@@ -1,33 +1,33 @@
 WEBVTT
 
 1
-00:00:03.125 --> 00:00:11.996
-Nelle pagine dove registri, in alto c’è la barra di lettura: Carico, Consumi, Trasferimenti, Perdite e Inventario.
+00:00:03.100 --> 00:00:12.626
+In cima alle pagine dove registri c’è la barra di lettura: Carico, Consumi, Trasferimenti, Perdite, Inventario, nuova richiesta, DDT e ricezione.
 
 2
-00:00:11.996 --> 00:00:20.138
-Scegli quanto vale ogni lettura: una unità o una confezione intera, con i pezzi scritti nell’articolo.
+00:00:12.626 --> 00:00:22.206
+Scegli quanto vale ogni lettura: una unità oppure una confezione intera (i pezzi per confezione sono scritti nell’articolo). La scelta si ricorda per ogni pagina.
 
 3
-00:00:20.138 --> 00:00:28.273
-Leggi la confezione con il lettore: la riga si compila da sola, con il lotto e la scadenza del codice.
+00:00:22.207 --> 00:00:30.655
+Leggi la confezione con il lettore: la riga si compila da sola, con lotto e scadenza se il codice li contiene (Data Matrix).
 
 4
-00:00:28.273 --> 00:00:34.173
-Leggi un’altra confezione dello stesso lotto: la quantità aumenta.
+00:00:30.655 --> 00:00:35.962
+Leggi un’altra confezione dello stesso articolo: la quantità aumenta.
 
 5
-00:00:34.173 --> 00:00:42.190
+00:00:35.962 --> 00:00:45.192
 Il lettore funziona anche con il cursore in un altro campo: il codice letto non finisce nel campo.
 
 6
-00:00:42.190 --> 00:00:52.494
-Codice mai visto? Scegli l’articolo giusto, o creane uno nuovo: da quel momento il codice è riconosciuto.
+00:00:45.192 --> 00:00:56.099
+Codice mai visto? Compare «Codice non riconosciuto»: scegli l’articolo giusto o creane uno nuovo. Da quel momento il codice è riconosciuto da tutti.
 
 7
-00:00:52.494 --> 00:00:58.900
+00:00:56.099 --> 00:01:02.811
 Senza lettore scrivi il codice nel campo di lettura e premi Invio.
 
 8
-00:00:58.900 --> 00:01:08.241
-Controlla le righe e premi Registra carico. Sul telefono o sul tablet puoi leggere anche con la fotocamera.
+00:01:02.811 --> 00:01:12.220
+Sul telefono o sul tablet premi «📷 Fotocamera» e inquadra il codice; con «Lettura continua» leggi molte confezioni di seguito.

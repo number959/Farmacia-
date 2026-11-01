@@ -1,25 +1,29 @@
 WEBVTT
 
 1
-00:00:03.122 --> 00:00:11.562
-Apri Trasferimenti (tasto T). Da: il reparto che consegna, di solito la Farmacia. A: il reparto che riceve.
+00:00:03.084 --> 00:00:10.036
+Apri «Trasferimenti» (tasto T). In «Da» scegli il magazzino che spedisce, in «A» quello che riceve.
 
 2
-00:00:11.562 --> 00:00:16.899
-Nelle note scrivi il numero della richiesta o chi ritira.
+00:00:10.036 --> 00:00:19.539
+La «Causale» si scrive da sola (Rifornimento reparto, Reso alla farmacia, Trasferimento interno): cambiala se serve. In «Colli» scrivi quante scatole partono.
 
 3
-00:00:16.904 --> 00:00:24.330
-Scegli l’articolo e scrivi la quantità: sotto vedi quanto ce n’è nel reparto che consegna.
+00:00:19.539 --> 00:00:27.702
+Nelle righe scegli l’articolo e scrivi la quantità: sotto vedi quanto ce n’è nel magazzino di partenza e quanto è libero.
 
 4
-00:00:24.330 --> 00:00:32.023
-Il lotto è automatico, quello che scade prima. Se serve un lotto preciso, sceglilo dall’elenco.
+00:00:27.702 --> 00:00:34.064
+Il lotto resta «automatico (scade prima)»; scegline uno solo se spedisci proprio quello.
 
 5
-00:00:32.023 --> 00:00:39.160
-Premi Registra trasferimento: per la Farmacia è uno scarico, per il reparto un carico.
+00:00:34.064 --> 00:00:40.795
+In «Note (chi ritira, per quale paziente o richiesta…)» scrivi quello che serve per ritrovarlo.
 
 6
-00:00:39.160 --> 00:00:47.593
-Il trasferimento compare in fondo alla pagina, con il lotto spostato e il reparto di arrivo.
+00:00:40.795 --> 00:00:47.086
+Premi «📦 Prepara il DDT»: il DDT nasce “da spedire” e le giacenze non cambiano ancora.
+
+7
+00:00:47.086 --> 00:00:58.611
+Apri il DDT dagli «ultimi DDT preparati qui» o da «DDT e consegne», stampalo e spediscilo scegliendo chi porta la merce.

@@ -414,3 +414,81 @@ test('magazzini: eliminazione solo se mai usato, con armadi, assortimento e uten
   d = await dati();
   assert.equal(trova(d.reparti, usato.id).attivo, false);
 });
+
+/* ---------- "Proponi dai consumi" dell'assortimento (js/pagine-struttura.js), senza server ---------- */
+
+// pagina finta: Calcoli, Previsioni e pagine-struttura.js nello stesso contesto, come nel browser
+function caricaPaginaStruttura(stato, conPrevisioni) {
+  const vm = require('node:vm');
+  const ctx = { console, Date, Math, JSON, Number, String, Object, Array, isFinite, setTimeout, clearTimeout };
+  ctx.window = ctx;
+  ctx.App = {
+    h: (x) => String(x), pagine: {}, PAGINE_CONSULTAZIONE: [], S: stato,
+    reparto: (id) => stato.reparti.find((r) => r.id === id) || null
+  };
+  vm.createContext(ctx);
+  const file = ['js/calcoli.js'].concat(conPrevisioni ? ['js/previsioni.js'] : [], ['js/pagine-struttura.js']);
+  for (const f of file) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
+  return ctx;
+}
+
+test('Proponi dai consumi: per la farmacia centrale i DDT annullati e la merce rientrata non contano', () => {
+  // date contate da oggi: la pagina calcola sugli ultimi 90 giorni da oggi
+  const adesso = new Date();
+  const giorno = (n) => { const d = new Date(adesso.getFullYear(), adesso.getMonth(), adesso.getDate() - n); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  const OGGI = giorno(0);
+  let seq = 0;
+  const mov = (tipo, n, quantita, da, a, extra) => Object.assign({ id: 'm' + (++seq), tipo, data: giorno(n), quantita, articoloId: 'a1', repartoId: da, repartoDestId: a || null, creato: seq }, extra || {});
+  const stato = {
+    impostazioni: {},
+    reparti: [
+      { id: 'far', nome: 'Farmacia', tipo: 'centrale', centrale: true, attivo: true },
+      { id: 'deg', nome: 'Degenza', tipo: 'periferico', attivo: true },
+      { id: 'r-transito', nome: 'In transito', tipo: 'transito', attivo: true }
+    ],
+    articoli: [{ id: 'a1', nome: 'FISIOLOGICA 100 ml', categoria: 'FARMACI', attivo: true }],
+    ddt: [
+      { id: 'd1', origineId: 'far', destinazioneId: 'deg', stato: 'ricevuto' },
+      { id: 'd2', origineId: 'far', destinazioneId: 'deg', stato: 'annullato' },
+      { id: 'd3', origineId: 'far', destinazioneId: 'deg', stato: 'ricevuto_con_differenze' },
+      { id: 'd0', origineId: 'far', destinazioneId: 'deg', stato: 'annullato' }
+    ],
+    ddtRighe: [], richieste: [], richiesteRighe: [], assortimento: [], armadi: [],
+    movimenti: [
+      mov('carico', 150, 200, 'far'),
+      // DDT partito prima dei 90 giorni e annullato dentro: non tocca la media (né in più né in meno)
+      mov('trasferimento', 100, 5, 'far', 'r-transito', { ddtId: 'd0' }),
+      mov('trasferimento', 85, 5, 'r-transito', 'far', { ddtId: 'd0' }),
+      // DDT arrivato: 20 escono dalla farmacia
+      mov('trasferimento', 20, 20, 'far', 'r-transito', { ddtId: 'd1' }),
+      mov('trasferimento', 19, 20, 'r-transito', 'deg', { ddtId: 'd1' }),
+      // DDT annullato in viaggio: la merce torna, non è un'uscita
+      mov('trasferimento', 10, 10, 'far', 'r-transito', { ddtId: 'd2' }),
+      mov('trasferimento', 9, 10, 'r-transito', 'far', { ddtId: 'd2' }),
+      // DDT ricevuto con differenze: 6 arrivano, 2 rientrano alla farmacia
+      mov('trasferimento', 5, 8, 'far', 'r-transito', { ddtId: 'd3' }),
+      mov('trasferimento', 4, 6, 'r-transito', 'deg', { ddtId: 'd3' }),
+      mov('trasferimento', 4, 2, 'r-transito', 'far', { ddtId: 'd3' }),
+      mov('consumo', 3, 3, 'far'),
+      mov('consumo', 2, 4, 'deg'),
+      // un movimento annullato non conta
+      mov('consumo', 1, 50, 'far', null, { annullato: true })
+    ]
+  };
+  const vicino = (visto, atteso, testo) => assert.ok(Math.abs(visto - atteso) < 1e-9, testo + ': ' + visto + ' invece di ' + atteso);
+
+  // pagina senza il modulo delle previsioni: la media la calcola pagine-struttura.js da sola
+  const sola = caricaPaginaStruttura(stato, false).StrutturaMagazzini;
+  // farmacia: 20 + 6 + 3 = 29 in 90 giorni (prima dava 20 + 10 + 8 + 3 = 41)
+  vicino(sola.consumiMedi('far', ['a1']).a1 * 90, 29, 'farmacia, uscite in 90 giorni');
+  // degenza: solo i consumi; la sua storia comincia con il primo arrivo (19 giorni fa, quindi 20 giorni)
+  vicino(sola.consumiMedi('deg', ['a1']).a1, 4 / 20, 'degenza');
+  vicino(sola.consumiMediDaMovimenti(stato, 'far', ['a1'], OGGI).a1 * 90, 29, 'farmacia con la data di oggi');
+
+  // con il modulo delle previsioni (come nel programma) i numeri sono gli stessi
+  const conPrevisioni = caricaPaginaStruttura(stato, true);
+  for (const rep of ['far', 'deg']) {
+    vicino(conPrevisioni.StrutturaMagazzini.consumiMedi(rep, ['a1']).a1, sola.consumiMedi(rep, ['a1']).a1, rep + ', con e senza previsioni');
+    vicino(conPrevisioni.Previsioni.consumoMedio(stato, 'a1', rep, 90, { oggi: OGGI }), sola.consumiMedi(rep, ['a1']).a1, rep + ', Previsioni.consumoMedio');
+  }
+});

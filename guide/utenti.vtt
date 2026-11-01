@@ -1,25 +1,33 @@
 WEBVTT
 
 1
-00:00:03.158 --> 00:00:10.116
-Utenti (tasto U) è solo per l’amministratore. In alto c’è cosa può fare ogni ruolo.
+00:00:03.065 --> 00:00:09.185
+Apri «Utenti» (tasto U). In alto c’è cosa può fare ogni ruolo.
 
 2
-00:00:10.116 --> 00:00:18.914
-Premi Nuovo utente e scrivi il nome per entrare e il nome e cognome.
+00:00:09.185 --> 00:00:18.186
+Premi «+ Nuovo utente» e scrivi «Nome utente (per entrare) *» (per esempio m.rossi) e «Nome e cognome *».
 
 3
-00:00:18.914 --> 00:00:25.802
-Scegli il ruolo. Per il ruolo Reparto spunta i reparti in cui la persona registra.
+00:00:18.186 --> 00:00:26.246
+Scegli il «Ruolo»: Amministratore, Farmacista (farmacia centrale), Responsabile di magazzino, Direzione (sola lettura).
 
 4
-00:00:25.802 --> 00:00:33.379
-Genera una password provvisoria e comunicala: al primo accesso la persona ne sceglie una sua.
+00:00:26.246 --> 00:00:33.324
+Per il responsabile di magazzino spunta i «Magazzini di cui è responsabile»: lavorerà solo su quelli.
 
 5
-00:00:33.379 --> 00:00:39.336
-Premi Crea utente: compare nell’elenco con la password provvisoria.
+00:00:33.324 --> 00:00:40.895
+Premi «Genera» per una password provvisoria facile da dettare, comunicala di persona, poi premi «Crea utente».
 
 6
-00:00:39.336 --> 00:00:48.991
-Password dimenticata o utente bloccato? Nuova password. Con Modifica cambi ruolo e reparti o disattivi l’utente.
+00:00:40.895 --> 00:00:47.694
+Password dimenticata o utente bloccato? «Nuova password» sulla sua riga, poi «Imposta password».
+
+7
+00:00:47.694 --> 00:00:56.141
+Con «Modifica» cambi ruolo e magazzini; togli la spunta «Utente attivo» per bloccare l’accesso senza perdere i suoi movimenti.
+
+8
+00:00:56.141 --> 00:01:04.490
+Chi ha perso il telefono della verifica in due passaggi lo sblocchi dalla pagina «Sicurezza» con «Azzera».

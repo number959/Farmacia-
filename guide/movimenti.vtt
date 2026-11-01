@@ -1,25 +1,29 @@
 WEBVTT
 
 1
-00:00:03.118 --> 00:00:12.052
-Movimenti (tasto M) elenca tutto ciò che è stato registrato: carichi, consumi, trasferimenti, perdite e rettifiche.
+00:00:03.154 --> 00:00:11.270
+Apri «Movimenti» (tasto M): carichi, consumi, trasferimenti, perdite e rettifiche, con l’operatore che li ha registrati.
 
 2
-00:00:12.052 --> 00:00:19.188
-Scegli il periodo, il tipo e il reparto, oppure cerca per articolo, lotto o fornitore.
+00:00:11.270 --> 00:00:20.653
+Scegli il periodo in «Dal» e «Al», poi «Tipo» e «Reparto», oppure cerca per articolo, lotto, fornitore o documento (anche il numero di un DDT).
 
 3
-00:00:19.188 --> 00:00:25.642
-Un movimento sbagliato non si cancella: premi Annulla accanto al movimento.
+00:00:20.653 --> 00:00:26.064
+Un movimento sbagliato non si cancella: premi «Annulla» sulla sua riga.
 
 4
-00:00:25.642 --> 00:00:31.680
+00:00:26.064 --> 00:00:32.229
 Scrivi il motivo e conferma.
 
 5
-00:00:31.680 --> 00:00:39.807
-Il movimento resta nell’elenco, barrato e con il motivo, ma non conta più. Poi registra quello giusto.
+00:00:32.229 --> 00:00:40.301
+Il movimento resta nell’elenco, barrato, con chi l’ha annullato e perché, ma non conta più. Poi registra quello giusto.
 
 6
-00:00:39.807 --> 00:00:48.960
-Excel esporta l’elenco che vedi. Chi lavora in un reparto può annullare solo i propri consumi e perdite.
+00:00:40.301 --> 00:00:47.582
+I movimenti nati da un DDT non hanno «Annulla»: si annulla il DDT da «DDT e consegne».
+
+7
+00:00:47.582 --> 00:00:55.979
+«Excel» esporta l’elenco che vedi, con tutte le colonne. Togli la spunta «Mostra annullati» per nasconderli.

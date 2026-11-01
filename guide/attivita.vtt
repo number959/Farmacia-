@@ -1,0 +1,29 @@
+WEBVTT
+
+1
+00:00:03.183 --> 00:00:09.534
+Apri «Attività» (tasto V). All’inizio vedi l’ultima settimana, dal più recente.
+
+2
+00:00:09.534 --> 00:00:14.558
+Scegli il periodo in «Dal» e «Al»: l’elenco si aggiorna da solo.
+
+3
+00:00:14.558 --> 00:00:21.357
+In «Utente» scrivi il nome utente (per esempio m.rossi) per vedere solo quello che ha fatto lui.
+
+4
+00:00:21.357 --> 00:00:30.869
+In «Azione» scegli un argomento: Accessi e uscite, Verifica in due passaggi, Movimenti, Richieste, DDT e consegne, Magazzini, Assortimento e scorte, Base dati e copie (Sistema)…
+
+5
+00:00:30.869 --> 00:00:39.823
+Ogni riga dice «Quando», «Utente», «Azione», «Dettagli» (per esempio articolo, quantità, numero del DDT) e «Indirizzo IP» del computer.
+
+6
+00:00:39.823 --> 00:00:49.332
+Le azioni scritte in rosso sono accessi non riusciti o blocchi: se sono tante per lo stesso utente, parlane con lui ed eventualmente dagli una nuova password.
+
+7
+00:00:49.332 --> 00:00:56.771
+«Excel» salva l’elenco che vedi, con gli stessi filtri. «Aggiorna» lo rilegge dal server.

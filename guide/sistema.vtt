@@ -1,0 +1,29 @@
+WEBVTT
+
+1
+00:00:03.066 --> 00:00:12.591
+Apri «Sistema» (tasto X). In alto il semaforo: «Tutto in ordine» (verde), «Da guardare» (giallo) o «Serve attenzione» (rosso), con i motivi scritti sotto.
+
+2
+00:00:12.591 --> 00:00:20.208
+«Controlla adesso» fa il controllo completo di magazzino e utenti; si può fare anche mentre gli altri lavorano.
+
+3
+00:00:20.208 --> 00:00:49.106
+«Copia adesso» fa subito una copia di magazzino e utenti e la verifica (la riapre e la controlla). Usala prima di un cambiamento importante.
+
+4
+00:00:49.107 --> 00:00:58.041
+«Prova di ripristino» ricostruisce i dati dall’ultima copia più il giornale delle modifiche, per finta, e li confronta con quelli veri.
+
+5
+00:00:58.041 --> 00:01:04.276
+Se la prova dice “La cura funzionerebbe”, in caso di guasto i dati tornerebbero tutti.
+
+6
+00:01:04.276 --> 00:01:13.784
+Sotto ci sono i numeri (dimensione, copie, spazio libero), la crescita nel tempo, l’elenco delle copie con la verifica e la cronologia di controlli e cure.
+
+7
+00:01:13.784 --> 00:01:24.202
+In «Seconda cartella delle copie» scrivi il «Percorso completo della cartella» di un disco esterno o di rete (per esempio E:\CopieFarmacia) e premi «Salva e prova».

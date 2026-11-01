@@ -83,7 +83,12 @@ INDICE
      ogni piano o reparto, con piano e livello (-1 seminterrato, 0 piano
      terra, 1, 2...); per ognuno gli armadi (armadio, frigorifero,
      cassettiera, carrello, cassaforte);
-   - "Articoli": crea gli articoli o importali da Excel;
+   - "Articoli": crea gli articoli o importali da Excel; nel modulo di
+     ogni articolo segna le "Caratteristiche" ("Da frigorifero",
+     "Stupefacente (cassaforte)": la disposizione automatica degli
+     armadi li mette nel frigorifero e nella cassaforte), il "Fornitore
+     abituale" e, se sono diversi da quelli generali, i "Giorni di
+     consegna";
    - "Magazzini e assortimento" > "Assortimento": gli articoli di ogni
      magazzino con scorta minima, punto di riordino e scorta massima
      (il farmacista può farlo per te);
@@ -229,11 +234,20 @@ sta in un file a parte:
   recupero, oppure l'amministratore usa "Azzera" nella pagina Sicurezza e
   l'utente riattiva la verifica. Non creare né modificare quel file a mano.
 
+CODICI SBAGLIATI
+- Da un computer della rete 5 codici sbagliati bloccano l'utente per 15
+  minuti (come la password).
+- Dal server stesso (http://localhost) il blocco non c'è, così si può
+  sempre entrare: dopo 10 codici sbagliati però si riscrive la password, e
+  dopo 20 in un quarto d'ora si aspettano 30 secondi prima di poterla
+  riscrivere.
+
 TELEFONO PERSO O CAMBIATO
 - Telefono nuovo con quello vecchio in mano: "Sicurezza dell'account" >
-  "Cambia telefono".
+  "Cambia telefono". Per sicurezza chiede la tua password, poi mostra il
+  codice QR nuovo; il telefono vecchio vale finché non confermi il nuovo.
 - Telefono perso: all'accesso "Usa un codice di recupero", poi "Cambia
-  telefono" (e, se serve, cambia la password).
+  telefono" con la tua password (e, se serve, cambia la password).
 - Telefono e codici persi: l'amministratore preme "Azzera" accanto al nome
   nella pagina Sicurezza.
 - L'amministratore stesso senza telefono né codici: accesso d'emergenza
@@ -288,9 +302,11 @@ già verificate) o "Scarica" in Configura.
 GIORNALE DELLE MODIFICHE
 Dopo ogni registrazione il programma scrive le righe cambiate anche nel
 giornale del giorno e le forza sul disco. Se manca la corrente o il file
-del magazzino si rovina, il giornale permette di ricostruire tutto fino
-all'ultima registrazione. I file del giornale si tengono finché serve
-(fino alla copia più vecchia conservata) e poi si tolgono da soli.
+del magazzino si rovina (anche se il file farmacia.db-wal accanto sparisce
+o si rovina), il giornale permette di ricostruire tutto fino all'ultima
+registrazione. All'avvio e alla chiusura il programma ci segna fin dove
+il magazzino è sicuramente salvato. I file del giornale si tengono finché
+serve (fino alla copia più vecchia conservata) e poi si tolgono da soli.
 
 COPIE ORARIE A SCAGLIONI
 - Ogni ora, se qualcuno ha lavorato, e comunque una volta al giorno, il
@@ -316,7 +332,9 @@ server virtuale E imposta la seconda cartella delle copie.
 ---------------------------------------------------------
 Protegge anche dal guasto del disco del server: il programma vi copia, in
 sottofondo, le copie verificate e il giornale (senza la chiave della 2FA),
-con le stesse regole di conservazione.
+con le stesse regole di conservazione. Il giornale nuovo ci arriva ogni 5
+minuti, anche fra una copia e l'altra. "Copia adesso" nella pagina Sistema
+aspetta (al massimo 20 secondi) che le copie arrivino anche lì e lo dice.
 Si imposta in uno dei due modi:
 a) dalla pagina Sistema > "Seconda cartella delle copie": scrivi il
    percorso completo e premi "Salva e prova";
@@ -352,7 +370,16 @@ dei file). Se un file è rovinato, troncato o sparito:
 3. lo controlla, lo scrive nel registro attività (utente "sistema") e nel
    log, e fa subito una copia verificata.
 Dopo uno spegnimento improvviso riapplica dal giornale le ultime
-registrazioni che non erano ancora nel file.
+registrazioni che non erano ancora nel file. Se farmacia.db sparisce ma
+resta il giornale (anche solo nella seconda cartella), lo ricostruisce dal
+giornale.
+Se qualcuno rimette a mano un farmacia.db vecchio (o il disco perde le
+ultime scritture), il programma NON lo riporta avanti da solo: riparte da
+lì, il semaforo diventa rosso, la cronologia della pagina Sistema dice
+"Magazzino più indietro del giornale: N modifiche perse" con cosa manca
+(articoli, DDT...) e i numeri di richieste e DDT già usati non si
+riassegnano. Ogni cura si confronta anche con il
+registro attività: se dice "nessun dato perso", è vero.
 
 La pagina Sistema (solo amministratore) mostra un SEMAFORO:
 - VERDE "Tutto in ordine": niente da fare.
@@ -368,8 +395,10 @@ La pagina Sistema (solo amministratore) mostra un SEMAFORO:
     disco (non nella cartella dati) e controlla i permessi della cartella;
   * nessuna copia verificata -> "Copia adesso" e leggi l'esito;
   * "il programma ha curato ... controlla le registrazioni più recenti"
-    -> una cura non è arrivata fino all'ultima registrazione: controlla
-    Movimenti e DDT delle ultime ore e registra di nuovo quello che manca.
+    oppure "Magazzino più indietro del giornale" -> una cura non è
+    arrivata fino all'ultima registrazione: controlla Movimenti e DDT
+    delle ultime ore e registra di nuovo quello che manca (il dettaglio
+    è nella cronologia della pagina Sistema).
 Se il rosso resta o non è chiaro cosa fare, fai "Copia adesso" (se
 riesce), chiama l'assistenza e manda dati\log\server-AAAA-MM.log.
 "Prova di ripristino" ricostruisce per finta la base dati dall'ultima

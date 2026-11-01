@@ -8,8 +8,10 @@
  *     Circa cinque mesi di carichi dai fornitori, rifornimenti settimanali ai magazzini, consumi giornalieri con il ritmo
  *     della settimana (la sala operatoria e gli ambulatori si fermano nel fine settimana) e qualche tendenza (articoli che
  *     si usano sempre di più o sempre di meno), lotti con scadenze diverse (qualcuno già scaduto o in scadenza),
- *     qualche perdita e una rettifica d'inventario. I rifornimenti sono trasferimenti diretti, come nella versione 2.x:
- *     così vanno bene anche per l'archivio della versione per un solo PC.
+ *     qualche perdita e una rettifica d'inventario. Come nel programma, ogni uscita è divisa sui lotti (chi scade prima)
+ *     e non prende mai un lotto già scaduto: gli scaduti restano nella pagina Scadenze, da togliere con una perdita.
+ *     I rifornimenti sono trasferimenti diretti, come nella versione 2.x: così vanno bene anche per l'archivio della
+ *     versione per un solo PC.
  *
  *   DemoFarmacia.creaCompleta(C, opz) → { articoli, movimenti, armadi, assortimento, richieste, richiesteRighe, ddt, ddtRighe }
  *     Come crea, ma nel mondo della versione 3.0 (anteprima): i rifornimenti passano da richieste e DDT interni con il
@@ -225,6 +227,12 @@
     var seq = 0;
     function lista(rep, art) { var k = rep + '|' + art; if (!lotti[k]) lotti[k] = []; return lotti[k]; }
     function giac(rep, art) { return r3(lista(rep, art).reduce(function (s, l) { return s + l.q; }, 0)); }
+    // lotto già scaduto in quel giorno (vale fino all'ultimo giorno del mese di scadenza, come Calcoli.scaduto)
+    function scadutoIl(scadenza, giorno) { return !!scadenza && !!giorno && data(giorno).slice(0, 7) > scadenza; }
+    // giacenza che si può usare in quel giorno: senza i lotti già scaduti (si tolgono con una perdita «Scaduto»)
+    function giacBuona(rep, art, giorno) {
+      return r3(lista(rep, art).reduce(function (s, l) { return s + (scadutoIl(l.scadenza, giorno) ? 0 : l.q); }, 0));
+    }
     function confronta(a, b) {
       if (!a.scadenza && !b.scadenza) return 0;
       if (!a.scadenza) return 1;
@@ -236,8 +244,9 @@
       if (!l) { l = { lotto: lotto, scadenza: scadenza, q: 0 }; lista(rep, art).push(l); }
       l.q = r3(l.q + q);
     }
-    // uscita: prima il lotto indicato, poi chi scade prima (come Calcoli.allocaUscita)
-    function esce(rep, art, q, lottoScelto) {
+    // uscita: prima il lotto indicato, poi chi scade prima (come Calcoli.allocaUscita): i lotti già scaduti nel giorno
+    // dell'uscita solo se non resta altro, tranne per le perdite (ancheScaduti), che li prendono in ordine di scadenza
+    function esce(rep, art, q, lottoScelto, giorno, ancheScaduti) {
       var parti = [];
       var resto = r3(q);
       function prendi(l) {
@@ -250,7 +259,12 @@
       }
       var tutti = lista(rep, art);
       if (lottoScelto) tutti.filter(function (l) { return l.lotto === lottoScelto; }).forEach(prendi);
-      tutti.filter(function (l) { return l.q > 0; }).sort(confronta).forEach(function (l) { if (resto > 0) prendi(l); });
+      var ordinati = tutti.filter(function (l) { return l.q > 0; }).sort(confronta);
+      if (giorno && !ancheScaduti) {
+        ordinati = ordinati.filter(function (l) { return !scadutoIl(l.scadenza, giorno); })
+          .concat(ordinati.filter(function (l) { return scadutoIl(l.scadenza, giorno); }));
+      }
+      ordinati.forEach(function (l) { if (resto > 0) prendi(l); });
       lotti[rep + '|' + art] = tutti.filter(function (l) { return l.q > 0; });
       return parti;
     }
@@ -334,11 +348,16 @@
         colli: 1, note: '', preparatoDa: chiPrepara.id, preparatoDaNome: chiPrepara.nome, preparatoIl: iso(t), trasportatoreId: null, trasportatoreNome: '',
         partitoIl: null, ricevutoDa: null, ricevutoDaNome: '', ricevutoIl: null, noteRicezione: '', annullatoIl: null, annullatoDa: null, motivoAnnullo: '' };
       d._righe = [];
-      // lotti presi (senza ancora muovere la merce): come i "lotti liberi" del server
+      // lotti presi (senza ancora muovere la merce): come i "lotti liberi" del server, prima il lotto scelto nella riga
+      // (anche scaduto, per un reso), poi chi scade prima saltando i lotti già scaduti
       var impegnati = {};
+      var giornoDdt = new Date(t);
       righe.forEach(function (x) {
         var resto = x.q;
-        lista(origine, x.art).slice().sort(confronta).forEach(function (l) {
+        var lotti = lista(origine, x.art).slice().sort(confronta);
+        var ordine = lotti.filter(function (l) { return x.lotto && l.lotto === x.lotto; })
+          .concat(lotti.filter(function (l) { return l.lotto !== x.lotto && !scadutoIl(l.scadenza, giornoDdt); }));
+        ordine.forEach(function (l) {
           var k = x.art + '|' + l.lotto;
           var libero = r3(l.q - (impegnati[k] || 0));
           var p = Math.min(resto, libero);
@@ -417,7 +436,7 @@
 
     /* ---------- rifornimento di un magazzino periferico ---------- */
     // quanto chiedere: fino a circa 10 giorni del consumo recente (scorta massima del magazzino)
-    function fabbisogno(rep, giornoIdx) {
+    function fabbisogno(rep, giornoIdx, giorno) {
       var righe = [];
       Object.keys(domanda).forEach(function (k) {
         if (k.indexOf(rep + '|') !== 0) return;
@@ -428,7 +447,7 @@
         var riordino = Math.max(1, Math.ceil(media * 6));
         // carrello delle urgenze: dotazione fissa, qualunque sia il consumo
         if (urgenza(a)) { massima = Math.max(massima, URGENZA.massima); riordino = Math.max(riordino, URGENZA.riordino); }
-        var g = giac(rep, art);
+        var g = giacBuona(rep, art, giorno);
         if (g > riordino) return;
         var q = arrotonda(massima - g, a.pezziConfezione >= 10 && media * 10 > a.pezziConfezione ? a.pezziConfezione : 1);
         if (q > 0) righe.push({ art: art, q: q });
@@ -438,14 +457,14 @@
     // senza logistica: trasferimento diretto (2.x); con logistica: richiesta + DDT, spedito e ricevuto
     function rifornisci(rep, giorno, idx, opzR) {
       opzR = opzR || {};
-      var righe = fabbisogno(rep, idx);
+      var righe = fabbisogno(rep, idx, giorno);
       if (!righe.length) return null;
       if (!logistica) {
         righe.forEach(function (x) {
-          var q = Math.min(x.q, giac(far, x.art));
+          var q = Math.min(x.q, giacBuona(far, x.art, giorno));
           if (q <= 0) return;
           var t = istante(giorno, 9, 30);
-          esce(far, x.art, q).forEach(function (p) {
+          esce(far, x.art, q, null, giorno).forEach(function (p) {
             mov({ tipo: 'trasferimento', data: data(giorno), articoloId: x.art, repartoId: far, repartoDestId: rep, quantita: p.quantita, lotto: p.lotto, scadenza: p.scadenza,
               note: 'Rifornimento settimanale', operatore: farmacista.nome, utenteId: farmacista.id || undefined }, t);
             entra(rep, x.art, p.lotto, p.scadenza, p.quantita);
@@ -464,7 +483,7 @@
       // la farmacia approva quanto ha: se manca merce approva di meno (e la richiesta si chiude con il residuo)
       var manca = false;
       r._righe.forEach(function (x) {
-        var g = giac(far, x.articoloId);
+        var g = giacBuona(far, x.articoloId, giorno);
         if (g < x.quantita) { x.approvata = Math.max(0, Math.floor(g)); manca = true; }
       });
       var daMandare = r._righe.filter(function (x) { return x.approvata > 0; }).map(function (x) { return { art: x.articoloId, q: x.approvata, rigaId: x.id }; });
@@ -489,11 +508,13 @@
         if (k.indexOf(rep + '|') !== 0) return;
         var art = k.slice(rep.length + 1);
         var media = mediaDel(rep, art, idx) * fattore * (finoAOra === undefined ? 1 : finoAOra);
-        var q = Math.min(poisson(rnd, media), Math.floor(giac(rep, art)));
+        var q = Math.min(poisson(rnd, media), Math.floor(giacBuona(rep, art, giorno)));
         if (q <= 0) return;
-        esce(rep, art, q);
-        mov({ tipo: 'consumo', data: data(giorno), articoloId: art, repartoId: rep, quantita: q, operatore: chi.nome, utenteId: chi.id || undefined },
-          istante(giorno, finoAOra === undefined ? 19 : 8, finoAOra === undefined ? 30 : 30));
+        // come nel programma (Calcoli.allocaUscita): il consumo si divide sui lotti, prima chi scade prima, mai uno scaduto
+        esce(rep, art, q, null, giorno).forEach(function (p) {
+          mov({ tipo: 'consumo', data: data(giorno), articoloId: art, repartoId: rep, quantita: p.quantita, lotto: p.lotto, scadenza: p.scadenza,
+            operatore: chi.nome, utenteId: chi.id || undefined }, istante(giorno, finoAOra === undefined ? 19 : 8, 30));
+        });
       });
     }
 
@@ -543,7 +564,7 @@
         var t = totale[a.id] || 0.2;
         var inArrivo = ordini.filter(function (o) { return o.art === a.id; }).reduce(function (s, o) { return s + o.quantita; }, 0);
         var lt = a.leadTime || 7;
-        if (giac(far, a.id) + inArrivo > Math.max(t * (lt + 10), urgenza(a) ? a.scortaMinima : 0)) return;
+        if (giacBuona(far, a.id, giorno) + inArrivo > Math.max(t * (lt + 10), urgenza(a) ? a.scortaMinima : 0)) return;
         var arrivo = idx + lt;
         if (IN_RITARDO.indexOf(a.id) >= 0 && arrivo >= ritardoDa) arrivo = giorni + 30; // il fornitore è in ritardo
         ordini.push({ art: a.id, arrivo: arrivo, quantita: Math.max(Math.ceil(t * 30) + 10, urgenza(a) ? a.scortaMinima * 2 : 0), breve: i % 11 === 3, n: i + idx });
@@ -551,7 +572,7 @@
       // 5. qualche imprevisto
       if (logistica) recenti(giorno, idx);
       if (idx === Math.floor(giorni * 0.4)) {
-        var rotte = esce(far, 'demo-f3', 2);
+        var rotte = esce(far, 'demo-f3', 2, null, giorno, true);
         rotte.forEach(function (p) {
           mov({ tipo: 'perdita', data: data(giorno), articoloId: 'demo-f3', repartoId: far, quantita: p.quantita, lotto: p.lotto, scadenza: p.scadenza,
             causale: 'Rotto o danneggiato', note: 'Flaconi caduti durante lo scarico', operatore: farmacista.nome, utenteId: farmacista.id || undefined }, istante(giorno, 11, 5));
@@ -559,7 +580,7 @@
       }
       if (idx === Math.floor(giorni * 0.55) && periferici[0]) {
         var rep0 = periferici[0];
-        var scad = esce(rep0, 'demo-f15', 1);
+        var scad = esce(rep0, 'demo-f15', 1, null, giorno, true);
         scad.forEach(function (p) {
           mov({ tipo: 'perdita', data: data(giorno), articoloId: 'demo-f15', repartoId: rep0, quantita: p.quantita, lotto: p.lotto, scadenza: p.scadenza,
             causale: 'Scaduto', note: 'Flacone aperto da più di 28 giorni', operatore: chiDi(rep0).nome, utenteId: chiDi(rep0).id || undefined }, istante(giorno, 12, 0));
@@ -568,7 +589,7 @@
       if (idx === Math.floor(giorni * 0.7)) {
         var repSala = periferici.filter(function (r) { return profiloDi(r) === 'sala'; })[0] || periferici[periferici.length - 1];
         if (repSala && giac(repSala, 'demo-p6') >= 2) {
-          var conta = esce(repSala, 'demo-p6', 2);
+          var conta = esce(repSala, 'demo-p6', 2, null, giorno);
           conta.forEach(function (p) {
             mov({ tipo: 'rettifica', data: data(giorno), articoloId: 'demo-p6', repartoId: repSala, quantita: -p.quantita, lotto: p.lotto, scadenza: p.scadenza,
               causale: 'Inventario', note: 'Conta di fine mese', operatore: farmacista.nome, utenteId: farmacista.id || undefined }, istante(giorno, 16, 0));
@@ -598,10 +619,12 @@
         annullato.annullatoIl = iso(istante(giorno, 9, 5));
         annullato.annullatoDa = farmacista.nome;
         annullato.motivoAnnullo = 'Preparato due volte per sbaglio';
-        // reso per scadenza: le fiale scadute del carrello delle urgenze tornano in farmacia (da eliminare)
-        var artReso = giac(pr1, 'demo-f21') >= 1 ? 'demo-f21' : null;
-        if (artReso) {
-          var dReso = nuovoDdt(pr1, far, [{ art: artReso, q: Math.min(2, Math.floor(giac(pr1, artReso))) }], istante(giorno, 11, 0), null, 'Reso per scadenza', chiDi(pr1));
+        // reso per scadenza: le fiale del carrello delle urgenze già scadute o che scadono questo mese tornano in farmacia
+        // (da eliminare); il lotto si sceglie nella riga, come nel programma (la scelta automatica non spedisce gli scaduti)
+        var meseReso = data(giorno).slice(0, 7);
+        var daRendere = lista(pr1, 'demo-f21').filter(function (l) { return l.q >= 1 && l.scadenza && l.scadenza <= meseReso; }).sort(confronta)[0];
+        if (daRendere) {
+          var dReso = nuovoDdt(pr1, far, [{ art: 'demo-f21', q: Math.min(2, Math.floor(daRendere.q)), lotto: daRendere.lotto }], istante(giorno, 11, 0), null, 'Reso per scadenza', chiDi(pr1));
           spedisci(dReso, istante(giorno, 11, 20), giorno);
           ricevi(dReso, istante(giorno, 12, 5), giorno, null, 'Da eliminare: lotto scaduto');
         }
@@ -620,7 +643,7 @@
     /* ---------- il lavoro in corso di oggi (anteprima) ---------- */
     var ieriG = new Date(oggiG.getFullYear(), oggiG.getMonth(), oggiG.getDate() - 1);
     function righeDi(rep, quante) {
-      var r = fabbisogno(rep, giorni);
+      var r = fabbisogno(rep, giorni, oggiG);
       if (r.length < 3) {
         // poco da chiedere: qualche articolo dell'assortimento lo stesso
         Object.keys(domanda).filter(function (k) { return k.indexOf(rep + '|') === 0; }).slice(0, 4).forEach(function (k) {
@@ -640,7 +663,7 @@
     prendi(sala, istante(oggiG, 8, 5));
     sala._righe.forEach(function (x) {
       if (x.articoloId === 'demo-p10') x.approvata = 200;
-      var g = Math.floor(giac(far, x.articoloId));
+      var g = Math.floor(giacBuona(far, x.articoloId, oggiG));
       if (x.approvata > g) x.approvata = g;
     });
     var parteSala = sala._righe.filter(function (x) { return x.approvata > 0 && x.articoloId !== 'demo-f17'; }).map(function (x) { return { art: x.articoloId, q: x.approvata, rigaId: x.id }; });
@@ -654,7 +677,7 @@
     bozza.note = 'Da completare dopo il giro letto';
     // Degenza 2° piano: un DDT senza richiesta (reintegro del carrello delle urgenze), partito stamattina e da ricevere
     var reintegro = [{ art: 'demo-f6', q: 20 }, { art: 'demo-p3', q: 25 }, { art: 'demo-p4', q: 10 }].map(function (x) {
-      return { art: x.art, q: Math.min(x.q, Math.floor(giac(far, x.art))) };
+      return { art: x.art, q: Math.min(x.q, Math.floor(giacBuona(far, x.art, oggiG))) };
     }).filter(function (x) { return x.q > 0; });
     if (reintegro.length) {
       var carrello = nuovoDdt(far, pr1, reintegro, istante(oggiG, 9, 5), null, 'Reintegro del carrello delle urgenze');
@@ -670,7 +693,7 @@
       var r = nuovaRichiesta(rep, righe, istante(ieriG, 17, 30), false, '');
       invia(r, istante(ieriG, 17, 32));
       prendi(r, istante(oggiG, ora[0], ora[1] - 30));
-      r._righe.forEach(function (x) { var q = Math.floor(giac(far, x.articoloId)); if (x.approvata > q) x.approvata = q; });
+      r._righe.forEach(function (x) { var q = Math.floor(giacBuona(far, x.articoloId, oggiG)); if (x.approvata > q) x.approvata = q; });
       var daMandare = r._righe.filter(function (x) { return x.approvata > 0; }).map(function (x) { return { art: x.articoloId, q: x.approvata, rigaId: x.id }; });
       if (!daMandare.length) return { richiesta: r };
       var d = nuovoDdt(far, rep, daMandare, istante(oggiG, ora[0], ora[1] - 20), r);
@@ -700,6 +723,14 @@
       x.esito = 'rientro';
       x.nota = 'Confezione schiacciata';
       d.stato = 'ricevuto_con_differenze';
+      // quello che rientra torna nel residuo della richiesta: da evasa torna in lavorazione (come fa il server alla ricezione)
+      var ric = d.richiestaId ? out.richieste.filter(function (r) { return r.id === d.richiestaId; })[0] : null;
+      if (ric && ric.stato === 'evasa') {
+        ric.stato = 'in_lavorazione';
+        ric.chiusaIl = null;
+        ric.chiusaDa = null;
+        ric.chiusaDaNome = '';
+      }
     }
 
     return out;

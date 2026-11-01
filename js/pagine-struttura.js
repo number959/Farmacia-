@@ -61,6 +61,15 @@
 
   function eCentrale(rep) { return !!rep && (rep.tipo === 'centrale' || rep.centrale === true); }
 
+  // caratteristiche dell'articolo con i nomi brevi del modulo (App.ATTRIBUTI_ARTICOLO, js/pagine.js): "Frigorifero", "LASA"…
+  function nomiAttributi(lista) {
+    var el = App.ATTRIBUTI_ARTICOLO || [];
+    return (lista || []).map(function (x) {
+      var t = el.filter(function (e) { return e.id === x; })[0];
+      return t ? t.breve : String(x);
+    });
+  }
+
   function armadiDi(repId, ancheSpenti) {
     return (App.S.armadi || []).filter(function (a) { return a.repartoId === repId && (ancheSpenti || a.attivo !== false); })
       .sort(function (x, y) { return (Number(x.ordine) || 0) - (Number(y.ordine) || 0) || x.nome.localeCompare(y.nome, 'it'); });
@@ -137,7 +146,10 @@
   }
 
   // per le altre pagine (cruscotto, previsioni): stesso calcolo dello stato
-  root.StrutturaMagazzini = { stato: statoArticolo, armadi: armadiDi, assortimento: assortimentoDi, nomePiano: nomePiano, pianoDaLivello: pianoDaLivello };
+  root.StrutturaMagazzini = {
+    stato: statoArticolo, armadi: armadiDi, assortimento: assortimentoDi, nomePiano: nomePiano, pianoDaLivello: pianoDaLivello,
+    consumiMedi: function (repId, articoli) { return consumiMedi(repId, articoli); }, consumiMediDaMovimenti: function (stato, repId, articoli, oggi) { return consumiMediDaMovimenti(stato, repId, articoli, oggi); }
+  };
 
   /* Indicatori di un magazzino per la mappa e l'elenco. */
   function indicatori(rep) {
@@ -670,7 +682,7 @@
         htmlMisura(s, a.unita) +
         '<dl class="ar-dl"><dt>Posto</dt><dd>' + h(testoPosto(riga)) + '</dd>' +
         '<dt>Categoria</dt><dd>' + (a.categoria === 'PRESIDI' ? 'Presidio' : 'Farmaco') + (a.principio ? ' · ' + h(a.principio) : '') + '</dd>' +
-        ((a.attributi || []).length ? '<dt>Attenzione</dt><dd>' + (a.attributi || []).map(function (x) { return '<span class="etichetta info">' + h(x) + '</span>'; }).join(' ') + '</dd>' : '') +
+        ((a.attributi || []).length ? '<dt>Attenzione</dt><dd>' + nomiAttributi(a.attributi).map(function (x) { return '<span class="etichetta info">' + h(x) + '</span>'; }).join(' ') + '</dd>' : '') +
         '</dl>' +
         '<h3 class="ar-sotto">Lotti e scadenze</h3>' +
         (lotti.length ? '<div class="tabella-contenitore"><table class="tabella ar-lotti"><thead><tr><th>Lotto</th><th>Scadenza</th><th class="n">Quantità</th></tr></thead><tbody>' +
@@ -1211,28 +1223,55 @@
         if (Object.keys(out).length === articoli.length) return out;
       } catch (e) { out = {}; }
     }
-    var oggi = new Date();
-    var inizio = new Date(oggi.getFullYear(), oggi.getMonth(), oggi.getDate() - GIORNI_CONSUMO + 1);
-    var dal = inizio.getFullYear() + '-' + String(inizio.getMonth() + 1).padStart(2, '0') + '-' + String(inizio.getDate()).padStart(2, '0');
-    var centrale = eCentrale(App.reparto(repId));
+    return consumiMediDaMovimenti(App.S, repId, articoli);
+  }
+
+  function testoGiorno(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  /*
+   * Stessa media senza il modulo delle previsioni, con le stesse regole di Previsioni.consumoMedio:
+   * uscite degli ultimi 90 giorni (oggi compreso) = consumi e perdite; per la farmacia centrale anche quello che dà agli
+   * altri magazzini, contato alla partenza. La merce che rientra (DDT annullato in viaggio, differenza "rientra" alla
+   * ricezione) non è uscita davvero: si toglie il giorno della partenza del suo DDT (Calcoli.partenzeDdt e
+   * Calcoli.rientroAllOrigine, come la Nota consumi), quindi un DDT annullato non conta. Con una storia del magazzino
+   * più corta di 90 giorni si divide per i giorni che ci sono (almeno 7). oggi: 'AAAA-MM-GG' (facoltativo).
+   */
+  function consumiMediDaMovimenti(stato, repId, articoli, oggi) {
+    var Calc = C || root.Calcoli;
+    var p0 = String(oggi || testoGiorno(new Date())).split('-').map(Number);
+    var giornoOggi = new Date(p0[0], p0[1] - 1, p0[2]);
+    var dal = testoGiorno(new Date(p0[0], p0[1] - 1, p0[2] - GIORNI_CONSUMO + 1));
+    var al = testoGiorno(giornoOggi);
+    var rep = (stato.reparti || []).filter(function (r) { return r.id === repId; })[0];
+    var centrale = eCentrale(rep);
+    var partenze = centrale ? Calc.partenzeDdt(stato, repId) : null;
     var primo = null;
     var somme = {};
-    App.S.movimenti.forEach(function (m) {
-      if (m.annullato || m.repartoId !== repId) return;
+    function aggiungi(artId, data, q) {
+      if (data >= dal && data <= al) somme[artId] = (somme[artId] || 0) + q;
+    }
+    (stato.movimenti || []).forEach(function (m) {
+      if (m.annullato || !m.data) return;
+      var dentro = m.repartoId === repId || (m.tipo === 'trasferimento' && m.repartoDestId === repId);
+      if (!dentro) return;
+      // prima attività del magazzino: anche la merce che gli arriva
       if (!primo || m.data < primo) primo = m.data;
-      if (m.data < dal) return;
-      // uscite che consumano la scorta: consumi e perdite; per la farmacia centrale anche quello che dà agli altri magazzini
-      if (m.tipo === 'consumo' || m.tipo === 'perdita' || (centrale && m.tipo === 'trasferimento')) {
-        somme[m.articoloId] = (somme[m.articoloId] || 0) + (Number(m.quantita) || 0);
+      var q = Number(m.quantita) || 0;
+      if (m.repartoId === repId && (m.tipo === 'consumo' || m.tipo === 'perdita' || (centrale && m.tipo === 'trasferimento'))) {
+        aggiungi(m.articoloId, m.data, q);
+      } else if (centrale && Calc.rientroAllOrigine(m, repId, partenze)) {
+        aggiungi(m.articoloId, partenze.data[m.ddtId] || m.data, -q);
       }
     });
-    // con meno di 90 giorni di storia si divide per i giorni che ci sono
     var giorni = GIORNI_CONSUMO;
     if (primo && primo > dal) {
       var p = primo.split('-').map(Number);
-      giorni = Math.max(7, Math.round((oggi - new Date(p[0], p[1] - 1, p[2])) / 86400000) + 1);
+      giorni = Math.max(7, Math.round((giornoOggi - new Date(p[0], p[1] - 1, p[2])) / 86400000) + 1);
     }
-    articoli.forEach(function (id) { out[id] = (somme[id] || 0) / giorni; });
+    var out = {};
+    articoli.forEach(function (id) { out[id] = Math.max(0, somme[id] || 0) / giorni; });
     return out;
   }
 

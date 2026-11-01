@@ -1,25 +1,25 @@
 WEBVTT
 
 1
-00:00:03.122 --> 00:00:10.312
-Apri Inventario (tasto I). Scegli la data, il reparto e, se vuoi, la categoria.
+00:00:03.180 --> 00:00:11.656
+Apri «Inventario» (tasto I). Scegli «Data dell’inventario», il «Reparto» da contare e, se vuoi, la categoria.
 
 2
-00:00:10.312 --> 00:00:17.203
-Con Stampa foglio di conta hai l’elenco da compilare a mano davanti agli scaffali.
+00:00:11.656 --> 00:00:17.817
+Con «Stampa foglio di conta» hai l’elenco da compilare a mano davanti agli scaffali.
 
 3
-00:00:17.214 --> 00:00:24.410
-Scrivi le quantità contate: la differenza con la giacenza del programma compare subito.
+00:00:17.889 --> 00:00:25.002
+Scrivi le quantità contate: la differenza con la giacenza del programma compare subito accanto.
 
 4
-00:00:24.410 --> 00:00:31.795
-Le righe lasciate vuote non cambiano. Puoi contare anche con il lettore di codici a barre.
+00:00:25.002 --> 00:00:32.952
+Le righe lasciate vuote non cambiano. Puoi contare anche con il lettore: ogni lettura aggiunge alla quantità contata.
 
 5
-00:00:31.795 --> 00:00:38.311
-Premi Registra differenze e conferma: ogni differenza diventa una rettifica.
+00:00:32.952 --> 00:00:39.464
+Premi «Registra differenze» e conferma: ogni differenza diventa una rettifica d’inventario.
 
 6
-00:00:38.311 --> 00:00:47.482
-Le rettifiche si vedono in Movimenti e nella nota consumi: in più tra i carichi, in meno tra le perdite.
+00:00:39.464 --> 00:00:48.386
+Le rettifiche si vedono in Movimenti e nella Nota consumi: quelle in più tra i carichi, quelle in meno tra le perdite.

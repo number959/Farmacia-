@@ -1,33 +1,41 @@
 WEBVTT
 
 1
-00:00:03.149 --> 00:00:11.242
-Apri il programma con Edge o Chrome, scrivi il tuo nome utente e la password e premi Entra.
+00:00:03.066 --> 00:00:11.306
+Apri Edge o Chrome all’indirizzo del server che ti ha dato l’amministratore (per esempio http://server-farmacia:8080/) e salvalo nei preferiti.
 
 2
-00:00:11.242 --> 00:00:18.579
-Al primo accesso ti propongo un giro guidato di un minuto: puoi farlo subito o più tardi.
+00:00:11.306 --> 00:00:19.899
+Nella schermata «Accedi» scrivi «Nome utente» e «Password» (quella provvisoria) e premi «Entra».
 
 3
-00:00:18.579 --> 00:00:27.153
-A sinistra c’è il menu, con le sole pagine che il tuo ruolo può usare. La lettera a destra è il tasto rapido.
+00:00:19.899 --> 00:00:28.825
+Compare «Scegli la tua password»: scrivi la «Password provvisoria», poi la «Nuova password» di almeno 8 caratteri in tutti e due i campi e premi «Salva e continua».
 
 4
-00:00:27.153 --> 00:00:35.044
-La pagina Oggi ti dice cosa controllare: articoli sotto scorta, lotti scaduti e lotti in scadenza.
+00:00:28.825 --> 00:00:42.027
+Se per il tuo ruolo è richiesta la verifica in due passaggi compare «Attiva la verifica in due passaggi»: prepara il telefono, inquadra il codice QR e salva i codici di recupero.
 
 5
-00:00:35.044 --> 00:00:42.490
-Ctrl K apre la ricerca rapida: scrivi il nome di un articolo o di una pagina e premi Invio.
+00:00:42.027 --> 00:00:49.026
+Il programma ti propone un giro guidato di un minuto: premi «Sì, fammi vedere», oppure «Non ora» per farlo un’altra volta.
 
 6
-00:00:42.490 --> 00:00:49.316
-Dal tuo nome, in alto a destra, cambi la password ed esci.
+00:00:49.026 --> 00:00:57.125
+A sinistra c’è il menu con le sole pagine del tuo ruolo, divise per argomento. La lettera a destra è il tasto rapido, il numero rosso dice quante cose ti aspettano.
 
 7
-00:00:49.316 --> 00:00:56.823
-Il pulsante Guidami ti mostra sullo schermo, passo per passo, cosa fare nella pagina aperta.
+00:00:57.125 --> 00:01:05.184
+La pagina «Oggi» mostra i numeri del giorno (sotto scorta, scaduti, in scadenza, richieste e DDT) e «Cosa fare adesso»: tocca una voce per andare alla pagina giusta.
 
 8
-00:00:56.823 --> 00:01:04.139
-Nella Guida trovi questi video e le istruzioni scritte.
+00:01:05.184 --> 00:01:11.618
+Premi Ctrl K (oppure /) per la ricerca rapida: scrivi il nome di un articolo o di una pagina e premi Invio.
+
+9
+00:01:11.618 --> 00:01:19.689
+Il pulsante con le tue iniziali, in alto a destra, apre il tuo menu: «Cambia password», «Sicurezza dell’account», il tema dello schermo ed «Esci».
+
+10
+00:01:19.689 --> 00:01:28.158
+In ogni pagina «🧭 Guidami» ti mostra sullo schermo cosa fare; nella pagina «Guida» trovi queste guide scritte e i video.

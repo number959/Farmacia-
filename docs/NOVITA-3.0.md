@@ -122,7 +122,9 @@ Le righe dei DDT hanno sempre il lotto esplicito: alla preparazione il server ri
 una riga per lotto. Un DDT può nascere da una richiesta (righe collegate con `richiesta_riga_id`) o da solo (pagina
 Trasferimenti, resi). I movimenti con `ddt_id` non si annullano dalla pagina Movimenti: si annulla il DDT.
 Nella Nota consumi mensile e nell'Excel il magazzino d'origine vede l'uscita alla data di partenza, il destinatario
-l'entrata alla data di ricezione, come trasferimenti dal/verso il magazzino vero (non "In transito").
+l'entrata alla data di ricezione, come trasferimenti dal/verso il magazzino vero (non "In transito"). La merce che
+**rientra** all'origine (DDT annullato in viaggio, differenza "rientra") non è un carico: toglie l'uscita (vedi
+"Decisioni prese", Logistica). Nel residuo della richiesta la quantità rientrata torna da spedire.
 Ogni passaggio scrive nel registro attività (`richieste.*`, `ddt.*`) e notifica i browser (SSE come oggi).
 
 ## Previsioni (parte D, solo nel browser, modulo condiviso `js/previsioni.js`)
@@ -138,8 +140,9 @@ arrotondata alle confezioni. Impostazioni: `leadTimeGiorni` (7), `periodoRevisio
 TOTP RFC 6238 (SHA-1, 6 cifre, 30 s, finestra ±1), segreto base32 di 20 byte cifrato nel database accessi con una chiave
 nella cartella dati; QR per l'attivazione (vendor/qrcode.js), 10 codici di recupero monouso (salvati come hash);
 criteri dell'amministratore (impostazione `richiedi2fa`: 'nessuno' | 'amministratori' | 'farmacisti' (= admin+farmacisti) |
-'tutti'); dispositivo attendibile per 30 giorni (facoltativo); blocco dopo 5 codici sbagliati come per la password;
-codice già usato non vale una seconda volta. Modulo condiviso `js/totp.js` (UMD, SHA-1/HMAC in JS puro, usato anche
+'tutti'); dispositivo attendibile per 30 giorni (facoltativo); blocco dopo 5 codici sbagliati come per la password (dal
+server stesso nessun blocco, ma limiti propri: vedi "Decisioni prese"); codice già usato non vale una seconda volta;
+cambio di telefono solo con la password. Modulo condiviso `js/totp.js` (UMD, SHA-1/HMAC in JS puro, usato anche
 dall'anteprima).
 
 ## Base dati che si cura da sola (parte E)
@@ -228,7 +231,25 @@ Scelte delle parti che precisano o cambiano un poco il contratto qui sopra. Valg
 - Previsioni e Distribuzione **non** sono in `App.PAGINE_CONSULTAZIONE` (si ridisegnerebbero mentre si scrivono le
   confezioni della proposta): quando altri scrivono compare la banda "Aggiorna". Calcolo solo nel browser, nessuna rotta.
 - Per le altre parti: `Previsioni.consumoGiornaliero(stato, articoloId, repartoId)` e
-  `Previsioni.consumoMedio(stato, articoloId, repartoId, giorni)` (per la centrale conta anche quello che dà agli altri).
+  `Previsioni.consumoMedio(stato, articoloId, repartoId, giorni)` (per la centrale conta anche quello che dà agli altri,
+  alla partenza, **meno i rientri** all'origine — DDT annullato in viaggio, differenza "rientra" — tolti nel giorno della
+  partenza: un DDT annullato non conta; l'arrivo a destinazione e la perdita in viaggio restano uscite, come nella Nota
+  consumi).
+- **Giorni anomali.** Un giorno isolato (i giorni accanto sono normali) sopra `max(m + 5·s, 3·m)` — m = mediana dei
+  giorni con consumo, s = il più grande fra 1,4826 × MAD e min(√m, m) — si conta come la soglia per i modelli e per
+  σ. Al massimo l'1% dei giorni con consumo (almeno 1); servono almeno 5 giorni con consumo. Due o più giorni alti di
+  fila sono un cambio vero e non si toccano. Grafico, medie, tendenza, XYZ e totali restano sul dato vero; il dettaglio dell'articolo
+  lo spiega («Un giorno insolito: il …, contati come …»).
+- **σ robusta.** Nella scorta di sicurezza i residui oltre `max(4 · scarto tipico, 2 · il residuo dopo l'1% più grande)`
+  contano come il limite: si limitano solo pochi residui staccati dagli altri, così le "scatole grandi ogni tanto"
+  restano coperte (la proposta del revisore, ±4σ sempre, le scopriva). `Previsioni.stima(…, { anomali: false })` torna
+  ai conti di prima.
+- **"Già chiesto" dei magazzini periferici.** Disponibile = giacenza + in viaggio + già chiesto, dove il già chiesto è
+  residuo + in preparazione delle richieste aperte (bozza, inviata, in lavorazione) dei magazzini dell'ambito a un
+  fornitore fuori dall'ambito (`Calcoli.avanzamentoRichiesta`, gli stessi numeri della proposta della pagina Richieste).
+  "Da chiedere" si calcola su questo disponibile; per tutta la struttura il già chiesto è 0. Conta anche le bozze, come
+  la pagina Richieste. I DDT in preparazione che non nascono da una richiesta non sono nel già chiesto (da decidere
+  insieme alla pagina Richieste).
 
 ### Aspetto (parte F)
 - **Titolo della finestra**: `pagina · nomeProdotto · struttura` (per esempio "Giacenze · NefroCenter Pharmacy · Clinica
@@ -252,6 +273,70 @@ Scelte delle parti che precisano o cambiano un poco il contratto qui sopra. Valg
 - "Sotto scorta" in tutto il programma (cruscotto, Giacenze, scheda dell'articolo): scorta minima dell'assortimento del
   magazzino; nella farmacia centrale, se l'assortimento non ha soglie per l'articolo, la scorta minima dell'anagrafica
   (`App.scortaMinima`, `App.sottoScorta`). Gli articoli non attivi non contano.
+- **`PUT /api/reparti` e `DELETE /api/reparti/:id` della 2.x** valgono ancora, con le regole della 3.0 applicate allo
+  stato finale di **tutti** i magazzini (anche quelli che non sono nell'elenco mandato): una sola farmacia centrale
+  (indicarne un'altra declassa quella di prima a periferica), mai tolta né disattivata (400); un magazzino con DDT da
+  spedire o in viaggio o richieste aperte non si disattiva (409, stesso messaggio di `/api/magazzini`, stessi controlli
+  `controllaDisattivazione` e `declassaCentrale` di server/struttura.js); nomi doppi controllati anche contro i magazzini
+  fuori elenco; "In transito" resta com'è. `DELETE`: la farmacia centrale 400; 409 con movimenti, richieste, DDT, armadi
+  o assortimento. Un archivio che già non ha una centrale si accetta se resta così.
+- **"Proponi dai consumi"** usa `Previsioni.consumoMedio` (quindi per la centrale senza i rientri); senza il modulo delle
+  previsioni fa lo stesso conto da sola (`StrutturaMagazzini.consumiMediDaMovimenti`, con `Calcoli.partenzeDdt` e
+  `Calcoli.rientroAllOrigine`).
+
+### Logistica e articoli (parte A, correzioni dalle revisioni)
+- **Rientri nella Nota consumi** (`Calcoli.registroMensile`): la merce che rientra all'origine non è un carico. Toglie
+  l'uscita del giorno della partenza se la partenza è nello stesso mese (un DDT partito e annullato nel mese sparisce dal
+  modulo), altrimenti quella del giorno del rientro (la casella può risultare negativa: lo spiega il testo sulla casella).
+  La casella del registro corregge solo il consumo (le uscite al netto dei rientri). `Calcoli.partenzeDdt` e
+  `Calcoli.rientroAllOrigine` riconoscono partenze e rientri per tutte le pagine.
+- **Rientri nel residuo della richiesta** (`Calcoli.avanzamentoRichiesta`): la quantità rientrata alla ricezione non
+  conta come spedita e torna nel residuo, come per un DDT annullato; la perdita in viaggio resta spedita. La ricezione
+  aggiorna lo stato della richiesta (un'`evasa` con merce rientrata torna `in_lavorazione`; `richiesta` nei dettagli di
+  `ddt.ricevi`), e la pagina di ricezione lo dice.
+- **Due farmacisti sulla stessa richiesta**: `POST /api/richieste/:id/approva` accetta per riga `prima`, l'approvata che
+  la pagina mostrava (`null` = non ancora approvata). Se nel frattempo è cambiata: 409 «Nel frattempo X ha cambiato la
+  quantità approvata di …» e la pagina si ricarica. Senza `prima` nessun controllo (client vecchi); la pagina della 3.0 lo
+  manda sempre.
+- **Lotti scaduti fuori dalla scelta automatica.** Consumi e trasferimenti saltano i lotti scaduti alla data del
+  movimento finché ce ne sono altri (se restano solo quelli li usano, invece di un debito "senza lotto"); le perdite li
+  prendono come prima. I DDT non spediscono mai da soli un lotto scaduto: il 409 e l'elenco dei mancanti lo spiegano
+  («altri N sono in lotti scaduti…», `mancanti[].scaduti`, «C'è merce solo in lotti scaduti…»); per un reso il lotto
+  scaduto si sceglie a mano nella riga. Nelle tendine dei lotti gli scaduti sono segnati «SCADUTO».
+- **Uscite con data passata**: da ogni lotto al massimo il minimo fra la giacenza a quella data e quella di oggi
+  (`Calcoli.lottiDisponibili`), anche per il lotto scelto a mano (altrimenti 409).
+- **`DELETE /api/articoli/:id`**: 409 se l'articolo ha movimenti, se compare in richieste o DDT, o se è nell'assortimento
+  attivo di un magazzino (il messaggio nomina il magazzino); le righe di assortimento non attive si cancellano con
+  l'articolo (e la cancellazione arriva ai browser). Lo stesso controllo c'è nel modulo dell'articolo.
+- **Campi nuovi dell'articolo** (creazione, modifica, importazione): `attributi` fra i cinque previsti, senza doppioni
+  (nel modulo: «Da frigorifero 2–8 °C», «Stupefacente (cassaforte)», «Alto rischio», «LASA (nome o aspetto simile)»,
+  «Urgenze»); `leadTime` giorni interi da 0 a 365, vuoto/`null` = impostazione generale (nel modulo «Giorni di
+  consegna», con il valore generale come suggerimento); `fornitore` fino a 200 caratteri («Fornitore abituale»). Chi non
+  li manda (client vecchi, importazioni) non li cancella. La scheda dell'articolo e il pannello degli Armadi mostrano le
+  caratteristiche; l'Excel degli articoli ha tre colonne in più (Fornitore abituale, Giorni di consegna, Caratteristiche).
+  La disposizione automatica degli armadi mette nel frigorifero solo gli articoli `frigo` e nella cassaforte solo gli
+  `stupefacente`.
+
+### Base dati che si cura da sola (parte E, correzioni dalle revisioni)
+- **Il giornale è la fonte di verità.** Ogni voce porta `evento` (l'ultimo numero del registro attività). All'avvio,
+  all'arresto ordinato, dopo un ripristino e dopo una linea nuova il WAL si riversa nel file (checkpoint completo) e il
+  giornale lo segna con una voce `avvio`, `chiusura`, `ripristino` o `nuova-linea` con `durevole: true`.
+- **Coda persa** (spegnimento improvviso, WAL sparito, vuoto o rovinato): si cerca sempre nel giornale e si riapplica
+  (cura `metodo: 'coda'`), a meno che il giornale abbia una voce durevole più avanti della revisione del file: allora il
+  file è stato rimesso a mano da una copia vecchia e non si riporta avanti. `meta.sessione` non decide più.
+- **Linea nuova "con perdite"**: se il magazzino resta più indietro del giornale, riparte da una revisione nuova con una
+  cura `metodo: 'linea-nuova'`, `esito: 'curato-con-perdite'`, semaforo rosso, `perse` e `riassunto` ("2 articoli, 2 DDT…").
+- **File sparito o vuoto con il solo giornale** (anche solo nella seconda cartella): non è un'installazione nuova, si
+  ricostruisce da archivio vuoto + tutto il giornale.
+- **Numeri di richieste e DDT**: ripristino e linea nuova portano avanti i contatori `prog_*` (il più alto fra `meta`, il
+  file e le voci del giornale): un numero già usato non si riassegna.
+- **Registro attività**: dopo una cura si contano le scritture del magazzino registrate dopo l'ultima voce del giornale;
+  se ci sono, la cura è "con perdite" (`scrittureSenzaGiornale`) e le elenca. Si confronta anche l'ultima revisione vista
+  dal programma acceso (`salute.json`, `ultimaVista`).
+- **Seconda cartella**: il giornale nuovo ci va anche fra una copia e l'altra, nel giro dei 5 minuti se è cambiato; una
+  richiesta durante un giro ne mette in coda un altro; `POST /api/sistema/copia` risponde quando le copie sono arrivate
+  anche lì, al massimo dopo 20 s (la pagina Sistema dice «Copiate anche nella seconda cartella», oppure che non è
+  raggiungibile o si sta ancora aggiornando). `accessi.db` si sostituisce in modo atomico (copia accanto e rinomina).
 
 ### Verifica in due passaggi (parti C ed E)
 - La chiave che cifra i segreti TOTP è `<dati>/chiave-2fa.key` (0600). Le copie di `accessi.db` **nella cartella dati**
@@ -263,10 +348,25 @@ Scelte delle parti che precisano o cambiano un poco il contratto qui sopra. Valg
 - Chi deve avere la 2FA e non l'ha attivata riceve **401** `{ attiva2fa: true }` su tutto tranne `GET /api/2fa`,
   `/api/2fa/inizia`, `/api/2fa/conferma`, `/api/password`, `/api/stato` e il logout (così il browser torna all'accesso,
   che guida all'attivazione).
+- **Cambio di telefono con la password.** Con la 2FA già attiva, `POST /api/2fa/inizia` chiede `{ password }` (come
+  disattivarla o creare codici nuovi): senza password 400 `{ servePassword }` (non conta come errore), password sbagliata
+  400 che conta (alla quinta la sessione si chiude, 401; evento `accesso.2fa.cambio-telefono-fallito`). La chiave nuova
+  vale solo per la sessione che l'ha chiesta: `POST /api/2fa/conferma` da un'altra sessione risponde 409 `{ ricomincia }`;
+  dopo 10 codici sbagliati per la stessa chiave anche (evento `accesso.2fa.chiave-annullata`). Se la chiave è stata chiesta
+  senza password e nel frattempo la 2FA è diventata attiva: 409 `{ ricomincia, servePassword }`. La **prima attivazione**
+  (anche quella obbligatoria per il criterio) non chiede di nuovo la password: chi la deve attivare l'ha appena scritta.
+  Nella finestra «Telefono nuovo» il primo passo è la password; il codice QR compare solo dopo la password giusta.
+- **Codici dal server stesso.** Dal server (`127.0.0.1`/`::1`, l'accesso d'emergenza) non c'è mai il blocco di 15
+  minuti, ma: la sfida si annulla dopo 10 codici sbagliati (401 `{ sfidaScaduta }`, si riscrive la password; evento
+  `accesso.2fa.sfida-annullata`); dopo 20 codici sbagliati in 15 minuti per lo stesso utente, una sfida nuova solo ogni
+  30 s (429 `{ attesaSecondi }`). Da qualsiasi computer al massimo 3 sfide valide insieme per (utente, computer). Una
+  conferma riuscita di un telefono nuovo azzera questi contatori (servono dopo `--reimposta-password`, che gira in un
+  altro processo); stanno solo in memoria, come gli altri contatori dei tentativi.
 
 ### Rotte in più rispetto al contratto
-- Parte A: `GET /api/trasportatori` (permesso `ddt`) → `{ utenti: [{ id, nome, ruolo }] }`, utenti attivi da scegliere
-  come trasportatore; `POST /api/ddt/:id/spedisci` accetta `trasportatoreId` oppure `trasportatoreNome`.
+- Parte A: `GET /api/trasportatori` (permesso `ddt`) → `{ utenti: [{ id, nome }] }`, utenti attivi da scegliere
+  come trasportatore (solo id e nome: il ruolo non serve e non si mostra); `POST /api/ddt/:id/spedisci` accetta
+  `trasportatoreId` oppure `trasportatoreNome`.
 - Parte B: `POST|PUT|DELETE /api/magazzini(/:id)`, `POST|PUT|DELETE /api/armadi(/:id)`, `PUT /api/assortimento`,
   `PUT /api/ubicazioni`.
 - Parte C: `POST /api/login/2fa`, `GET /api/2fa`, `POST /api/2fa/inizia|conferma|disattiva|codici`,
@@ -277,8 +377,10 @@ Scelte delle parti che precisano o cambiano un poco il contratto qui sopra. Valg
 
 ### Registro attività
 Azioni nuove: `richieste.*`, `ddt.*`, `magazzini.*`, `armadi.*`, `assortimento.modifica`, `ubicazioni.modifica`,
-`accesso.2fa.*`, `utenti.password-emergenza`, `sistema.*` (`sistema.cura`, `sistema.controllo`, `sistema.linea-nuova`
-li scrive l'utente "sistema"). Il filtro della pagina Attività le raggruppa (Sicurezza e accessi, Logistica, Struttura,
+`accesso.2fa.*` (anche `accesso.2fa.cambio-telefono-fallito`, `accesso.2fa.chiave-annullata`,
+`accesso.2fa.sfida-annullata`), `utenti.password-emergenza`, `sistema.*` (`sistema.cura`, `sistema.controllo`,
+`sistema.linea-nuova` li scrive l'utente "sistema"). Ogni azione ha il suo nome in italiano nella pagina Attività
+(`NOMI_AZIONI` in js/amministrazione.js): un'azione nuova del server va aggiunta lì. Il filtro della pagina Attività le raggruppa (Sicurezza e accessi, Logistica, Struttura,
 Sistema…): ogni voce è un inizio di codice, come prima.
 
 ### Pulizia

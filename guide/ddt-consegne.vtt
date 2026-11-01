@@ -1,0 +1,33 @@
+WEBVTT
+
+1
+00:00:03.101 --> 00:00:11.855
+Apri «DDT e consegne» (tasto D). Le schede: «Da preparare» (pronti, non partiti), «In viaggio», «Da ricevere» e «Archivio».
+
+2
+00:00:11.855 --> 00:00:21.250
+Tocca un DDT in «Da preparare». In alto: numero (per esempio DDT-2026-0007), da quale magazzino a quale, causale, colli e richiesta collegata.
+
+3
+00:00:21.250 --> 00:00:31.155
+Finché non parte puoi premere «✏️ Modifica righe» per cambiare righe, lotti, causale e colli, poi «Salva il DDT». Le giacenze non sono ancora cambiate.
+
+4
+00:00:31.155 --> 00:00:40.660
+Premi «🖨️ Stampa»: esce il DDT su un foglio A4 con codice a barre e QR del numero, articoli con lotto e scadenza e gli spazi per le firme. Mettilo con la merce.
+
+5
+00:00:40.660 --> 00:00:50.168
+Premi «🚚 Spedisci». In «Trasportatore» scegli il collega che porta la merce, oppure «Un’altra persona (scrivi il nome)…» e scrivi nome e cognome.
+
+6
+00:00:50.168 --> 00:00:54.374
+Controlla i «Colli» e premi «🚚 Spedisci adesso».
+
+7
+00:00:54.374 --> 00:01:03.260
+Il DDT passa in «In viaggio»: la merce esce dal magazzino di partenza e il magazzino che la riceve vede l’avviso e il numero nel menu.
+
+8
+00:01:03.260 --> 00:01:13.679
+Se il DDT non deve partire premi «Annulla DDT» e scrivi il motivo; se è già in viaggio «Annulla (la merce rientra)» la riporta nel magazzino di partenza.

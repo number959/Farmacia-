@@ -1,25 +1,29 @@
 WEBVTT
 
 1
-00:00:03.122 --> 00:00:11.130
-Apri Nota consumi mensile (tasto R). Scegli il reparto, il mese e il modulo: Farmaci o Presidi.
+00:00:03.073 --> 00:00:12.369
+Apri «Nota consumi mensile» (tasto R). Scegli «Reparto», «Mese» e «Modulo»: Farmaci o Presidi.
 
 2
-00:00:11.130 --> 00:00:18.824
-È il modulo di sempre: residui, carichi, consumi giorno per giorno, perdite, residui e importi.
+00:00:12.369 --> 00:00:20.861
+È il modulo di sempre: residui, carichi, consumi giorno per giorno, perdite, residui finali e importi, calcolati dai movimenti.
 
 3
-00:00:18.824 --> 00:00:26.022
-Per correggere un consumo clicca la casella del giorno, scrivi il numero e premi Invio.
+00:00:20.861 --> 00:00:27.107
+Spunta «Includi gli articoli senza movimenti» per avere nel modulo anche quelli fermi.
 
 4
-00:00:26.022 --> 00:00:33.404
-Il numero sostituisce i consumi di quel giorno e i totali della riga si aggiornano subito.
+00:00:27.107 --> 00:00:35.489
+Per correggere un consumo clicca la casella del giorno, scrivi il numero e premi Invio: sostituisce i consumi di quel giorno.
 
 5
-00:00:33.404 --> 00:00:39.983
-Esporta nel modulo Excel crea il file originale della clinica, già compilato.
+00:00:35.489 --> 00:00:41.845
+Invio o ↓ salva e scende, Tab o → va al giorno dopo, Esc annulla quello che hai scritto.
 
 6
-00:00:39.983 --> 00:00:46.160
-Oppure premi Stampa: esce il modulo pronto per le firme.
+00:00:41.845 --> 00:00:50.447
+«Esporta nel modulo Excel» crea il file originale della clinica, già compilato (oltre 48 articoli aggiunge altri fogli identici).
+
+7
+00:00:50.447 --> 00:00:57.117
+Oppure premi «Stampa»: esce il modulo in A4 orizzontale, pronto per le firme.

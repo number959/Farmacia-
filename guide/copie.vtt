@@ -1,25 +1,29 @@
 WEBVTT
 
 1
-00:00:03.119 --> 00:00:09.696
-Le copie di sicurezza sono in Configura (tasto F), solo per l’amministratore.
+00:00:03.157 --> 00:00:10.233
+Apri «Configura» (tasto F) e trova la scheda «Copie di sicurezza del server».
 
 2
-00:00:09.696 --> 00:00:15.342
-Il server fa da solo una copia al giorno e tiene le ultime 30.
+00:00:10.233 --> 00:00:19.762
+Il server copia magazzino e utenti ogni ora (se c’è stato lavoro) e verifica ogni copia: nell’elenco «✓ verificata» vuol dire riaperta e controllata.
 
 3
-00:00:15.342 --> 00:00:20.741
-Prima di un lavoro importante premi Crea una copia adesso.
+00:00:19.762 --> 00:00:24.652
+Prima di un lavoro importante premi «Crea una copia adesso».
 
 4
-00:00:20.741 --> 00:00:27.752
-Scarica salva il file della copia: ogni tanto conservane una anche fuori dal server.
+00:00:24.652 --> 00:00:32.638
+«Scarica» salva il file della copia del magazzino sul tuo computer: ogni tanto conservane una anche fuori dal server.
 
 5
-00:00:27.752 --> 00:00:35.260
-Ripristina riporta i dati a quel momento, per tutti. Prima il server salva lo stato attuale.
+00:00:32.638 --> 00:00:40.933
+«Ripristina» riporta i dati del magazzino a quel momento, per tutti. Prima il server salva una copia dello stato attuale.
 
 6
-00:00:35.260 --> 00:00:43.485
-Per conferma bisogna scrivere RIPRISTINA. Qui annulliamo. Utenti e password non cambiano.
+00:00:40.933 --> 00:00:48.311
+Per confermare scrivi RIPRISTINA e premi «Ripristina la copia». Utenti e password non cambiano.
+
+7
+00:00:48.311 --> 00:00:56.858
+Stato delle copie, prova di ripristino e seconda cartella sono nella pagina «Sistema».

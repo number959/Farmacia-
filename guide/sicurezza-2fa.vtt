@@ -1,0 +1,41 @@
+WEBVTT
+
+1
+00:00:03.114 --> 00:00:11.641
+Installa sul telefono un’app di autenticazione gratuita: Google Authenticator, Microsoft Authenticator o FreeOTP (su Android va bene anche Aegis).
+
+2
+00:00:11.641 --> 00:00:19.797
+Nel programma tocca le tue iniziali in alto a destra e scegli «🔐 Sicurezza dell’account», poi «Attiva la verifica in due passaggi».
+
+3
+00:00:19.798 --> 00:00:24.742
+Passo «Prepara il telefono»: quando hai l’app premi «Ho l’app: continua».
+
+4
+00:00:24.742 --> 00:00:31.423
+Passo «Collega l’app»: nell’app tocca + e «Scansiona un codice QR», poi inquadra il codice QR sullo schermo.
+
+5
+00:00:31.423 --> 00:00:39.998
+Nell’app compare il nome del programma con un codice di 6 cifre: scrivilo in «Codice di 6 cifre mostrato dall’app». Con 6 cifre parte da solo (oppure premi «Verifica e attiva»).
+
+6
+00:00:39.998 --> 00:00:47.820
+Passo «Salva i codici»: compaiono 10 codici di recupero. Premi «⬇ Scarica (.txt)» o «🖨 Stampa» e conservali lontano dal computer.
+
+7
+00:00:47.820 --> 00:00:54.489
+Spunta «Li ho salvati in un posto sicuro» e premi «Continua»: la verifica è attiva.
+
+8
+00:00:54.489 --> 00:01:08.747
+Dal prossimo accesso, dopo la password, scrivi in «Codice dell’app» le 6 cifre che l’app mostra in quel momento e premi «Verifica ed entra».
+
+9
+00:01:08.747 --> 00:01:16.263
+Sul tuo computer di sempre puoi spuntare «Ricorda questo computer per 30 giorni»: lì per un mese il codice non viene chiesto.
+
+10
+00:01:16.263 --> 00:01:25.679
+Amministratore: nella pagina «Sicurezza» scegli chi deve usarla (facoltativa, amministratori, amministratori e farmacisti, tutti) e premi «Salva il criterio».

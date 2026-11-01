@@ -1,29 +1,45 @@
 WEBVTT
 
 1
-00:00:03.114 --> 00:00:10.845
-Articoli (tasto A) è l’anagrafica: cerca per nome, principio attivo o codice.
+00:00:03.218 --> 00:00:11.971
+«Articoli» (tasto A) è l’anagrafica: cerca per nome, principio attivo o codice; filtra per categoria.
 
 2
-00:00:10.845 --> 00:00:17.545
-Tocca un articolo per aprire la sua scheda: giacenze, lotti e ultimi movimenti.
+00:00:11.971 --> 00:00:18.770
+Tocca un articolo per aprire la sua scheda: giacenze e lotti di ogni magazzino, posizione negli armadi e ultimi movimenti.
 
 3
-00:00:17.545 --> 00:00:24.618
-Per un articolo nuovo premi Nuovo articolo e scrivi la denominazione come sul modulo.
+00:00:18.770 --> 00:00:25.295
+Per un articolo nuovo premi «+ Nuovo articolo» e scrivi la «Denominazione *» come sul modulo.
 
 4
-00:00:24.618 --> 00:00:33.574
-Poi categoria, unità di misura, principio attivo e confezione.
+00:00:25.295 --> 00:00:35.807
+Poi «Categoria», «Unità di misura», «Principio attivo», «Confezione / formato» e «Codice (AIC / minsan / interno)».
 
 5
-00:00:33.574 --> 00:00:42.074
-Pezzi per confezione e codici a barre servono al lettore; prezzo e scorta minima al controllo del magazzino.
+00:00:35.807 --> 00:00:43.666
+«Pezzi per confezione» e «Codici a barre» servono al lettore; «Prezzo unitario €» e la scorta minima della farmacia centrale al controllo del magazzino.
 
 6
-00:00:42.074 --> 00:00:47.540
-Premi Salva: l’articolo si può caricare e scaricare subito.
+00:00:43.666 --> 00:00:51.525
+«Fornitore abituale»: la ditta da cui si ordina (il campo propone i fornitori già scritti nei carichi). Nella proposta d’ordine l’articolo finisce sotto questo fornitore.
 
 7
-00:00:47.540 --> 00:00:55.825
-Importa da Excel legge un elenco o i vecchi moduli Nota consumi compilati, senza doppioni.
+00:00:51.525 --> 00:00:59.409
+«Giorni di consegna»: quanti giorni passano dall’ordine all’arrivo per questo articolo. Lascia vuoto per usare quelli generali di «Configura» (il campo vuoto li mostra in grigio, per esempio «vuoto = 7 (generale)»).
+
+8
+00:00:59.409 --> 00:01:07.276
+Nel riquadro «Caratteristiche» spunta quelle giuste: «Da frigorifero 2–8 °C», «Stupefacente (cassaforte)», «Alto rischio», «LASA (nome o aspetto simile)», «Urgenze».
+
+9
+00:01:07.276 --> 00:01:11.297
+Premi «Salva»: l’articolo si può caricare e scaricare subito.
+
+10
+00:01:11.297 --> 00:01:20.070
+Un articolo con movimenti non si elimina: togli la spunta «Articolo attivo» per nasconderlo. «Mostra non attivi» lo fa rivedere.
+
+11
+00:01:20.070 --> 00:01:28.133
+«Importa da Excel» legge un elenco o i vecchi moduli Nota consumi compilati, senza doppioni. «Esporta Excel» salva l’anagrafica.

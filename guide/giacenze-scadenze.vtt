@@ -1,25 +1,33 @@
 WEBVTT
 
 1
-00:00:03.147 --> 00:00:10.530
-Giacenze (tasto G) mostra quanto c’è in ogni reparto, il totale e il valore del magazzino.
+00:00:03.076 --> 00:00:10.719
+«Giacenze» (tasto G) mostra quanto c’è in ogni magazzino, il totale e il valore della merce.
 
 2
-00:00:10.530 --> 00:00:19.002
-Filtra per reparto o per categoria, oppure cerca per nome o principio attivo.
+00:00:10.719 --> 00:00:20.092
+In «Reparto» scegli «Tutti» (un magazzino per colonna) o un magazzino solo; filtra per «Categoria» o cerca per nome, principio attivo o codice.
 
 3
-00:00:19.002 --> 00:00:24.028
-Spunta Solo sotto scorta per vedere cosa riordinare.
+00:00:20.093 --> 00:00:28.312
+La colonna «In viaggio» è la merce partita con un DDT e non ancora ricevuta: non è di nessun magazzino finché non arriva.
 
 4
-00:00:24.028 --> 00:00:31.909
-Tocca una riga per aprire la scheda dell’articolo: giacenze per reparto, lotti e ultimi movimenti.
+00:00:28.312 --> 00:00:36.193
+Spunta «Solo sotto scorta» per vedere cosa riordinare: conta la scorta minima dell’assortimento di ogni magazzino.
 
 5
-00:00:31.909 --> 00:00:39.664
-Scadenze (tasto Z) elenca i lotti in giacenza, dal primo che scade. Il colore dice quanto manca.
+00:00:36.193 --> 00:00:44.520
+Tocca una riga per aprire la scheda dell’articolo: giacenze per magazzino, lotti, posizione negli armadi e ultimi movimenti.
 
 6
-00:00:39.664 --> 00:00:47.890
-Scegli l’intervallo e il reparto. Stampa ed Excel stampano o esportano l’elenco che vedi.
+00:00:44.520 --> 00:00:54.037
+«Scadenze» (tasto Z) elenca i lotti in giacenza dal primo che scade. In «Mostra» scegli Solo scaduti, entro 30 o 60 giorni, entro il preavviso o tutti.
+
+7
+00:00:54.037 --> 00:01:03.543
+Le etichette rosse sono lotti scaduti o che scadono entro 30 giorni, le arancioni entro il preavviso. «Togli dal magazzino» registra la perdita di un lotto scaduto.
+
+8
+00:01:03.543 --> 00:01:11.124
+«Stampa» ed «Excel» stampano o esportano esattamente l’elenco che vedi, con gli stessi filtri.
